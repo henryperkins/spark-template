@@ -113,6 +113,22 @@ const getUrlPathname = (rawUrl: string): string => {
   }
 };
 
+const isSparkRequest = (url: string): boolean => {
+  const path = getUrlPathname(url);
+  return path === '/_spark/kv' || path.startsWith('/_spark/kv/') ||
+         path === '/_spark/loaded' || path === '/_spark/llm';
+};
+
+const isLoadedRequest = (url: string): boolean => {
+  const path = getUrlPathname(url);
+  return path === '/_spark/loaded';
+};
+
+const isLlmRequest = (url: string): boolean => {
+  const path = getUrlPathname(url);
+  return path === '/_spark/llm';
+};
+
 const isKvRequest = (url: string): boolean => {
   const path = getUrlPathname(url);
   return path === '/_spark/kv' || path.startsWith('/_spark/kv/');
@@ -216,6 +232,65 @@ const handleLocalKvRequest = async (url: string, method: string, bodyText?: stri
   }
 };
 
+const handleLoadedRequest = async (): Promise<Response> => {
+  return new Response(JSON.stringify({ loaded: true }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+};
+
+const handleLlmRequest = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  console.warn(`${FALLBACK_LOG_PREFIX} LLM request intercepted - returning mock response`);
+  
+  const requestBody = await readRequestBody(input, init);
+  let parsedBody: any = {};
+  
+  if (requestBody) {
+    try {
+      parsedBody = JSON.parse(requestBody);
+    } catch (e) {
+      console.warn(`${FALLBACK_LOG_PREFIX} Failed to parse LLM request body:`, e);
+    }
+  }
+
+  // Extract prompt from the body
+  const prompt = parsedBody.prompt || parsedBody.message || 'Hello, this is a mock response from Spark fallback.';
+  
+  const mockResponse = {
+    choices: [{
+      message: {
+        content: `Mock LLM response. I understand you're asking about: "${prompt.substring(0, 100)}...". This is a fallback response because the Spark backend is not available. Please configure your environment variables or check your authentication.`
+      }
+    }]
+  };
+
+  return new Response(JSON.stringify(mockResponse), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+};
+
+const handleSparkRequest = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  const url = input instanceof Request ? input.url : input.toString();
+  const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
+
+  if (isLoadedRequest(url)) {
+    return handleLoadedRequest();
+  }
+
+  if (isLlmRequest(url)) {
+    return handleLlmRequest(input, init);
+  }
+
+  // Handle KV requests as before
+  if (isKvRequest(url)) {
+    const bodyText = await readRequestBody(input, init);
+    return handleLocalKvRequest(url, method, bodyText);
+  }
+
+  return new Response('Not Found', { status: 404 });
+};
+
 const installFetchInterceptor = () => {
   if (fetchPatched || typeof window === 'undefined' || typeof window.fetch !== 'function') {
     return;
@@ -226,14 +301,34 @@ const installFetchInterceptor = () => {
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = input instanceof Request ? input.url : input.toString();
 
-    if (!isKvRequest(url) || !shouldUseLocal()) {
-      return originalFetch(input, init);
+    // Handle all Spark requests locally when in local mode
+    if (isSparkRequest(url) && shouldUseLocal()) {
+      return handleSparkRequest(input, init);
     }
 
-    const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
-    const bodyText = await readRequestBody(input, init);
+    // If it's a Spark request in remote mode, catch 401 errors and fall back to local
+    if (isSparkRequest(url)) {
+      try {
+        const response = await originalFetch(input, init);
 
-    return handleLocalKvRequest(url, method, bodyText);
+        // If we get a 401, automatically switch to local mode and retry
+        if (response.status === 401) {
+          console.warn(`${FALLBACK_LOG_PREFIX} Received 401 from Spark backend, switching to local mode`);
+          setMode('local');
+          return handleSparkRequest(input, init);
+        }
+
+        return response;
+      } catch (error) {
+        // Network errors also trigger local fallback
+        console.warn(`${FALLBACK_LOG_PREFIX} Spark backend unreachable, using local mode`);
+        setMode('local');
+        return handleSparkRequest(input, init);
+      }
+    }
+
+    // Pass through other requests normally
+    return originalFetch(input, init);
   };
 
   fetchPatched = true;
@@ -277,6 +372,28 @@ export const fallbackKv: SparkKv = {
 
 const logFallback = (operation: string) => {
   console.warn(`${FALLBACK_LOG_PREFIX} Using local fallback for ${operation}. Set GITHUB_TOKEN to enable Spark KV or call sparkFallback.useRemote().`);
+  
+  // Show user-friendly notification for critical operations
+  if (operation === 'llm') {
+    console.warn(`${FALLBACK_LOG_PREFIX} AI features are using mock responses. Configure environment variables for full functionality.`);
+  }
+};
+
+// Track if we've already shown the warning to avoid spam
+let warned = false;
+
+export const shouldShowFallbackWarning = (): boolean => {
+  if (warned) return false;
+  
+  // Check if we're in local mode (using fallbacks)
+  const isUsingFallback = shouldUseLocal() || !((window as any).spark?.kv);
+  
+  if (isUsingFallback) {
+    warned = true;
+    return true;
+  }
+  
+  return false;
 };
 
 export const installSparkFallbacks = () => {

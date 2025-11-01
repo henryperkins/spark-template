@@ -239,6 +239,7 @@ export function AzureConfiguration() {
                 <div className="flex gap-2">
                   <Input
                     id="openai-key"
+                    name="openai-api-key"
                     type={showKeys.openai ? 'text' : 'password'}
                     placeholder="Your Azure OpenAI API key"
                     value={formData.openai.apiKey}
@@ -291,6 +292,7 @@ export function AzureConfiguration() {
                 <div className="flex gap-2">
                   <Input
                     id="search-key"
+                    name="search-api-key"
                     type={showKeys.search ? 'text' : 'password'}
                     placeholder="Your Azure AI Search admin key"
                     value={formData.search.apiKey}

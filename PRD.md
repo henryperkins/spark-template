@@ -218,11 +218,12 @@ Custom palette - A professional blue-based scheme that conveys trust and intelli
 Typography should convey professionalism and technical competence while maintaining excellent readability for extended document review sessions.
 
 - **Typographic Hierarchy**:
-  - H1 (App Title): Inter Bold/32px/tight letter spacing
-  - H2 (Section Headers): Inter Semibold/24px/normal spacing  
-  - H3 (Component Titles): Inter Medium/18px/normal spacing
-  - Body Text: Inter Regular/14px/relaxed line height
-  - Code/Technical: JetBrains Mono Regular/13px/monospace clarity
+  - H1 (App Title): IBM Plex Sans Bold/32px/tight letter spacing
+  - H2 (Section Headers): IBM Plex Sans Semibold/24px/normal spacing
+  - H3 (Component Titles): IBM Plex Sans Medium/18px/normal spacing
+  - Body Text: IBM Plex Sans Regular/14px/relaxed line height
+  - Code/Technical: Source Code Pro Regular/13px/monospace clarity
+  - Alternative Headers: Roboto Slab for emphasis/variety
 
 ## Animations
 Animations should convey intelligent system behavior and agent activity, emphasizing the sophisticated reasoning process while maintaining professional polish.

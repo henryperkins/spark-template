@@ -34,7 +34,7 @@ export function OneDriveIngestion({ onDocumentsIngested }: OneDriveIngestionProp
     try {
       const result = await oneDriveService.validateConfig(config)
       setValidationResult(result)
-      
+
       if (result.valid) {
         toast.success('OneDrive connection validated successfully')
       } else {
@@ -61,7 +61,7 @@ export function OneDriveIngestion({ onDocumentsIngested }: OneDriveIngestionProp
       const documents = await oneDriveService.ingestFiles(config)
       onDocumentsIngested(documents)
       toast.success(`Ingested ${documents.length} files from OneDrive`)
-      
+
       setConfig({
         accessToken: '',
         path: '',
@@ -87,45 +87,49 @@ export function OneDriveIngestion({ onDocumentsIngested }: OneDriveIngestionProp
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        <Alert>
-          <Info size={16} />
-          <AlertDescription>
-            To get an access token, register an app at{' '}
-            <a
-              href="https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline"
-            >
-              Azure Portal
-            </a>
-            {' '}with Microsoft Graph Files.Read permission and use the Microsoft Authentication Library.
-          </AlertDescription>
-        </Alert>
+        <form onSubmit={(e) => { e.preventDefault(); }}>
+          <Alert>
+            <Info size={16} />
+            <AlertDescription>
+              To get an access token, register an app at{' '}
+              <a
+                href="https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline"
+              >
+                Azure Portal
+              </a>
+              {' '}with Microsoft Graph Files.Read permission and use the Microsoft Authentication Library.
+            </AlertDescription>
+          </Alert>
 
-        <div className="space-y-2">
-          <Label htmlFor="onedrive-token">Access Token</Label>
-          <Input
-            id="onedrive-token"
-            type="password"
-            placeholder="eyJ0eXAiOiJKV1QiLCJhb..."
-            value={config.accessToken}
-            onChange={(e) => setConfig({ ...config, accessToken: e.target.value })}
-          />
-        </div>
+          <div className="space-y-2">
+            <Label htmlFor="onedrive-token">Access Token</Label>
+            <Input
+              id="onedrive-token"
+              name="onedrive-access-token"
+              type="password"
+              placeholder="eyJ0eXAiOiJKV1QiLCJhb..."
+              value={config.accessToken}
+              onChange={(e) => setConfig({ ...config, accessToken: e.target.value })}
+            />
+          </div>
 
-        <div className="space-y-2">
-          <Label htmlFor="onedrive-path">Path (optional)</Label>
-          <Input
-            id="onedrive-path"
-            placeholder="Documents/Work"
-            value={config.path}
-            onChange={(e) => setConfig({ ...config, path: e.target.value })}
-          />
-          <p className="text-xs text-muted-foreground">
-            Leave empty to sync all files, or specify a folder path
-          </p>
-        </div>
+          <div className="space-y-2">
+            <Label htmlFor="onedrive-path">Path (optional)</Label>
+            <Input
+              id="onedrive-path"
+              name="onedrive-path"
+              placeholder="Documents/Work"
+              value={config.path}
+              onChange={(e) => setConfig({ ...config, path: e.target.value })}
+            />
+            <p className="text-xs text-muted-foreground">
+              Leave empty to sync all files, or specify a folder path
+            </p>
+          </div>
+        </form>
 
         {validationResult && (
           <Alert variant={validationResult.valid ? 'default' : 'destructive'}>

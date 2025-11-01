@@ -1,7 +1,5 @@
 import { ComponentProps } from "react"
-import ChevronLeftIcon from "lucide-react/dist/esm/icons/chevron-left"
-import ChevronRightIcon from "lucide-react/dist/esm/icons/chevron-right"
-import MoreHorizontalIcon from "lucide-react/dist/esm/icons/more-horizontal"
+import { CaretLeft as ChevronLeftIcon, CaretRight as ChevronRightIcon, DotsThree as MoreHorizontalIcon } from "@phosphor-icons/react"
 
 import { cn } from "@/lib/utils"
 import { Button, buttonVariants } from "@/components/ui/button"

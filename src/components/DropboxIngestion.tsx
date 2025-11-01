@@ -87,45 +87,49 @@ export function DropboxIngestion({ onDocumentsIngested }: DropboxIngestionProps)
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        <Alert>
-          <Info size={16} />
-          <AlertDescription>
-            To get an access token, create an app at{' '}
-            <a
-              href="https://www.dropbox.com/developers/apps"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline"
-            >
-              Dropbox App Console
-            </a>
-            {' '}and generate an access token under the OAuth 2 section.
-          </AlertDescription>
-        </Alert>
+        <form onSubmit={(e) => { e.preventDefault(); }}>
+          <Alert>
+            <Info size={16} />
+            <AlertDescription>
+              To get an access token, create an app at{' '}
+              <a
+                href="https://www.dropbox.com/developers/apps"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline"
+              >
+                Dropbox App Console
+              </a>
+              {' '}and generate an access token under the OAuth 2 section.
+            </AlertDescription>
+          </Alert>
 
-        <div className="space-y-2">
-          <Label htmlFor="dropbox-token">Access Token</Label>
-          <Input
-            id="dropbox-token"
-            type="password"
-            placeholder="sl.xxxxxxxxxxxxxx"
-            value={config.accessToken}
-            onChange={(e) => setConfig({ ...config, accessToken: e.target.value })}
-          />
-        </div>
+          <div className="space-y-2">
+            <Label htmlFor="dropbox-token">Access Token</Label>
+            <Input
+              id="dropbox-token"
+              name="dropbox-access-token"
+              type="password"
+              placeholder="sl.xxxxxxxxxxxxxx"
+              value={config.accessToken}
+              onChange={(e) => setConfig({ ...config, accessToken: e.target.value })}
+            />
+          </div>
 
-        <div className="space-y-2">
-          <Label htmlFor="dropbox-path">Path (optional)</Label>
-          <Input
-            id="dropbox-path"
-            placeholder="/Documents"
-            value={config.path}
-            onChange={(e) => setConfig({ ...config, path: e.target.value })}
-          />
-          <p className="text-xs text-muted-foreground">
-            Leave empty to sync all files, or specify a folder path
-          </p>
-        </div>
+          <div className="space-y-2">
+            <Label htmlFor="dropbox-path">Path (optional)</Label>
+            <Input
+              id="dropbox-path"
+              name="dropbox-path"
+              placeholder="/Documents"
+              value={config.path}
+              onChange={(e) => setConfig({ ...config, path: e.target.value })}
+            />
+            <p className="text-xs text-muted-foreground">
+              Leave empty to sync all files, or specify a folder path
+            </p>
+          </div>
+        </form>
 
         {validationResult && (
           <Alert variant={validationResult.valid ? 'default' : 'destructive'}>

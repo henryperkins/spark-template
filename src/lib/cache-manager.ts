@@ -66,7 +66,7 @@ export class CacheManager {
 
   async get<T>(key: string): Promise<T | null> {
     const cacheKey = this.buildCacheKey(key)
-    const entry = await (window as any).spark.kv.get<CacheEntry<T>>(cacheKey)
+    const entry = await (window as any).spark.kv.get(cacheKey) as CacheEntry<T> | null
 
     if (!entry) {
       this.misses++
@@ -168,7 +168,7 @@ export class CacheManager {
     threshold: number = 0.9
   ): Promise<boolean> {
     const cacheKey = this.buildCacheKey(key)
-    const entry = await (window as any).spark.kv.get<CacheEntry>(cacheKey)
+    const entry = await (window as any).spark.kv.get(cacheKey) as CacheEntry | null
 
     if (!entry || !entry.semanticHash) {
       return false
@@ -199,7 +199,7 @@ export class CacheManager {
 
   async adaptiveTTL(key: string): Promise<number> {
     const cacheKey = this.buildCacheKey(key)
-    const entry = await (window as any).spark.kv.get<CacheEntry>(cacheKey)
+    const entry = await (window as any).spark.kv.get(cacheKey) as CacheEntry | null
 
     if (!entry) {
       return this.DEFAULT_TTL_MS
@@ -226,8 +226,8 @@ export class CacheManager {
     let cleaned = 0
 
     for (const cacheKey of cacheKeys) {
-      const entry = await (window as any).spark.kv.get<CacheEntry>(cacheKey)
-      
+      const entry = await (window as any).spark.kv.get(cacheKey) as CacheEntry | null
+
       if (!entry) continue
 
       if (this.isStale(entry) || entry.version !== this.CACHE_VERSION) {
@@ -258,8 +258,8 @@ export class CacheManager {
     let staleEntries = 0
 
     for (const cacheKey of cacheKeys) {
-      const entry = await (window as any).spark.kv.get<CacheEntry>(cacheKey)
-      
+      const entry = await (window as any).spark.kv.get(cacheKey) as CacheEntry | null
+
       if (!entry) continue
 
       const ttlCategory = this.categorizeTTL(entry.ttl)

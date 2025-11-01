@@ -13,16 +13,24 @@ dist-ssr
 *-dist
 *.local
 
+# TypeScript
+*.tsbuildinfo
+
+# Test coverage
+coverage/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
 .idea
 .DS_Store
+Thumbs.db
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+*.code-workspace
 
 .env
 **/agent-eval-report*

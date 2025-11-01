@@ -32,6 +32,16 @@ export class AzureSearchService {
 
       return { success: true }
     } catch (error) {
+      // Check if it's a CORS error
+      if (error instanceof TypeError && error.message.includes('Failed to fetch')) {
+        return {
+          success: false,
+          error: 'CORS Error: Azure Search must be configured to allow requests from your origin. ' +
+                 'In Azure Portal, go to your Search service → Settings → CORS, and add your origin ' +
+                 '(e.g., http://localhost:5001 or your production URL). Note: Testing from localhost may ' +
+                 'require enabling CORS for development. Alternatively, test the connection from a deployed environment.'
+        }
+      }
       return { success: false, error: `Connection failed: ${error instanceof Error ? error.message : 'Unknown error'}` }
     }
   }
@@ -229,6 +239,13 @@ export class AzureSearchService {
 
       return { success: true }
     } catch (error) {
+      // Check if it's a CORS error
+      if (error instanceof TypeError && error.message.includes('Failed to fetch')) {
+        return {
+          success: false,
+          error: 'CORS Error: Cannot create index. Please configure CORS in Azure Portal (Search service → Settings → CORS).'
+        }
+      }
       return { success: false, error: `Index creation failed: ${error instanceof Error ? error.message : 'Unknown error'}` }
     }
   }
@@ -405,8 +422,8 @@ export class AzureSearchService {
       }
 
       const result: any = await response.json()
-      
-      let sources = result.value.map((doc: any, index: number) => ({
+
+      let sources = result.value.map((doc: any) => ({
         documentId: doc.documentId,
         documentName: doc.documentName,
         chunkId: doc.id,

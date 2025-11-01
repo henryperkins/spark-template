@@ -44,7 +44,7 @@ export class EmbeddingManager {
 
   async getMetadata(documentId: string): Promise<EmbeddingMetadata | null> {
     const key = `embedding-metadata:${documentId}`
-    return await (window as any).spark.kv.get<EmbeddingMetadata>(key) || null
+    return await (window as any).spark.kv.get(key) as EmbeddingMetadata | null || null
   }
 
   async setMetadata(metadata: EmbeddingMetadata): Promise<void> {
@@ -223,7 +223,7 @@ export class EmbeddingManager {
     const versions = new Set<string>()
 
     for (const key of metadataKeys) {
-      const metadata = await (window as any).spark.kv.get<EmbeddingMetadata>(key)
+      const metadata = await (window as any).spark.kv.get(key) as EmbeddingMetadata | null
       if (metadata?.version) {
         versions.add(metadata.version)
       }
@@ -248,7 +248,7 @@ export class EmbeddingManager {
     let needingRefresh = 0
 
     for (const key of metadataKeys) {
-      const metadata = await (window as any).spark.kv.get<EmbeddingMetadata>(key)
+      const metadata = await (window as any).spark.kv.get(key) as EmbeddingMetadata | null
       if (!metadata) continue
 
       byVersion[metadata.version] = (byVersion[metadata.version] || 0) + 1

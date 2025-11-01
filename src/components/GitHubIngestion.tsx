@@ -93,61 +93,68 @@ export function GitHubIngestion({ onDocumentsIngested }: GitHubIngestionProps) {
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="grid grid-cols-2 gap-4">
-          <div className="space-y-2">
-            <Label htmlFor="github-owner">Owner</Label>
-            <Input
-              id="github-owner"
-              placeholder="facebook"
-              value={config.owner}
-              onChange={(e) => setConfig({ ...config, owner: e.target.value })}
-            />
+        <form onSubmit={(e) => { e.preventDefault(); }}>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="github-owner">Owner</Label>
+              <Input
+                id="github-owner"
+                name="owner"
+                placeholder="facebook"
+                value={config.owner}
+                onChange={(e) => setConfig({ ...config, owner: e.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="github-repo">Repository</Label>
+              <Input
+                id="github-repo"
+                name="repo"
+                placeholder="react"
+                value={config.repo}
+                onChange={(e) => setConfig({ ...config, repo: e.target.value })}
+              />
+            </div>
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="github-repo">Repository</Label>
-            <Input
-              id="github-repo"
-              placeholder="react"
-              value={config.repo}
-              onChange={(e) => setConfig({ ...config, repo: e.target.value })}
-            />
-          </div>
-        </div>
 
-        <div className="grid grid-cols-2 gap-4">
-          <div className="space-y-2">
-            <Label htmlFor="github-branch">Branch (optional)</Label>
-            <Input
-              id="github-branch"
-              placeholder="main"
-              value={config.branch}
-              onChange={(e) => setConfig({ ...config, branch: e.target.value })}
-            />
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="github-branch">Branch (optional)</Label>
+              <Input
+                id="github-branch"
+                name="branch"
+                placeholder="main"
+                value={config.branch}
+                onChange={(e) => setConfig({ ...config, branch: e.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="github-path">Path (optional)</Label>
+              <Input
+                id="github-path"
+                name="path"
+                placeholder="docs/"
+                value={config.path}
+                onChange={(e) => setConfig({ ...config, path: e.target.value })}
+              />
+            </div>
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="github-path">Path (optional)</Label>
-            <Input
-              id="github-path"
-              placeholder="docs/"
-              value={config.path}
-              onChange={(e) => setConfig({ ...config, path: e.target.value })}
-            />
-          </div>
-        </div>
 
-        <div className="space-y-2">
-          <Label htmlFor="github-token">Personal Access Token (optional)</Label>
-          <Input
-            id="github-token"
-            type="password"
-            placeholder="ghp_xxxxxxxxxxxx"
-            value={config.token}
-            onChange={(e) => setConfig({ ...config, token: e.target.value })}
-          />
-          <p className="text-xs text-muted-foreground">
-            Required for private repositories or to increase rate limits
-          </p>
-        </div>
+          <div className="space-y-2">
+            <Label htmlFor="github-token">Personal Access Token (optional)</Label>
+            <Input
+              id="github-token"
+              name="token"
+              type="password"
+              placeholder="ghp_xxxxxxxxxxxx"
+              value={config.token}
+              onChange={(e) => setConfig({ ...config, token: e.target.value })}
+            />
+            <p className="text-xs text-muted-foreground">
+              Required for private repositories or to increase rate limits
+            </p>
+          </div>
+        </form>
 
         {validationResult && (
           <Alert variant={validationResult.valid ? 'default' : 'destructive'}>
