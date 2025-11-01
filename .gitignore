@@ -40,3 +40,7 @@ pids
 .devcontainer/
 
 .spark-workbench-id
+
+# IDE-specific directories
+.amazonq/
+.claude/

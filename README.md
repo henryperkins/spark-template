@@ -1,37 +1,90 @@
-# Agentic RAG Application
+# Agentic RAG Knowledge Assistant
 
-An intelligent knowledge assistant built on GitHub Spark with multi-agent orchestration for advanced document retrieval and question answering.
+An enterprise-grade intelligent knowledge assistant built on GitHub Spark with multi-agent orchestration for advanced document retrieval and question answering.
 
-## Overview
+## Features
 
-This application combines Retrieval-Augmented Generation (RAG) with a sophisticated multi-agent system to provide intelligent responses from your document corpus. It supports multiple data sources, intelligent chunking strategies, and optional Azure AI Search integration.
-
-## Key Features
-
-- **Multi-source ingestion**: Upload files, GitHub repos, websites, Dropbox, OneDrive
-- **Intelligent agents**: Query planning, routing, expansion, and response refinement
-- **Advanced retrieval**: Semantic, keyword, and hybrid search strategies
-- **Azure integration**: Optional Azure OpenAI embeddings and AI Search indexing
-- **Production-ready**: Caching, metrics, and scalability features
+- **🤖 Multi-Agent System**: Intelligent query classification, planning, routing, and validation
+- **📚 Multi-Source Ingestion**: Upload files, GitHub repos, websites, Dropbox, OneDrive
+- **🔍 Advanced Retrieval**: Semantic, keyword, and hybrid search with RRF fusion
+- **☁️ Azure Integration**: Optional Azure OpenAI embeddings and AI Search with semantic ranking
+- **⚡ Production-Ready**: Caching, compression, namespacing, and scalability features
+- **📊 Quality Metrics**: Faithfulness and relevance scoring with transparent agent workflows
 
 ## Quick Start
 
+### Installation
+
 ```bash
 npm install
-npm run dev
 ```
 
-## Documentation
+### Development
 
-- **[CLAUDE.md](./CLAUDE.md)** - Development guide and architecture overview
-- **[PRD.md](./PRD.md)** - Comprehensive product requirements
-- **[AGENTIC_RAG.md](./AGENTIC_RAG.md)** - Multi-agent system details
-- **[AZURE_EMBEDDING_OPTIMIZATION.md](./AZURE_EMBEDDING_OPTIMIZATION.md)** - Azure AI Search optimization
-- **[LAYER_UPGRADES_GUIDE.md](./LAYER_UPGRADES_GUIDE.md)** - Advanced features and scaling
+```bash
+npm run dev        # Start development server
+npm run build      # Build for production
+npm run lint       # Check code quality
+```
+
+### Basic Usage
+
+1. **Configure Azure (Optional)**: Navigate to the Azure tab to connect your Azure OpenAI and AI Search services
+2. **Upload Documents**: Use the Upload tab to add documents, or use Integrations for GitHub/web content
+3. **Query**: Ask questions in the Query tab with Agentic Mode enabled for best results
 
 ## Tech Stack
 
-React 19 • TypeScript • Vite • Tailwind CSS 4 • Radix UI • GitHub Spark • Azure AI (optional)
+**Frontend**: React 19 • TypeScript • Vite 6 • Tailwind CSS 4 • Radix UI • Phosphor Icons
+**Platform**: GitHub Spark (KV store, LLM integration)
+**AI Services**: Azure OpenAI • Azure AI Search (optional)
+**Architecture**: Multi-agent RAG with orchestration, caching, and streaming
+
+## Documentation
+
+### Core Documentation
+- **[CLAUDE.md](./CLAUDE.md)** - Developer guide for Claude Code (architecture, commands, patterns)
+- **[PRD.md](./PRD.md)** - Product requirements and feature specifications
+
+### Technical Guides
+- **[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)** - Multi-agent system architecture and patterns
+- **[docs/AZURE_OPTIMIZATION.md](./docs/AZURE_OPTIMIZATION.md)** - Azure AI Search optimization guide
+- **[docs/LAYER_UPGRADES.md](./docs/LAYER_UPGRADES.md)** - Production upgrades (Layers 6-8)
+
+## Project Structure
+
+```
+spark-template/
+├── src/
+│   ├── components/        # React components
+│   ├── lib/
+│   │   ├── agents/       # Agent implementations
+│   │   ├── azure-*.ts    # Azure service integrations
+│   │   └── *.ts          # Core utilities
+│   ├── hooks/            # Custom React hooks
+│   └── types/            # TypeScript type definitions
+├── docs/                 # Technical documentation
+└── [config files]        # Build and tool configurations
+```
+
+## Key Concepts
+
+### Agentic Mode
+
+When enabled (default), queries flow through a sophisticated agent pipeline:
+1. **Classifier Agent**: Analyzes query complexity
+2. **Planner Agent**: Decomposes complex queries into sub-queries
+3. **Routing Agent**: Selects optimal retrieval strategy
+4. **Critic Agent**: Validates response quality
+5. **ReAct Agent**: Iteratively refines responses
+
+### Data Sources
+
+- **Upload**: Direct file upload (.txt, .md, .pdf)
+- **GitHub**: Repository content ingestion
+- **Website**: Web scraping with configurable depth
+- **Dropbox**: Cloud storage integration
+- **OneDrive**: Microsoft cloud storage integration
 
 ## License
 

@@ -160,7 +160,7 @@ Core types in src/types/index.ts include:
 ## Related Documentation
 
 See these files for deeper architectural information:
-- `AGENTIC_RAG.md` - Detailed agent system design
-- `AZURE_EMBEDDING_OPTIMIZATION.md` - Azure integration details
-- `LAYER_UPGRADES_GUIDE.md` - Upgrade and scaling patterns
-- `PRD.md` - Product requirements and features
+- `docs/ARCHITECTURE.md` - Detailed agent system design and patterns
+- `docs/AZURE_OPTIMIZATION.md` - Azure AI Search integration and optimization
+- `docs/LAYER_UPGRADES.md` - Production upgrade patterns (Layers 6-8)
+- `PRD.md` - Product requirements and feature specifications
