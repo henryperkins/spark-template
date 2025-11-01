@@ -14,7 +14,11 @@ interface GitHubFile {
 }
 
 export class GitHubService {
-  private async fetchWithAuth(url: string, token?: string): Promise<Response> {
+  private delay(ms: number) {
+    return new Promise(resolve => setTimeout(resolve, ms))
+  }
+
+  private async fetchWithAuth(url: string, token?: string, retries = 3): Promise<Response> {
     const headers: HeadersInit = {
       'Accept': 'application/vnd.github.v3+json',
     }
@@ -23,13 +27,26 @@ export class GitHubService {
       headers['Authorization'] = `Bearer ${token}`
     }
     
-    const response = await fetch(url, { headers })
-    
-    if (!response.ok) {
-      throw new Error(`GitHub API error: ${response.statusText}`)
+    for (let i = 0; i < retries; i++) {
+      const response = await fetch(url, { headers })
+      
+      if (response.ok) return response
+      
+      if (response.status === 429) {
+        const retryAfter = parseInt(response.headers.get('Retry-After') || '60')
+        console.warn(`Rate limited. Waiting ${retryAfter}s...`)
+        await this.delay(retryAfter * 1000)
+        continue
+      }
+      
+      if (i === retries - 1) {
+        throw new Error(`GitHub API error: ${response.statusText}`)
+      }
+      
+      await this.delay(1000 * Math.pow(2, i))
     }
     
-    return response
+    throw new Error('Max retries exceeded')
   }
 
   private async getRepoContents(
@@ -62,25 +79,25 @@ export class GitHubService {
     throw new Error('No content found in file')
   }
 
-  private async getAllFiles(
+  private async getAllFilesViaTree(
     owner: string,
     repo: string,
-    path: string = '',
     branch: string = 'main',
-    token?: string,
-    files: GitHubFile[] = []
+    token?: string
   ): Promise<GitHubFile[]> {
-    const contents = await this.getRepoContents(owner, repo, path, branch, token)
+    const url = `https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`
+    const response = await this.fetchWithAuth(url, token)
+    const data = await response.json()
     
-    for (const item of contents) {
-      if (item.type === 'file' && this.isTextFile(item.name)) {
-        files.push(item)
-      } else if (item.type === 'dir') {
-        await this.getAllFiles(owner, repo, item.path, branch, token, files)
-      }
-    }
-    
-    return files
+    return data.tree
+      .filter((item: any) => item.type === 'blob' && this.isTextFile(item.path))
+      .map((item: any) => ({
+        name: item.path.split('/').pop(),
+        path: item.path,
+        type: 'file',
+        sha: item.sha,
+        size: item.size
+      }))
   }
 
   private isTextFile(filename: string): boolean {
@@ -99,11 +116,16 @@ export class GitHubService {
     const { owner, repo, branch = 'main', path = '', token } = config
     
     try {
-      const files = await this.getAllFiles(owner, repo, path, branch, token)
+      let files = await this.getAllFilesViaTree(owner, repo, branch, token)
+      if (path) {
+        files = files.filter(f => f.path.startsWith(path))
+      }
       const documents: Document[] = []
       
-      for (const file of files) {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i]
         try {
+          await this.delay(100)
           const content = await this.getFileContent(owner, repo, file.path, branch, token)
           const documentId = `github-${file.sha}`
           
@@ -150,6 +172,7 @@ export class GitHubService {
           })
           
           documents.push(finalDocument)
+          console.log(`Processed ${i + 1}/${files.length}: ${file.path}`)
         } catch (error) {
           console.error(`Failed to process file ${file.path}:`, error)
         }

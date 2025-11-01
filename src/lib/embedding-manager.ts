@@ -1,5 +1,4 @@
 import { Document, DocumentChunk } from '@/types'
-import { useKV } from '@github/spark/hooks'
 
 export interface EmbeddingMetadata {
   version: string

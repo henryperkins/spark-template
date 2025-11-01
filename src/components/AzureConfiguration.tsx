@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { useKV } from '@github/spark/hooks'
+import { useSparkKV } from '@/hooks/use-spark-kv'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -16,8 +16,8 @@ import { azureServiceManager } from '@/lib/azure-service-manager'
 import { cn } from '@/lib/utils'
 
 export function AzureConfiguration() {
-  const [config, setConfig] = useKV<AzureConfig | null>('azure-config', null)
-  const [status, setStatus] = useKV<AzureConnectionStatus | null>('azure-status', null)
+  const [config, setConfig] = useSparkKV<AzureConfig | null>('azure-config', null)
+  const [status, setStatus] = useSparkKV<AzureConnectionStatus | null>('azure-status', null)
   const [formData, setFormData] = useState<AzureConfig>({
     openai: {
       endpoint: '',

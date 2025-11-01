@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { useKV } from '@github/spark/hooks'
+import { useSparkKV } from '@/hooks/use-spark-kv'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { DocumentUpload } from '@/components/DocumentUpload'
 import { DocumentList } from '@/components/DocumentList'
@@ -14,8 +14,8 @@ import { azureServiceManager } from '@/lib/azure-service-manager'
 import { cacheManager } from '@/lib/cache-manager'
 
 function App() {
-  const [documents, setDocuments] = useKV<Document[]>('rag-documents', [])
-  const [azureConfig] = useKV<AzureConfig | null>('azure-config', null)
+  const [documents, setDocuments] = useSparkKV<Document[]>('rag-documents', [])
+  const [azureConfig] = useSparkKV<AzureConfig | null>('azure-config', null)
 
   useEffect(() => {
     // Initialize Azure services if config exists
