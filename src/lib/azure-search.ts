@@ -351,6 +351,54 @@ export class AzureSearchService {
     }
   }
 
+  async keywordSearch(query: string, top: number = 5, namespace?: string): Promise<Source[]> {
+    try {
+      const searchRequest: any = {
+        search: query,
+        searchMode: 'all',
+        queryType: 'simple',
+        select: 'id,content,documentId,documentName,chunkIndex,metadata',
+        top
+      }
+
+      const effectiveNamespace = namespace || this.config.namespace
+      if (effectiveNamespace) {
+        searchRequest.filter = `metadata/any(m: contains(m, 'namespace_id":"${effectiveNamespace}"'))`
+      }
+
+      const response = await fetch(
+        `${this.config.endpoint}/indexes/${this.config.indexName}/docs/search?api-version=${this.config.apiVersion}`,
+        {
+          method: 'POST',
+          headers: {
+            'api-key': this.config.apiKey,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(searchRequest)
+        }
+      )
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`Keyword search failed: ${response.status} ${errorText}`)
+      }
+
+      const result: any = await response.json()
+
+      return result.value.map((doc: any) => ({
+        documentId: doc.documentId,
+        documentName: doc.documentName,
+        chunkId: doc.id,
+        content: doc.content,
+        relevanceScore: doc['@search.score'] ? doc['@search.score'] / 100 : 0.6,
+        azureScore: doc['@search.score'] || 60
+      }))
+    } catch (error) {
+      console.error('Error performing keyword search:', error)
+      throw error
+    }
+  }
+
   async semanticHybridSearch(query: string, queryVector: number[], top: number = 5, namespace?: string): Promise<Source[]> {
     try {
       const useHybridSearch = this.config.hybridSearch?.enabled ?? true

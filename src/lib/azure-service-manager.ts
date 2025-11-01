@@ -102,19 +102,26 @@ export class AzureServiceManager {
     }
   }
 
-  async searchWithAzure(query: string, useHybrid: boolean = true): Promise<Source[]> {
+  async searchWithAzure(
+    query: string,
+    strategy: 'vector' | 'keyword' | 'hybrid' = 'hybrid'
+  ): Promise<Source[]> {
     if (!this.isConfigured()) {
       throw new Error('Azure services not configured')
     }
 
     try {
+      if (strategy === 'keyword') {
+        return await this.searchService!.keywordSearch(query, 5)
+      }
+
       const queryEmbedding = await this.openaiService!.generateEmbedding(query)
-      
-      if (useHybrid) {
-        return await this.searchService!.semanticHybridSearch(query, queryEmbedding, 5)
-      } else {
+
+      if (strategy === 'vector') {
         return await this.searchService!.vectorSearch(queryEmbedding, 5)
       }
+
+      return await this.searchService!.semanticHybridSearch(query, queryEmbedding, 5)
     } catch (error) {
       console.error('Error searching with Azure:', error)
       throw error
@@ -163,6 +170,22 @@ export class AzureServiceManager {
       search: 'connected',
       lastTested: new Date().toISOString()
     }
+  }
+
+  async generateCompletion(
+    messages: Array<{ role: string; content: string }> | string,
+    options?: {
+      maxTokens?: number
+      temperature?: number
+      topP?: number
+      responseFormat?: 'text' | 'json_object'
+    }
+  ): Promise<string> {
+    if (!this.openaiService) {
+      throw new Error('Azure OpenAI service not configured')
+    }
+
+    return this.openaiService.generateCompletion(messages, options)
   }
 }
 

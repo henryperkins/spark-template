@@ -1,5 +1,5 @@
 import { Source } from '@/types'
-import { azureServiceManager } from '../azure-service-manager'
+import { llmService } from '../services/llm-service'
 
 export interface ReActStep {
   thought: string
@@ -99,19 +99,17 @@ Iteration: ${iteration}
 Provide a brief thought about the next improvement step.`
 
     try {
-      if (azureServiceManager.isConfigured()) {
-        const prompt = (window as any).spark.llmPrompt`${systemPrompt}
+      const prompt = (window as any).spark.llmPrompt`${systemPrompt}
 
 Query: ${query}
 Current response: ${currentResponse}
 
 What should be the next step?`
 
-        return await azureServiceManager['openaiService']!.generateCompletion(
-          prompt,
-          { maxTokens: 150, temperature: 0.6 }
-        )
-      }
+      return await llmService.generateText(prompt, {
+        maxTokens: 150,
+        temperature: 0.6
+      })
     } catch (error) {
       console.warn('Thought generation failed:', error)
     }
@@ -163,8 +161,7 @@ Source documents:
 ${contextSnippets}`
 
     try {
-      if (azureServiceManager.isConfigured()) {
-        const prompt = (window as any).spark.llmPrompt`${systemPrompt}
+      const prompt = (window as any).spark.llmPrompt`${systemPrompt}
 
 User query: ${query}
 
@@ -173,19 +170,115 @@ ${currentResponse}
 
 Provide an improved response that addresses the issues:`
 
-        return await azureServiceManager['openaiService']!.generateCompletion(
-          prompt,
-          { maxTokens: 800, temperature: 0.7 }
-        )
-      }
+      return await llmService.generateText(prompt, {
+        maxTokens: 800,
+        temperature: 0.7
+      })
     } catch (error) {
       console.warn('Refinement failed:', error)
     }
 
-    const citationAdded = currentResponse.replace(
-      /\.\s/g,
-      ` [${Math.floor(Math.random() * sources.length) + 1}]. `
+    return this.buildFallbackCitedResponse(currentResponse, sources)
+  }
+
+  private buildFallbackCitedResponse(
+    response: string,
+    sources: Source[]
+  ): string {
+    if (sources.length === 0) {
+      return response
+    }
+
+    const sanitizedResponse = response
+      .replace(/\[\d+\]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+
+    if (!sanitizedResponse) {
+      return response
+    }
+
+    const sentences = sanitizedResponse
+      .split(/(?<=[.!?])\s+(?=[A-Z0-9])/)
+      .filter(Boolean)
+
+    if (sentences.length === 0) {
+      const sourceList = this.formatSourceList(sources)
+      return `${sanitizedResponse} [1]\n\nSources:\n${sourceList}`
+    }
+
+    const sourceTokenSets = sources.map(source => this.tokenizeContent(source.content))
+
+    const citedSentences = sentences.map(sentence => {
+      const sourceIndex = this.chooseSourceIndex(sentence, sourceTokenSets)
+      return `${sentence} [${sourceIndex + 1}]`
+    })
+
+    const sourceList = this.formatSourceList(sources)
+    return `${citedSentences.join(' ')}\n\nSources:\n${sourceList}`
+  }
+
+  private formatSourceList(sources: Source[]): string {
+    return sources
+      .map((source, idx) => {
+        const summary = (source.semanticCaption || source.content || '')
+          .replace(/\s+/g, ' ')
+          .slice(0, 140)
+          .trim()
+
+        const trailingEllipsis =
+          summary.length === 140 || summary.endsWith('.')
+            ? ''
+            : '...'
+
+        return `[${idx + 1}] ${source.documentName}${summary ? ` — ${summary}${trailingEllipsis}` : ''}`
+      })
+      .join('\n')
+  }
+
+  private tokenizeContent(content: string): Set<string> {
+    return new Set(
+      (content || '')
+        .toLowerCase()
+        .split(/\W+/)
+        .filter(token => token.length >= 4)
     )
-    return citationAdded
+  }
+
+  private chooseSourceIndex(
+    sentence: string,
+    sourceTokenSets: Array<Set<string>>
+  ): number {
+    if (sourceTokenSets.length === 0) {
+      return 0
+    }
+
+    const tokens = sentence
+      .toLowerCase()
+      .split(/\W+/)
+      .filter(token => token.length >= 4)
+
+    if (tokens.length === 0) {
+      return 0
+    }
+
+    let bestIndex = 0
+    let bestScore = -1
+
+    sourceTokenSets.forEach((tokenSet, index) => {
+      let score = 0
+      for (const token of tokens) {
+        if (tokenSet.has(token)) {
+          score++
+        }
+      }
+
+      if (score > bestScore) {
+        bestScore = score
+        bestIndex = index
+      }
+    })
+
+    return bestScore > 0 ? bestIndex : 0
   }
 }

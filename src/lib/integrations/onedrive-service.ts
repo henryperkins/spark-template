@@ -42,7 +42,7 @@ export class OneDriveService {
     let nextLink: string | undefined
     
     const encodedPath = encodeURIComponent(path || '/')
-    let url = path 
+    const url = path 
       ? `https://graph.microsoft.com/v1.0/me/drive/root:/${encodedPath}:/children`
       : 'https://graph.microsoft.com/v1.0/me/drive/root/children'
     

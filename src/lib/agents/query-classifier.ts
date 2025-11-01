@@ -1,4 +1,5 @@
-import { azureServiceManager } from '../azure-service-manager'
+import { z } from 'zod'
+import { llmService } from '../services/llm-service'
 
 export type QueryComplexity = 'simple' | 'moderate' | 'complex'
 
@@ -9,6 +10,14 @@ export interface QueryClassification {
   requiresDecomposition: boolean
   estimatedSubQueries?: number
 }
+
+const queryClassificationSchema: z.ZodType<QueryClassification> = z.object({
+  complexity: z.enum(['simple', 'moderate', 'complex']),
+  reasoning: z.string().min(5),
+  recommendedStrategy: z.enum(['direct', 'planned', 'iterative']),
+  requiresDecomposition: z.boolean(),
+  estimatedSubQueries: z.number().int().min(1).max(6).optional()
+})
 
 export class QueryClassifierAgent {
   async classifyQuery(query: string): Promise<QueryClassification> {
@@ -36,25 +45,18 @@ Example:
 }`
 
     try {
-      if (azureServiceManager.isConfigured()) {
-        const prompt = (window as any).spark.llmPrompt`${systemPrompt}
+      const prompt = (window as any).spark.llmPrompt`${systemPrompt}
 
 User query: ${query}
 
 Provide your classification as a JSON object:`
 
-        const response = await azureServiceManager['openaiService']!.generateCompletion(
-          prompt,
-          { maxTokens: 300, temperature: 0.3, responseFormat: 'json_object' }
-        )
-        
-        const jsonMatch = response.match(/\{[\s\S]*\}/)
-        if (jsonMatch) {
-          return JSON.parse(jsonMatch[0])
-        }
-      }
+      return await llmService.generateJson(prompt, queryClassificationSchema, {
+        maxTokens: 300,
+        temperature: 0.3
+      })
     } catch (error) {
-      console.warn('Azure classification failed, using fallback:', error)
+      console.warn('LLM classification failed, using fallback:', error)
     }
 
     return this.fallbackClassification(query)

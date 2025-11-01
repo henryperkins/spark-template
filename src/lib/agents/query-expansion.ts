@@ -1,5 +1,7 @@
+import { z } from 'zod'
 import { Document, Source } from '@/types'
 import { cacheManager } from '@/lib/cache-manager'
+import { llmService } from '../services/llm-service'
 
 export interface SuggestedQuestion {
   question: string
@@ -15,6 +17,21 @@ export interface QueryExpansion {
   expansionStrategy: 'document-based' | 'context-based' | 'hybrid'
   cached?: boolean
 }
+
+const topicsSchema = z.object({
+  topics: z.array(z.string().min(2)).min(1).max(10)
+})
+
+const suggestedQuestionSchema: z.ZodType<SuggestedQuestion> = z.object({
+  question: z.string().min(5),
+  reasoning: z.string().min(5),
+  category: z.enum(['clarification', 'related', 'deeper', 'broader']),
+  relevanceScore: z.number().min(0).max(1)
+})
+
+const suggestionResponseSchema = z.object({
+  questions: z.array(suggestedQuestionSchema).min(1).max(6)
+})
 
 export class QueryExpansionAgent {
   private readonly CACHE_TTL = 30 * 60 * 1000
@@ -93,9 +110,11 @@ Return ONLY a JSON object with a single property "topics" containing an array of
 Example: {"topics": ["machine learning", "data processing", "model training"]}`
 
     try {
-      const response = await (window as any).spark.llm(prompt, 'gpt-4o-mini', true)
-      const parsed = JSON.parse(response)
-      return parsed.topics || []
+      const result = await llmService.generateJson(prompt, topicsSchema, {
+        maxTokens: 400,
+        temperature: 0.2
+      })
+      return result.topics
     } catch (error) {
       console.error('Failed to extract topics:', error)
       return []
@@ -173,9 +192,11 @@ Example: {"questions": [{"question": "Can you explain this in simpler terms?", "
     }
 
     try {
-      const response = await (window as any).spark.llm(prompt, 'gpt-4o-mini', true)
-      const parsed = JSON.parse(response)
-      return parsed.questions || []
+      const result = await llmService.generateJson(prompt, suggestionResponseSchema, {
+        maxTokens: 600,
+        temperature: 0.4
+      })
+      return result.questions
     } catch (error) {
       console.error('Failed to generate suggestions:', error)
       return this.getFallbackSuggestions(query)

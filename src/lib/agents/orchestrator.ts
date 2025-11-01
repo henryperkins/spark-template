@@ -1,19 +1,22 @@
 import { Document, Source } from '@/types'
 import { QueryClassifierAgent, QueryClassification } from './query-classifier'
 import { QueryPlannerAgent, QueryPlan } from './query-planner'
-import { RoutingAgent, RoutingDecision } from './routing-agent'
+import { RoutingAgent, RoutingDecision, RetrievalStrategy } from './routing-agent'
 import { CriticAgent, ValidationResult } from './critic-agent'
 import { ReActAgent, ReActResult } from './react-agent'
 import { QueryExpansionAgent, QueryExpansion } from './query-expansion'
-import { findRelevantChunks, generateResponse } from '../rag'
+import { findRelevantChunks, findRelevantChunksLocal, generateResponse } from '../rag'
 import { azureServiceManager } from '../azure-service-manager'
+import { AgentStepEvent, telemetry } from '../services/telemetry'
+import { agentAnalytics } from '../services/agent-analytics'
 
 export interface AgentWorkflowStep {
   agent: string
   action: string
-  result: any
+  result: unknown
   timestamp: string
   duration?: number
+  status: 'pending' | 'running' | 'completed' | 'failed'
 }
 
 export interface AgenticRAGResult {
@@ -29,6 +32,12 @@ export interface AgenticRAGResult {
   totalDuration: number
 }
 
+export interface ProcessQueryOptions {
+  runId?: string
+  onWorkflowUpdate?: (workflow: AgentWorkflowStep[]) => void
+  onStepEvent?: (event: AgentStepEvent) => void
+}
+
 export class AgenticOrchestrator {
   private classifierAgent = new QueryClassifierAgent()
   private plannerAgent = new QueryPlannerAgent()
@@ -39,16 +48,39 @@ export class AgenticOrchestrator {
 
   async processQuery(
     query: string,
-    documents: Document[]
+    documents: Document[],
+    options: ProcessQueryOptions = {}
   ): Promise<AgenticRAGResult> {
     const startTime = Date.now()
     const workflow: AgentWorkflowStep[] = []
+    const runId = options.runId ?? this.generateRunId()
+    const emitWorkflowUpdate = () => {
+      if (options.onWorkflowUpdate) {
+        options.onWorkflowUpdate(workflow.map(step => ({ ...step })))
+      }
+    }
+    const emitStepEvent = (
+      event: Omit<AgentStepEvent, 'type' | 'runId' | 'query' | 'timestamp'> & { timestamp?: string }
+    ) => {
+      const enriched: AgentStepEvent = {
+        type: 'agent_step_status',
+        runId,
+        query,
+        timestamp: event.timestamp ?? new Date().toISOString(),
+        ...event
+      }
+      telemetry.trackAgentStep(enriched)
+      agentAnalytics.recordStepEvent(enriched)
+      options.onStepEvent?.(enriched)
+    }
 
     const classification = await this.executeStep(
       workflow,
       'Classifier',
       'Classify query complexity',
-      () => this.classifierAgent.classifyQuery(query)
+      () => this.classifierAgent.classifyQuery(query),
+      emitWorkflowUpdate,
+      emitStepEvent
     )
 
     let allSources: Source[] = []
@@ -57,41 +89,57 @@ export class AgenticOrchestrator {
 
     if (classification.requiresDecomposition) {
       plan = await this.executeStep(
-        workflow,
-        'Planner',
-        'Create query plan',
-        () => this.plannerAgent.createPlan(query, classification.estimatedSubQueries)
-      )
+      workflow,
+      'Planner',
+      'Create query plan',
+      () => this.plannerAgent.createPlan(query, classification.estimatedSubQueries),
+      emitWorkflowUpdate,
+      emitStepEvent
+    )
 
-      allSources = await this.executeSubQueries(plan, documents, workflow)
+      allSources = await this.executeSubQueries(
+        plan,
+        documents,
+        workflow,
+        emitWorkflowUpdate,
+        emitStepEvent
+      )
     } else {
       routing = await this.executeStep(
-        workflow,
-        'Router',
-        'Select retrieval strategy',
-        () => this.routingAgent.selectStrategy(query)
-      )
+      workflow,
+      'Router',
+      'Select retrieval strategy',
+      () => this.routingAgent.selectStrategy(query),
+      emitWorkflowUpdate,
+      emitStepEvent
+    )
 
       allSources = await this.executeStep(
-        workflow,
-        'Retrieval',
-        `Execute ${routing.strategy} search`,
-        () => this.executeRetrieval(query, documents, routing!.strategy)
-      )
+      workflow,
+      'Retrieval',
+      `Execute ${routing.strategy} search`,
+      () => this.executeRetrieval(query, documents, routing!.strategy),
+      emitWorkflowUpdate,
+      emitStepEvent
+    )
     }
 
     let response = await this.executeStep(
       workflow,
       'Generator',
       'Generate initial response',
-      () => generateResponse(query, allSources)
+      () => generateResponse(query, allSources),
+      emitWorkflowUpdate,
+      emitStepEvent
     )
 
     const validation = await this.executeStep(
       workflow,
       'Critic',
       'Validate response quality',
-      () => this.criticAgent.validateResponse(query, response, allSources)
+      () => this.criticAgent.validateResponse(query, response, allSources),
+      emitWorkflowUpdate,
+      emitStepEvent
     )
 
     let refinement: ReActResult | undefined
@@ -106,7 +154,9 @@ export class AgenticOrchestrator {
           response,
           allSources,
           validation.issues
-        )
+        ),
+        emitWorkflowUpdate,
+        emitStepEvent
       )
 
       if (refinement.improved) {
@@ -118,7 +168,9 @@ export class AgenticOrchestrator {
       workflow,
       'Expansion',
       'Generate related questions',
-      () => this.expansionAgent.expandQuery(query, documents, allSources)
+      () => this.expansionAgent.expandQuery(query, documents, allSources),
+      emitWorkflowUpdate,
+      emitStepEvent
     )
 
     const totalDuration = Date.now() - startTime
@@ -141,19 +193,47 @@ export class AgenticOrchestrator {
     workflow: AgentWorkflowStep[],
     agent: string,
     action: string,
-    fn: () => Promise<T>
+    fn: () => Promise<T>,
+    emitWorkflowUpdate?: () => void,
+    emitStepEvent?: (
+      event: Omit<AgentStepEvent, 'type' | 'runId' | 'query' | 'timestamp'> & { timestamp?: string }
+    ) => void
   ): Promise<T> {
     const stepStart = Date.now()
-    
+    const runningStep: AgentWorkflowStep = {
+      agent,
+      action,
+      result: null,
+      timestamp: new Date().toISOString(),
+      status: 'running'
+    }
+    workflow.push(runningStep)
+    emitWorkflowUpdate?.()
+    const stepIndex = workflow.length - 1
+    emitStepEvent?.({
+      agent,
+      action,
+      status: 'running',
+      stepIndex
+    })
+
     try {
       const result = await fn()
       const duration = Date.now() - stepStart
 
-      workflow.push({
-        agent,
-        action,
+      workflow[stepIndex] = {
+        ...runningStep,
         result,
         timestamp: new Date().toISOString(),
+        duration,
+        status: 'completed'
+      }
+      emitWorkflowUpdate?.()
+      emitStepEvent?.({
+        agent,
+        action,
+        status: 'completed',
+        stepIndex,
         duration
       })
 
@@ -161,12 +241,22 @@ export class AgenticOrchestrator {
     } catch (error) {
       const duration = Date.now() - stepStart
       
-      workflow.push({
-        agent,
+      workflow[stepIndex] = {
+        ...runningStep,
         action: `${action} (failed)`,
         result: { error: error instanceof Error ? error.message : 'Unknown error' },
         timestamp: new Date().toISOString(),
-        duration
+        duration,
+        status: 'failed'
+      }
+      emitWorkflowUpdate?.()
+      emitStepEvent?.({
+        agent,
+        action,
+        status: 'failed',
+        stepIndex,
+        duration,
+        failureReason: error instanceof Error ? error.message : 'Unknown error'
       })
 
       throw error
@@ -176,7 +266,11 @@ export class AgenticOrchestrator {
   private async executeSubQueries(
     plan: QueryPlan,
     documents: Document[],
-    workflow: AgentWorkflowStep[]
+    workflow: AgentWorkflowStep[],
+    emitWorkflowUpdate?: () => void,
+    emitStepEvent?: (
+      event: Omit<AgentStepEvent, 'type' | 'runId' | 'query' | 'timestamp'> & { timestamp?: string }
+    ) => void
   ): Promise<Source[]> {
     const allSources: Source[] = []
     const sortedSubQueries = [...plan.subQueries].sort((a, b) => a.priority - b.priority)
@@ -188,7 +282,20 @@ export class AgenticOrchestrator {
             workflow,
             'Retrieval',
             `Execute sub-query: ${sq.query.substring(0, 40)}...`,
-            () => findRelevantChunks(sq.query, documents, 3)
+            async () => {
+              const routingDecision = await this.executeStep(
+                workflow,
+                'Router',
+                `Select strategy for sub-query: ${sq.id}`,
+                () => this.routingAgent.selectStrategy(sq.query),
+                emitWorkflowUpdate,
+                emitStepEvent
+              )
+
+              return findRelevantChunks(sq.query, documents, 3, routingDecision.strategy)
+            },
+            emitWorkflowUpdate,
+            emitStepEvent
           )
         )
       )
@@ -202,11 +309,22 @@ export class AgenticOrchestrator {
       })
     } else {
       for (const sq of sortedSubQueries) {
+        const routingDecision = await this.executeStep(
+          workflow,
+          'Router',
+          `Select strategy for sub-query: ${sq.id}`,
+          () => this.routingAgent.selectStrategy(sq.query),
+          emitWorkflowUpdate,
+          emitStepEvent
+        )
+
         const sources = await this.executeStep(
           workflow,
           'Retrieval',
           `Execute sub-query: ${sq.query.substring(0, 40)}...`,
-          () => findRelevantChunks(sq.query, documents, 3)
+          () => findRelevantChunks(sq.query, documents, 3, routingDecision.strategy),
+          emitWorkflowUpdate,
+          emitStepEvent
         )
 
         sources.forEach(source => {
@@ -223,17 +341,24 @@ export class AgenticOrchestrator {
   private async executeRetrieval(
     query: string,
     documents: Document[],
-    strategy: 'vector' | 'keyword' | 'hybrid'
+    strategy: RetrievalStrategy
   ): Promise<Source[]> {
-    if (azureServiceManager.isConfigured()) {
-      try {
-        const useHybrid = strategy === 'hybrid' || strategy === 'keyword'
-        return await azureServiceManager.searchWithAzure(query, useHybrid)
-      } catch (error) {
-        console.warn('Azure search failed, falling back to local:', error)
-      }
+    if (!azureServiceManager.isConfigured()) {
+      return findRelevantChunks(query, documents, 5, strategy)
     }
 
-    return findRelevantChunks(query, documents, 5)
+    try {
+      return await findRelevantChunks(query, documents, 5, strategy)
+    } catch (error) {
+      console.warn('Primary retrieval path failed, using local fallback:', error)
+      return findRelevantChunksLocal(query, documents, 5)
+    }
+  }
+
+  private generateRunId(): string {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID()
+    }
+    return `run-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`
   }
 }

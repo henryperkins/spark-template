@@ -1,4 +1,5 @@
 import { Document, DocumentChunk, Source } from '@/types'
+import { cacheManager } from './cache-manager'
 import { azureServiceManager } from './azure-service-manager'
 import { DocumentAnalyzerAgent, ChunkingStrategy } from './agents/document-analyzer'
 
@@ -238,21 +239,45 @@ export function calculateSimilarity(query: string, chunk: DocumentChunk): number
   return intersection.size / union.size
 }
 
-export async function findRelevantChunks(query: string, documents: Document[], maxResults: number = 5): Promise<Source[]> {
-  // Try Azure search first if configured
+export async function findRelevantChunks(
+  query: string,
+  documents: Document[],
+  maxResults: number = 5,
+  strategy: 'vector' | 'keyword' | 'hybrid' = 'hybrid'
+): Promise<Source[]> {
+  const normalizedQuery = query.trim().toLowerCase()
+  const documentFingerprint = documents
+    .filter(doc => doc.processed && doc.chunks)
+    .map(doc => `${doc.id}:${doc.chunks.length}:${doc.azureIndexed ? '1' : '0'}`)
+    .sort()
+    .join('|') || 'no-docs'
+
+  const cacheKey = `rag-query:${strategy}:${maxResults}:${hashString(normalizedQuery)}:${hashString(documentFingerprint)}`
+
+  const cached = await cacheManager.get<Source[]>(cacheKey)
+  if (cached) {
+    return cached
+  }
+
+  let sources: Source[] = []
+
   if (azureServiceManager.isConfigured()) {
     try {
-      const azureSources = await azureServiceManager.searchWithAzure(query, true)
+      const azureSources = await azureServiceManager.searchWithAzure(query, strategy)
       if (azureSources.length > 0) {
-        return azureSources.slice(0, maxResults)
+        sources = azureSources.slice(0, maxResults)
       }
     } catch (error) {
       console.warn('Azure search failed, falling back to local search:', error)
     }
   }
 
-  // Fallback to local similarity search
-  return findRelevantChunksLocal(query, documents, maxResults)
+  if (sources.length === 0) {
+    sources = findRelevantChunksLocal(query, documents, maxResults)
+  }
+
+  await cacheManager.set(cacheKey, sources)
+  return sources
 }
 
 export function findRelevantChunksLocal(query: string, documents: Document[], maxResults: number = 5): Source[] {
@@ -328,4 +353,14 @@ export function formatFileSize(bytes: number): string {
 export function formatDate(dateString: string): string {
   const date = new Date(dateString)
   return date.toLocaleDateString() + ' at ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+function hashString(value: string): string {
+  let hash = 0
+  for (let i = 0; i < value.length; i++) {
+    hash = (hash << 5) - hash + value.charCodeAt(i)
+    hash |= 0
+  }
+
+  return hash.toString(16)
 }

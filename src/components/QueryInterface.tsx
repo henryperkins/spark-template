@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label'
 import { MagnifyingGlass, Brain, FileText, Link, Sparkle } from '@phosphor-icons/react'
 import { Document, ChatMessage, Source } from '@/types'
 import { findRelevantChunks, generateResponse } from '@/lib/rag'
-import { AgenticOrchestrator, AgenticRAGResult } from '@/lib/agents'
+import { AgenticOrchestrator, AgenticRAGResult, AgentWorkflowStep } from '@/lib/agents'
 import { AgentWorkflowVisualizer } from './AgentWorkflowVisualizer'
 import { SuggestedQuestions } from './SuggestedQuestions'
 
@@ -27,6 +27,7 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
   const [loading, setLoading] = useState(false)
   const [agenticMode, setAgenticMode] = useState(true)
   const [orchestrator] = useState(() => new AgenticOrchestrator())
+  const [activeWorkflow, setActiveWorkflow] = useState<AgentWorkflowStep[]>([])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -48,6 +49,9 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
     setMessages(prev => [...prev, userMessage])
     setLoading(true)
     setQuery('')
+    if (agenticMode) {
+      setActiveWorkflow([])
+    }
 
     try {
       let sources: Source[]
@@ -55,7 +59,13 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
       let agenticResult: AgenticRAGResult | undefined
 
       if (agenticMode) {
-        agenticResult = await orchestrator.processQuery(queryText, documents)
+        const runId = userMessage.id
+        agenticResult = await orchestrator.processQuery(queryText, documents, {
+          runId,
+          onWorkflowUpdate: (steps) => {
+            setActiveWorkflow(steps)
+          }
+        })
         sources = agenticResult.sources
         response = agenticResult.response
       } else {
@@ -84,6 +94,9 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
       setMessages(prev => [...prev, errorMessage])
     } finally {
       setLoading(false)
+      setTimeout(() => {
+        setActiveWorkflow([])
+      }, 300)
     }
   }
 
@@ -160,6 +173,14 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
       {messages.length > 0 && (
         <div className="space-y-4">
           <h3 className="text-lg font-semibold">Conversation</h3>
+
+          {agenticMode && loading && activeWorkflow.length > 0 && (
+            <AgentWorkflowVisualizer
+              steps={activeWorkflow}
+              className="border border-primary/30 shadow-sm"
+              isLive
+            />
+          )}
           
           {messages.map((message) => (
             <Card key={message.id} className={message.type === 'user' ? 'ml-8' : 'mr-8'}>

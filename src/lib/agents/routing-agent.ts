@@ -1,4 +1,5 @@
-import { azureServiceManager } from '../azure-service-manager'
+import { z } from 'zod'
+import { llmService } from '../services/llm-service'
 
 export type RetrievalStrategy = 'vector' | 'keyword' | 'hybrid'
 
@@ -7,6 +8,12 @@ export interface RoutingDecision {
   reasoning: string
   confidence: number
 }
+
+const routingDecisionSchema: z.ZodType<RoutingDecision> = z.object({
+  strategy: z.enum(['vector', 'keyword', 'hybrid']),
+  reasoning: z.string().min(5),
+  confidence: z.number().min(0).max(1)
+})
 
 export class RoutingAgent {
   async selectStrategy(query: string): Promise<RoutingDecision> {
@@ -25,25 +32,18 @@ Respond with JSON:
 }`
 
     try {
-      if (azureServiceManager.isConfigured()) {
-        const prompt = (window as any).spark.llmPrompt`${systemPrompt}
+      const prompt = (window as any).spark.llmPrompt`${systemPrompt}
 
 User query: ${query}
 
 Select retrieval strategy as JSON:`
 
-        const response = await azureServiceManager['openaiService']!.generateCompletion(
-          prompt,
-          { maxTokens: 200, temperature: 0.2, responseFormat: 'json_object' }
-        )
-        
-        const jsonMatch = response.match(/\{[\s\S]*\}/)
-        if (jsonMatch) {
-          return JSON.parse(jsonMatch[0])
-        }
-      }
+      return await llmService.generateJson(prompt, routingDecisionSchema, {
+        maxTokens: 200,
+        temperature: 0.2
+      })
     } catch (error) {
-      console.warn('Azure routing failed, using fallback:', error)
+      console.warn('LLM routing failed, using fallback:', error)
     }
 
     return this.fallbackRouting(query)

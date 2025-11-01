@@ -1,5 +1,6 @@
-import { azureServiceManager } from '../azure-service-manager'
+import { z } from 'zod'
 import { Source } from '@/types'
+import { llmService } from '../services/llm-service'
 
 export interface ValidationResult {
   isValid: boolean
@@ -9,6 +10,15 @@ export interface ValidationResult {
   faithfulnessScore: number
   relevanceScore: number
 }
+
+const validationResultSchema: z.ZodType<ValidationResult> = z.object({
+  isValid: z.boolean(),
+  confidence: z.number().min(0).max(1),
+  issues: z.array(z.string()),
+  suggestions: z.array(z.string()),
+  faithfulnessScore: z.number().min(0).max(1),
+  relevanceScore: z.number().min(0).max(1)
+})
 
 export class CriticAgent {
   async validateResponse(
@@ -45,8 +55,7 @@ Respond with JSON:
 }`
 
     try {
-      if (azureServiceManager.isConfigured()) {
-        const prompt = (window as any).spark.llmPrompt`${systemPrompt}
+      const prompt = (window as any).spark.llmPrompt`${systemPrompt}
 
 Source documents:
 ${contextSnippets}
@@ -58,18 +67,12 @@ ${response}
 
 Provide validation as JSON:`
 
-        const apiResponse = await azureServiceManager['openaiService']!.generateCompletion(
-          prompt,
-          { maxTokens: 500, temperature: 0.3, responseFormat: 'json_object' }
-        )
-        
-        const jsonMatch = apiResponse.match(/\{[\s\S]*\}/)
-        if (jsonMatch) {
-          return JSON.parse(jsonMatch[0])
-        }
-      }
+      return await llmService.generateJson(prompt, validationResultSchema, {
+        maxTokens: 500,
+        temperature: 0.3
+      })
     } catch (error) {
-      console.warn('Azure validation failed, using fallback:', error)
+      console.warn('LLM validation failed, using fallback:', error)
     }
 
     return this.fallbackValidation(query, response, sources)
