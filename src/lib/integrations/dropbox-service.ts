@@ -1,4 +1,4 @@
-import { DropboxConfig, Document, DocumentChunk } from '@/types'
+import { DropboxConfig, Document } from '@/types'
 import { intelligentChunkDocument } from '@/lib/rag'
 import { azureServiceManager } from '@/lib/azure-service-manager'
 import { embeddingManager } from '@/lib/embedding-manager'

@@ -91,7 +91,7 @@ export class ReActAgent {
             : 'Refined response; no measurable improvement',
           iteration
         })
-      } catch (e) {
+      } catch {
         // If critic fails, accept single refinement and exit
         steps.push({
           thought,

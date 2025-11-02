@@ -88,7 +88,7 @@ function chunkBySentence(
   content: string,
   documentId: string,
   maxChunkSize: number,
-  overlap: number
+  _overlap: number
 ): DocumentChunk[] {
   const sentences = content.split(/[.!?]+\s+/).filter(s => s.trim().length > 0)
   const chunks: DocumentChunk[] = []

@@ -16,14 +16,13 @@ import {
   Clock,
   Trash,
   CurrencyDollar,
-  WarningCircle,
-  Bell
+  WarningCircle
 } from '@phosphor-icons/react'
 import { Document } from '@/types'
-import { embeddingManager } from '@/lib/embedding-manager'
-import { cacheManager } from '@/lib/cache-manager'
+import { embeddingManager, type RefreshResult } from '@/lib/embedding-manager'
+import { cacheManager, type CacheMetrics } from '@/lib/cache-manager'
 import { tokenTracker } from '@/lib/services/token-tracker'
-import { errorTracking } from '@/lib/services/error-tracker'
+import { errorTracking, type ErrorMetrics } from '@/lib/services/error-tracker'
 import { AlertPanel } from './AlertPanel'
 import { toast } from 'sonner'
 
@@ -31,15 +30,23 @@ interface ScalingDashboardProps {
   documents: Document[]
 }
 
+type RefreshMetrics = Awaited<ReturnType<typeof embeddingManager.getRefreshMetrics>>
+
+type TokenDashboardMetrics = {
+  daily: ReturnType<typeof tokenTracker.getDailyUsage>
+  budget: Awaited<ReturnType<typeof tokenTracker.getBudgetStatus>>
+  byModel: ReturnType<typeof tokenTracker.getMetricsByModel>
+}
+
 export function ScalingDashboard({ documents }: ScalingDashboardProps) {
   const [refreshing, setRefreshing] = useState(false)
   const [cleaning, setCleaning] = useState(false)
   const [refreshProgress, setRefreshProgress] = useState({ current: 0, total: 0, documentName: '' })
-  const [refreshMetrics, setRefreshMetrics] = useState<any>(null)
-  const [cacheMetrics, setCacheMetrics] = useState<any>(null)
-  const [lastRefreshResult, setLastRefreshResult] = useState<any>(null)
-  const [tokenMetrics, setTokenMetrics] = useState<any>(null)
-  const [errorMetrics, setErrorMetrics] = useState<any>(null)
+  const [refreshMetrics, setRefreshMetrics] = useState<RefreshMetrics | null>(null)
+  const [cacheMetrics, setCacheMetrics] = useState<CacheMetrics | null>(null)
+  const [lastRefreshResult, setLastRefreshResult] = useState<RefreshResult | null>(null)
+  const [tokenMetrics, setTokenMetrics] = useState<TokenDashboardMetrics | null>(null)
+  const [errorMetrics, setErrorMetrics] = useState<ErrorMetrics | null>(null)
 
   useEffect(() => {
     loadMetrics()

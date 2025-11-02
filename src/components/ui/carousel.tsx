@@ -95,7 +95,10 @@ function Carousel({
 
   useEffect(() => {
     if (!api) return
-    onSelect(api)
+
+    // Call onSelect asynchronously to avoid synchronous setState in effect
+    queueMicrotask(() => onSelect(api))
+
     api.on("reInit", onSelect)
     api.on("select", onSelect)
 

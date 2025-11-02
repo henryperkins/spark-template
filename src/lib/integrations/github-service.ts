@@ -1,4 +1,4 @@
-import { GitHubRepo, Document, DocumentChunk } from '@/types'
+import { GitHubRepo, Document } from '@/types'
 import { intelligentChunkDocument } from '@/lib/rag'
 import { azureServiceManager } from '@/lib/azure-service-manager'
 import { embeddingManager } from '@/lib/embedding-manager'

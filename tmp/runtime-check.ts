@@ -8,7 +8,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { webcrypto as nodeCrypto } from 'node:crypto'
 
 if (!globalThis.crypto) {
-  // @ts-ignore
+  // @ts-expect-error - Polyfill crypto for Node.js environment
   globalThis.crypto = nodeCrypto
 }
 
@@ -278,9 +278,9 @@ const windowStub: any = {
   navigator: undefined
 }
 
-// @ts-ignore
+// @ts-expect-error - Polyfill window for Node.js environment
 if (typeof globalThis.window === 'undefined') {
-  // @ts-ignore
+  // @ts-expect-error - Assign window stub to globalThis
   globalThis.window = windowStub
 } else {
   Object.assign(globalThis.window, windowStub)

@@ -99,38 +99,6 @@ const persistStore = () => {
   }
 };
 
-// Cloudflare KV operations
-const cloudflareKeys = async (): Promise<string[]> => {
-  if (!cloudflareKV) {
-    cloudflareKV = createCloudflareKV();
-  }
-  return cloudflareKV ? cloudflareKV.keys() : [];
-};
-
-const cloudflareGet = async (key: string): Promise<unknown> => {
-  if (!cloudflareKV) {
-    cloudflareKV = createCloudflareKV();
-  }
-  return cloudflareKV ? cloudflareKV.get(key) : undefined;
-};
-
-const cloudflareSet = async (key: string, value: unknown): Promise<void> => {
-  if (!cloudflareKV) {
-    cloudflareKV = createCloudflareKV();
-  }
-  if (cloudflareKV) {
-    await cloudflareKV.set(key, value);
-  }
-};
-
-const cloudflareDelete = async (key: string): Promise<void> => {
-  if (!cloudflareKV) {
-    cloudflareKV = createCloudflareKV();
-  }
-  if (cloudflareKV) {
-    await cloudflareKV.delete(key);
-  }
-};
 
 // localStorage operations
 const fallbackKeys = async (): Promise<string[]> => {

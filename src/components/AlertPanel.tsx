@@ -17,8 +17,8 @@ interface SystemAlert {
 }
 
 export function AlertPanel() {
-  const [alerts, setAlerts, deleteAlerts] = useSparkKV<SystemAlert[]>('system-alerts', [])
-  const [autoRefresh, setAutoRefresh] = useState(true)
+  const [alerts, setAlerts] = useSparkKV<SystemAlert[]>('system-alerts', [])
+  const [autoRefresh] = useState(true)
 
   useEffect(() => {
     if (!autoRefresh || !alerts) return

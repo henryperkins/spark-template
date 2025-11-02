@@ -4,16 +4,15 @@ import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Separator } from '@/components/ui/separator'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { 
-  Users, 
-  Globe, 
-  ShieldCheck, 
-  Brain, 
+import {
+  Users,
+  Globe,
+  ShieldCheck,
+  Brain,
   GitBranch,
   Database,
   CloudArrowUp,
   ChartBar,
-  Bug,
   ArrowsDownUp,
   Gear,
   TreeStructure,
@@ -70,19 +69,19 @@ export function ArchitectureDiagram() {
     },
     {
       id: 'runtime',
-      name: '2. Spark Runtime Layer',
-      description: 'Browser-based runtime with LLM and persistence APIs',
+      name: '2. Edge Runtime Layer',
+      description: 'Cloudflare Worker edge runtime exposing hardened APIs for storage, logs, and migration.',
       components: [
-        'spark.llm() API (GPT-4o, GPT-4o-mini)',
-        'spark.kv persistence (get/set/delete/keys)',
-        'useKV React hook',
-        'spark.user() authentication',
-        'JSON mode for structured outputs',
-        'Client-side execution'
+        'Cloudflare Worker API gateway (/api/*)',
+        'RAG_KV namespace bridge with typed bindings',
+        'Bearer-gated /api/logs with R2 Logpush access',
+        'Secure /api/kv CRUD with CORS enforcement',
+        'One-shot /api/migrate for legacy KV backfill',
+        'Static asset delivery for Vite SPA'
       ],
       icon: <Globe size={20} />,
       color: 'bg-cyan-500',
-      interactions: ['Presentation Layer', 'LLM Services', 'Document Store']
+      interactions: ['Presentation Layer', 'Security Layer', 'Observability Layer', 'Document Store']
     },
     {
       id: 'security',
@@ -270,7 +269,7 @@ export function ArchitectureDiagram() {
       name: '14. Infrastructure Layer',
       description: 'Runtime environment and external services',
       components: [
-        'Spark Browser Runtime',
+        'Cloudflare Workers Edge Runtime',
         'Vite Build System',
         'Azure OpenAI Services (optional)',
         'Azure AI Search (optional)',
@@ -313,16 +312,28 @@ export function ArchitectureDiagram() {
     ],
     'runtime': [
       {
-        name: 'Spark LLM API',
-        purpose: 'Browser-based access to GPT-4o and GPT-4o-mini with JSON mode support',
-        technologies: ['spark.llm()', 'spark.llmPrompt', 'Async/Await'],
-        patterns: ['API Abstraction', 'Prompt Templates', 'Type Safety']
+        name: 'Edge API Gateway',
+        purpose: 'Cloudflare Worker entry point serving the SPA and enforcing CORS, auth, and error handling for every /api/* route.',
+        technologies: ['Cloudflare Workers', 'TypeScript', 'CORS Middleware'],
+        patterns: ['API Gateway', 'Zero-Trust Edge', 'Structured Logging']
       },
       {
-        name: 'Spark KV Store',
-        purpose: 'Persistent browser-based key-value storage with React hooks',
-        technologies: ['spark.kv API', 'useKV hook', 'Browser Storage'],
-        patterns: ['Key-Value Store', 'React Hooks', 'Reactive State']
+        name: 'KV Bridge & Migration',
+        purpose: 'Bridges RAG_KV and optional LEGACY_KV namespaces with batched pagination, prefix filters, and dry-run support.',
+        technologies: ['Cloudflare KV', 'Cursor Pagination', 'JSON Serialization'],
+        patterns: ['Data Migration', 'Idempotent Writes', 'Batch Processing']
+      },
+      {
+        name: 'Log & Telemetry Surface',
+        purpose: 'Bearer-protected /api/logs endpoint exposing R2 Logpush data with list/get/recent actions.',
+        technologies: ['Cloudflare R2', 'Logpush', 'Bearer Auth'],
+        patterns: ['Observability', 'Audit Logging', 'Secure Telemetry']
+      },
+      {
+        name: 'Static Asset Delivery',
+        purpose: 'Serves Vite build artifacts through the ASSETS binding with cache-friendly SPA routing.',
+        technologies: ['Cloudflare Asset Binding', 'Vite Build Output', 'HTTP Caching'],
+        patterns: ['Static Hosting', 'Edge Caching', 'SPA Delivery']
       }
     ],
     'agents': [
@@ -439,11 +450,6 @@ export function ArchitectureDiagram() {
         patterns: ['Adapter Pattern', 'Source Attribution', 'Metadata Preservation']
       }
     ]
-  }
-
-  const getLayerConnections = (layerId: string): string[] => {
-    const layer = layers.find(l => l.id === layerId)
-    return layer?.interactions || []
   }
 
   return (
@@ -584,7 +590,7 @@ export function ArchitectureDiagram() {
                         </Badge>
                         <Badge variant="secondary" className="justify-start">
                           <Cube size={12} className="mr-1.5" />
-                          Spark Runtime: LLM API, KV Store, User Auth
+                          Edge Runtime: Worker APIs, KV bridge, Log access
                         </Badge>
                       </div>
                     </div>

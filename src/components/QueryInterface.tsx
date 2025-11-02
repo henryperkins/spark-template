@@ -84,7 +84,7 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
       }
 
       setMessages(prev => [...prev, assistantMessage])
-    } catch (error) {
+    } catch {
       const errorMessage: ExtendedChatMessage = {
         id: `msg-${Date.now()}-error`,
         type: 'assistant',

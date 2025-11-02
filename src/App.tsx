@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useEffect } from 'react'
 import { useSparkKV } from '@/hooks/use-spark-kv'
 import { ResponsiveNavigation } from '@/components/ResponsiveNavigation'
 import { DocumentUpload } from '@/components/DocumentUpload'

@@ -36,8 +36,8 @@ bucket_name = "cloudflare-managed-17bd49a0"
 # Note: Binding name "RAG_KV" must match the TypeScript Env interface
 [[kv_namespaces]]
 binding = "RAG_KV"
-id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"        # Replace with your production namespace ID
-preview_id = "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"  # Replace with your preview namespace ID
+id = "51e4b1c9344342039c6d3046ea6652ae"        # Production namespace ID
+preview_id = "ddc0a1afeb0141719657098396b17bd7"  # Preview namespace ID
 
 # Optional legacy KV namespace for one-shot migration (/api/migrate)
 # [[kv_namespaces]]

@@ -1,4 +1,4 @@
-import { Document, DocumentChunk } from '@/types'
+import { Document } from '@/types'
 
 export interface EmbeddingMetadata {
   version: string

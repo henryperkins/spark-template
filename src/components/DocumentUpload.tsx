@@ -3,7 +3,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { Badge } from '@/components/ui/badge'
-import { FileText, Upload, X, CloudArrowUp, CheckCircle, XCircle } from '@phosphor-icons/react'
+import { FileText, Upload, CloudArrowUp, CheckCircle, XCircle } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 import { Document } from '@/types'
 import { intelligentChunkDocument } from '@/lib/rag'
@@ -47,7 +47,7 @@ export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
       const content = await file.text()
       updateProgress(25, 'processing')
 
-      const { chunks, strategy } = await intelligentChunkDocument(content, documentId, file.name)
+      const { chunks } = await intelligentChunkDocument(content, documentId, file.name)
       updateProgress(40, 'processing')
 
       const document: Document = {

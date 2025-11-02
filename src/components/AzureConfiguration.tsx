@@ -13,7 +13,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { CloudArrowUp, CloudCheck, CloudX, Eye, EyeSlash, TestTube, Sparkle, Lightning } from '@phosphor-icons/react'
 import { AzureConfig, AzureConnectionStatus } from '@/types'
 import { azureServiceManager } from '@/lib/azure-service-manager'
-import { cn } from '@/lib/utils'
 
 export function AzureConfiguration() {
   const [config, setConfig] = useSparkKV<AzureConfig | null>('azure-config', null)
