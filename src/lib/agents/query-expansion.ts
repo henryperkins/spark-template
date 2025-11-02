@@ -2,6 +2,8 @@ import { z } from 'zod'
 import { Document, Source } from '@/types'
 import { cacheManager } from '@/lib/cache-manager'
 import { llmService } from '../services/llm-service'
+import { appConfig } from '../config'
+import { truncateContext, sanitizeQueryForPrompt, JSON_OUTPUT_REQUIREMENTS } from '../prompt-utils'
 
 export interface SuggestedQuestion {
   question: string
@@ -42,18 +44,18 @@ export class QueryExpansionAgent {
     sources?: Source[]
   ): Promise<QueryExpansion> {
     const cacheKey = this.buildCacheKey(query, documents, sources)
-    
+
     const cached = await cacheManager.get<QueryExpansion>(cacheKey)
     if (cached) {
       return { ...cached, cached: true }
     }
 
     const documentTopics = await this.extractDocumentTopics(documents)
-    
-    const strategy = sources && sources.length > 0 
-      ? 'context-based' 
-      : documents.length > 0 
-        ? 'document-based' 
+
+    const strategy = sources && sources.length > 0
+      ? 'context-based'
+      : documents.length > 0
+        ? 'document-based'
         : 'hybrid'
 
     const suggestedQuestions = await this.generateSuggestions(
@@ -128,22 +130,26 @@ Example: {"topics": ["machine learning", "data processing", "model training"]}`
     topics: string[],
     strategy: 'document-based' | 'context-based' | 'hybrid'
   ): Promise<SuggestedQuestion[]> {
-    const contextContent = sources
+    const rawContext = sources
       ?.slice(0, 3)
       .map(s => s.content)
-      .join('\n\n')
-      .substring(0, 2000) || ''
+      .join('\n\n') || ''
 
-    const topicsText = topics.length > 0 
-      ? `\n\nKnowledge base topics: ${topics.join(', ')}` 
+    const contextContent = truncateContext(rawContext, appConfig.truncation.expansionMaxTokens, {
+      notice: '[Context truncated for expansion]'
+    })
+
+    const topicsText = topics.length > 0
+      ? `\n\nKnowledge base topics: ${topics.join(', ')}`
       : ''
 
     let prompt: string
 
     if (strategy === 'context-based' && contextContent) {
       prompt = (window as any).spark.llmPrompt`Based on the user's question and the retrieved context, suggest 4 related questions the user might want to ask.
+${JSON_OUTPUT_REQUIREMENTS}
 
-User's question: ${query}
+User's question: ${sanitizeQueryForPrompt(query)}
 
 Retrieved context:
 ${contextContent}${topicsText}
@@ -160,8 +166,9 @@ Example: {"questions": [{"question": "What are the prerequisites?", "reasoning":
 
     } else if (strategy === 'document-based' && topics.length > 0) {
       prompt = (window as any).spark.llmPrompt`Based on the user's question and the available knowledge base topics, suggest 4 related questions the user might want to explore.
+${JSON_OUTPUT_REQUIREMENTS}
 
-User's question: ${query}
+User's question: ${sanitizeQueryForPrompt(query)}
 
 Knowledge base topics: ${topics.join(', ')}
 
@@ -177,8 +184,9 @@ Example: {"questions": [{"question": "What are the main components?", "reasoning
 
     } else {
       prompt = (window as any).spark.llmPrompt`Based on the user's question, suggest 4 related questions that would help them explore the topic more thoroughly.
+${JSON_OUTPUT_REQUIREMENTS}
 
-User's question: ${query}
+User's question: ${sanitizeQueryForPrompt(query)}
 
 Generate questions that:
 1. Ask for clarification (category: "clarification")
@@ -193,8 +201,8 @@ Example: {"questions": [{"question": "Can you explain this in simpler terms?", "
 
     try {
       const result = await llmService.generateJson(prompt, suggestionResponseSchema, {
-        maxTokens: 600,
-        temperature: 0.4
+        maxTokens: appConfig.truncation.expansionMaxTokens,
+        temperature: appConfig.temps.expansion
       })
       return result.questions
     } catch (error) {

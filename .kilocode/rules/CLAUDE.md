@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is an **Agentic RAG (Retrieval-Augmented Generation)** application built with React, TypeScript, and Vite. Originally designed for GitHub Spark, it now primarily targets **Cloudflare Workers** for production deployment. The application provides an intelligent knowledge assistant that can ingest documents from multiple sources, process them using AI agents powered by Azure OpenAI, and answer queries using advanced retrieval strategies.
+This is an **Agentic RAG (Retrieval-Augmented Generation)** application built with React, TypeScript, and Vite on the GitHub Spark platform. It provides an intelligent knowledge assistant that can ingest documents from multiple sources, process them using AI agents, and answer queries using advanced retrieval strategies.
 
 ## Development Commands
 
@@ -25,38 +25,24 @@ This is an **Agentic RAG (Retrieval-Augmented Generation)** application built wi
 ### Core Technology Stack
 - **Framework**: React 19 with TypeScript
 - **Build Tool**: Vite 6 with SWC for fast compilation
-- **Runtime**: Cloudflare Workers (production) / Vite dev server (development)
-- **Styling**: Tailwind CSS 4 with custom theming
-- **Storage**: Cloudflare KV (production) with localStorage fallback
-- **LLM Provider**: Azure OpenAI (primary) with mock fallbacks
+- **Styling**: Tailwind CSS 4 with custom Spark theming
+- **State Management**: GitHub Spark KV (key-value store) with localStorage fallback
 - **UI Components**: Radix UI primitives with custom styling
-- **Icons**: Phosphor Icons (proxied through Vite plugin)
+- **Icons**: Phosphor Icons (proxied through Spark's Vite plugin)
 
-### Platform Integration & Storage
+### Spark Platform Integration
 
-The app uses a **hybrid runtime** with automatic detection:
+The app runs on GitHub Spark, which provides:
+- **KV Store**: Persistent key-value storage accessed via `window.spark.kv` API
+- **Fallback Mode**: Local localStorage fallback when Spark backend unavailable (src/lib/spark-fallback.ts)
+- **LLM Integration**: Mock LLM responses in fallback mode
 
-**Storage (Priority Order)**:
-1. **Cloudflare KV** (Worker binding or REST API) - Production storage
-2. **localStorage** - Development fallback
-
-**LLM (Priority Order)**:
-1. **Azure OpenAI** - Primary production LLM provider
-2. **Mock responses** - Development fallback when Azure not configured
-
-**Runtime Detection**:
-The `runtime` utility (src/lib/config.ts) automatically detects:
-- Cloudflare Workers deployment (`.workers.dev` domain)
-- Cloudflare KV configuration (environment variables)
-- Azure OpenAI configuration
-
-**Important**: The `createIconImportProxy()` and `sparkPlugin()` in vite.config.ts must NOT be removed - they're required for icon imports.
+**Important**: The `createIconImportProxy()` and `sparkPlugin()` in vite.config.ts must NOT be removed - they're required for Spark functionality.
 
 ### State Management Pattern
 
 The `useSparkKV` hook (src/hooks/use-spark-kv.ts) is the primary state management mechanism:
-- Automatically syncs state to Cloudflare KV or localStorage fallback
-- Auto-detects runtime environment and selects appropriate storage
+- Automatically syncs state to Spark KV or localStorage fallback
 - Returns `[value, setter, deleter]` tuple similar to useState
 - Use for all persistent application state (documents, config, etc.)
 
@@ -64,8 +50,6 @@ Example:
 ```typescript
 const [documents, setDocuments] = useSparkKV<Document[]>('rag-documents', [])
 ```
-
-**See**: `docs/CLOUDFLARE_MIGRATION.md` for detailed architecture information.
 
 ### Multi-Agent RAG System
 

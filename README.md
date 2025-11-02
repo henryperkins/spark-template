@@ -42,14 +42,29 @@ npm run lint       # Check code quality
 
 ## Documentation
 
-### Core Documentation
-- **[CLAUDE.md](./CLAUDE.md)** - Developer guide for Claude Code (architecture, commands, patterns)
-- **[PRD.md](./PRD.md)** - Product requirements and feature specifications
+### 🚀 Quick Start
+- **[README.md](./README.md)** - Project overview and quick start (you are here)
+- **[CLOUDFLARE.md](./CLOUDFLARE.md)** - Deploy to Cloudflare Workers (5-minute guide)
 
-### Technical Guides
-- **[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)** - Multi-agent system architecture and patterns
-- **[docs/AZURE_OPTIMIZATION.md](./docs/AZURE_OPTIMIZATION.md)** - Azure AI Search optimization guide
+### 👨‍💻 Developer Guides
+- **[CLAUDE.md](./CLAUDE.md)** - Claude Code developer reference
+- **[PRD.md](./PRD.md)** - Product requirements and specifications
+
+### 🏗️ Architecture & Design
+- **[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)** - Multi-agent system design patterns
+- **[docs/context-architecture.md](./docs/context-architecture.md)** - Context flow and state management
+- **[docs/prompt-engineering.md](./docs/prompt-engineering.md)** - Agent prompt engineering guide
+- **[docs/CLOUDFLARE.md](./docs/CLOUDFLARE.md)** - Cloudflare architecture deep dive
+
+### 🔧 Production Features
+- **[docs/OBSERVABILITY.md](./docs/OBSERVABILITY.md)** - Observability and monitoring layer
 - **[docs/LAYER_UPGRADES.md](./docs/LAYER_UPGRADES.md)** - Production upgrades (Layers 6-8)
+
+### ☁️ Azure Integration
+- **[docs/AZURE_OPTIMIZATION.md](./docs/AZURE_OPTIMIZATION.md)** - Azure AI Search optimization
+
+### 📦 Archives
+- **[docs/archive/](./docs/archive/)** - Historical documentation and audits
 
 ## Project Structure
 

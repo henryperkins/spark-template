@@ -1,13 +1,16 @@
+import { createCloudflareKV, type CloudflareKVAdapter } from './cloudflare-kv';
+
 const FALLBACK_LOG_PREFIX = '[spark-fallback]';
 const KV_STORE_KEY = 'spark-kv-fallback';
 const MODE_STORAGE_KEY = 'spark-kv-mode';
 
 type KvRecord = Record<string, unknown>;
-type KvMode = 'local' | 'remote';
+type KvMode = 'local' | 'remote' | 'cloudflare';
 
 let memoryStore: KvRecord | null = null;
 let mode: KvMode | null = null;
 let fetchPatched = false;
+let cloudflareKV: CloudflareKVAdapter | null = null;
 
 const loadMode = (): KvMode => {
   if (mode) {
@@ -20,12 +23,26 @@ const loadMode = (): KvMode => {
   }
 
   const stored = window.localStorage?.getItem(MODE_STORAGE_KEY);
-  if (stored === 'remote' || stored === 'local') {
+  if (stored === 'remote' || stored === 'local' || stored === 'cloudflare') {
     mode = stored;
     return mode;
   }
 
+  // Auto-detect: Prioritize Cloudflare KV if configured
+  if (!cloudflareKV) {
+    cloudflareKV = createCloudflareKV();
+  }
+
+  if (cloudflareKV) {
+    mode = 'cloudflare';
+    persistMode(mode);
+    console.info(`${FALLBACK_LOG_PREFIX} ✅ Using Cloudflare KV for persistent storage`);
+    return mode;
+  }
+
+  // Fallback to localStorage if Cloudflare not configured
   mode = 'local';
+  console.info(`${FALLBACK_LOG_PREFIX} ⚠️  Using localStorage (configure Cloudflare KV for production)`);
   return mode;
 };
 
@@ -47,6 +64,7 @@ const setMode = (value: KvMode) => {
 };
 
 const shouldUseLocal = (): boolean => loadMode() === 'local';
+const shouldUseCloudflare = (): boolean => loadMode() === 'cloudflare';
 
 const loadStore = (): KvRecord => {
   if (memoryStore) {
@@ -81,6 +99,40 @@ const persistStore = () => {
   }
 };
 
+// Cloudflare KV operations
+const cloudflareKeys = async (): Promise<string[]> => {
+  if (!cloudflareKV) {
+    cloudflareKV = createCloudflareKV();
+  }
+  return cloudflareKV ? cloudflareKV.keys() : [];
+};
+
+const cloudflareGet = async (key: string): Promise<unknown> => {
+  if (!cloudflareKV) {
+    cloudflareKV = createCloudflareKV();
+  }
+  return cloudflareKV ? cloudflareKV.get(key) : undefined;
+};
+
+const cloudflareSet = async (key: string, value: unknown): Promise<void> => {
+  if (!cloudflareKV) {
+    cloudflareKV = createCloudflareKV();
+  }
+  if (cloudflareKV) {
+    await cloudflareKV.set(key, value);
+  }
+};
+
+const cloudflareDelete = async (key: string): Promise<void> => {
+  if (!cloudflareKV) {
+    cloudflareKV = createCloudflareKV();
+  }
+  if (cloudflareKV) {
+    await cloudflareKV.delete(key);
+  }
+};
+
+// localStorage operations
 const fallbackKeys = async (): Promise<string[]> => {
   return Object.keys(loadStore());
 };
@@ -240,11 +292,12 @@ const handleLoadedRequest = async (): Promise<Response> => {
 };
 
 const handleLlmRequest = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-  console.warn(`${FALLBACK_LOG_PREFIX} LLM request intercepted - returning mock response`);
-  
+  console.warn(`${FALLBACK_LOG_PREFIX} ⚠️  LLM request intercepted - returning mock response`);
+  console.info(`${FALLBACK_LOG_PREFIX} 💡 Configure Azure OpenAI in the Azure tab for production LLM capabilities`);
+
   const requestBody = await readRequestBody(input, init);
   let parsedBody: any = {};
-  
+
   if (requestBody) {
     try {
       parsedBody = JSON.parse(requestBody);
@@ -254,12 +307,18 @@ const handleLlmRequest = async (input: RequestInfo | URL, init?: RequestInit): P
   }
 
   // Extract prompt from the body
-  const prompt = parsedBody.prompt || parsedBody.message || 'Hello, this is a mock response from Spark fallback.';
-  
+  const prompt = parsedBody.prompt || parsedBody.message || 'Hello, this is a mock response.';
+
   const mockResponse = {
     choices: [{
       message: {
-        content: `Mock LLM response. I understand you're asking about: "${prompt.substring(0, 100)}...". This is a fallback response because the Spark backend is not available. Please configure your environment variables or check your authentication.`
+        content: `[Mock Response] I understand you're asking about: "${prompt.substring(0, 100)}...".
+
+This is a development fallback. For production:
+- Configure Azure OpenAI in the Azure tab
+- Or deploy to Cloudflare Workers with Workers AI binding
+
+The application is using ${shouldUseCloudflare() ? 'Cloudflare KV' : 'localStorage'} for data persistence.`
       }
     }]
   };
@@ -371,11 +430,12 @@ export const fallbackKv: SparkKv = {
 };
 
 const logFallback = (operation: string) => {
-  console.warn(`${FALLBACK_LOG_PREFIX} Using local fallback for ${operation}. Set GITHUB_TOKEN to enable Spark KV or call sparkFallback.useRemote().`);
-  
+  const storageMode = shouldUseCloudflare() ? 'Cloudflare KV' : 'localStorage';
+  console.warn(`${FALLBACK_LOG_PREFIX} Using ${storageMode} for ${operation}`);
+
   // Show user-friendly notification for critical operations
   if (operation === 'llm') {
-    console.warn(`${FALLBACK_LOG_PREFIX} AI features are using mock responses. Configure environment variables for full functionality.`);
+    console.warn(`${FALLBACK_LOG_PREFIX} 💡 AI features are using mock responses. Configure Azure OpenAI for full functionality.`);
   }
 };
 

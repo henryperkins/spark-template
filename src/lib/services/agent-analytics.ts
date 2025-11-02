@@ -1,5 +1,6 @@
 import { AgentStepEvent, AgentAlertCode, telemetry } from './telemetry'
 import { analyticsBackend } from './analytics-backend'
+import { toast } from 'sonner'
 
 interface AlertThresholds {
   longRunningMs: number
@@ -88,6 +89,49 @@ class AgentAnalytics {
     telemetry.trackAgentAlert({
       ...alertPayload
     })
+
+    // Show toast notification
+    this.showAlertToast(alertPayload)
+  }
+
+  private showAlertToast(alert: {
+    agent: string
+    action: string
+    code: AgentAlertCode
+    severity: 'warning' | 'error'
+    duration?: number
+    failureReason?: string
+  }): void {
+    const message = this.formatAlertMessage(alert)
+
+    if (alert.severity === 'error') {
+      toast.error(`Agent Error: ${alert.agent}`, {
+        description: message,
+        duration: 5000
+      })
+    } else {
+      toast.warning(`Slow Step: ${alert.agent}`, {
+        description: message,
+        duration: 4000
+      })
+    }
+  }
+
+  private formatAlertMessage(alert: {
+    action: string
+    code: AgentAlertCode
+    duration?: number
+    failureReason?: string
+  }): string {
+    if (alert.code === 'long_running_step' && alert.duration) {
+      return `${alert.action} took ${(alert.duration / 1000).toFixed(2)}s (threshold: 15s)`
+    }
+
+    if (alert.code === 'step_failure') {
+      return alert.failureReason || `${alert.action} failed`
+    }
+
+    return alert.action
   }
 }
 

@@ -1,5 +1,8 @@
 import { Source } from '@/types'
 import { llmService } from '../services/llm-service'
+import { appConfig } from '../config'
+import { truncateContext, sanitizeQueryForPrompt } from '../prompt-utils'
+import { CriticAgent } from './critic-agent'
 
 export interface ReActStep {
   thought: string
@@ -17,6 +20,7 @@ export interface ReActResult {
 
 export class ReActAgent {
   private maxIterations = 3
+  private criticAgent = new CriticAgent()
 
   async refineResponse(
     query: string,
@@ -27,6 +31,7 @@ export class ReActAgent {
     const steps: ReActStep[] = []
     let currentResponse = initialResponse
     let iteration = 0
+    let issues = [...validationIssues]
 
     if (validationIssues.length === 0) {
       return {
@@ -37,44 +42,72 @@ export class ReActAgent {
       }
     }
 
-    while (iteration < this.maxIterations && validationIssues.length > 0) {
+    while (iteration < this.maxIterations && issues.length > 0) {
       iteration++
 
       const thought = await this.generateThought(
         query,
         currentResponse,
-        validationIssues,
+        issues,
         iteration
       )
 
-      const action = this.determineAction(iteration, validationIssues)
+      const action = this.determineAction(iteration, issues)
 
-      if (action === 'refine') {
-        const refinedResponse = await this.refineWithIssues(
-          query,
-          currentResponse,
-          validationIssues,
-          initialSources
-        )
-        
+      if (action === 'complete') {
         steps.push({
           thought,
           action,
-          observation: 'Response refined based on identified issues',
-          iteration
-        })
-
-        currentResponse = refinedResponse
-        break
-      } else if (action === 'complete') {
-        steps.push({
-          thought,
-          action,
-          observation: 'Refinement complete after iterative improvement',
+          observation: 'Refinement complete - no further actionable issues',
           iteration
         })
         break
       }
+
+      const refinedResponse = await this.refineWithIssues(
+        query,
+        currentResponse,
+        issues,
+        initialSources,
+        thought
+      )
+
+      // Validate improvement
+      let newIssues = issues
+      let improved = false
+      try {
+        const validation = await this.criticAgent.validateResponse(
+          query,
+          refinedResponse,
+          initialSources
+        )
+        newIssues = validation.issues || []
+        improved = validation.isValid || newIssues.length < issues.length
+        steps.push({
+          thought,
+          action,
+          observation: improved
+            ? `Refined response; issues reduced from ${issues.length} to ${newIssues.length}`
+            : 'Refined response; no measurable improvement',
+          iteration
+        })
+      } catch (e) {
+        // If critic fails, accept single refinement and exit
+        steps.push({
+          thought,
+          action,
+          observation: 'Refined response; validation unavailable',
+          iteration
+        })
+        currentResponse = refinedResponse
+        break
+      }
+
+      currentResponse = refinedResponse
+      if (!improved || newIssues.length === 0) {
+        break
+      }
+      issues = newIssues
     }
 
     return {
@@ -101,14 +134,14 @@ Provide a brief thought about the next improvement step.`
     try {
       const prompt = (window as any).spark.llmPrompt`${systemPrompt}
 
-Query: ${query}
+Query: ${sanitizeQueryForPrompt(query)}
 Current response: ${currentResponse}
 
 What should be the next step?`
 
       return await llmService.generateText(prompt, {
-        maxTokens: 150,
-        temperature: 0.6
+        maxTokens: appConfig.truncation.reactThoughtMaxTokens,
+        temperature: appConfig.temps.reactThought
       })
     } catch (error) {
       console.warn('Thought generation failed:', error)
@@ -124,7 +157,7 @@ What should be the next step?`
     if (iteration >= this.maxIterations) {
       return 'complete'
     }
-    
+
     if (issues.some(i => i.includes('source') || i.includes('citation'))) {
       return 'refine'
     }
@@ -140,22 +173,32 @@ What should be the next step?`
     query: string,
     currentResponse: string,
     issues: string[],
-    sources: Source[]
+    sources: Source[],
+    thought?: string
   ): Promise<string> {
-    const contextSnippets = sources
-      .map((s, i) => `[${i + 1}] ${s.content}`)
-      .join('\n\n')
+    const limitedSources = [...sources]
+      .sort((a, b) => (b.azureScore ?? b.relevanceScore) - (a.azureScore ?? a.relevanceScore))
+      .slice(0, appConfig.critic.maxSources)
+    const rawContext = limitedSources.map((s, i) => `[${i + 1}] ${s.content}`).join('\n\n')
+    const contextSnippets = truncateContext(rawContext, appConfig.truncation.reactRefineMaxTokens, {
+      notice: '[Context truncated for refinement]'
+    })
 
     const systemPrompt = `You are refining an AI response based on validation feedback.
 
 Issues to address:
 ${issues.map((issue, i) => `${i + 1}. ${issue}`).join('\n')}
 
-Guidelines:
-- Fix the identified issues
-- Maintain accuracy to source documents
-- Add proper citations using [1], [2], etc.
-- Keep the response focused on the query
+Refinement rules:
+- Fix ONLY the sentences/claims that correspond to the listed issues.
+- Keep correct portions unchanged; do not rewrite the whole response.
+- Ensure every factual claim is supported by the provided sources.
+- Add citations like [1], [2] immediately after claims they support.
+- Maintain coherence and original tone; keep it concise and faithful to sources.
+- Output ONLY the refined response text. Do not include analysis or pre/post text.
+
+Citation format example:
+"Embeddings are vector representations [1]. They enable semantic search [2]."
 
 Source documents:
 ${contextSnippets}`
@@ -163,16 +206,19 @@ ${contextSnippets}`
     try {
       const prompt = (window as any).spark.llmPrompt`${systemPrompt}
 
-User query: ${query}
+Refinement plan:
+${thought ?? '(none provided)'}
+
+User query: ${sanitizeQueryForPrompt(query)}
 
 Current response:
 ${currentResponse}
 
-Provide an improved response that addresses the issues:`
+Return only the improved response text (no analysis):`
 
       return await llmService.generateText(prompt, {
-        maxTokens: 800,
-        temperature: 0.7
+        maxTokens: appConfig.truncation.reactRefineMaxTokens,
+        temperature: appConfig.temps.reactRefine
       })
     } catch (error) {
       console.warn('Refinement failed:', error)

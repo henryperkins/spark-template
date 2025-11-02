@@ -4,12 +4,32 @@ const defaultTheme = {
   container: {
     center: true,
     padding: "2rem",
+    // Ensure container breakpoints use numeric widths only.
+    // This prevents Tailwind's container plugin from generating invalid media/max-width
+    // rules for raw screens like (display-mode: standalone) or (pointer: coarse/fine).
+    screens: {
+      sm: "640px",
+      md: "768px",
+      lg: "1024px",
+      xl: "1280px",
+      "2xl": "1536px",
+    },
   },
   extend: {
-    screens: {
-      coarse: { raw: "(pointer: coarse)" },
-      fine: { raw: "(pointer: fine)" },
-      pwa: { raw: "(display-mode: standalone)" },
+
+    keyframes: {
+      "accordion-down": {
+        from: { height: "0" },
+        to: { height: "var(--radix-accordion-content-height)" },
+      },
+      "accordion-up": {
+        from: { height: "var(--radix-accordion-content-height)" },
+        to: { height: "0" },
+      },
+    },
+    animation: {
+      "accordion-down": "accordion-down 0.2s ease-out",
+      "accordion-up": "accordion-up 0.2s ease-out",
     },
     colors: {
       neutral: {

@@ -9,6 +9,7 @@ import { findRelevantChunks, findRelevantChunksLocal, generateResponse } from '.
 import { azureServiceManager } from '../azure-service-manager'
 import { AgentStepEvent, telemetry } from '../services/telemetry'
 import { agentAnalytics } from '../services/agent-analytics'
+import { errorTracking } from '../services/error-tracker'
 
 export interface AgentWorkflowStep {
   agent: string
@@ -109,7 +110,7 @@ export class AgenticOrchestrator {
       workflow,
       'Router',
       'Select retrieval strategy',
-      () => this.routingAgent.selectStrategy(query),
+      () => this.routingAgent.selectStrategy(query, { totalDocuments: documents.length }),
       emitWorkflowUpdate,
       emitStepEvent
     )
@@ -240,7 +241,16 @@ export class AgenticOrchestrator {
       return result
     } catch (error) {
       const duration = Date.now() - stepStart
-      
+
+      // Track error
+      if (error instanceof Error) {
+        errorTracking.record(error, {
+          agent,
+          type: this.getErrorTypeForAgent(agent),
+          code: error.name
+        })
+      }
+
       workflow[stepIndex] = {
         ...runningStep,
         action: `${action} (failed)`,
@@ -261,6 +271,16 @@ export class AgenticOrchestrator {
 
       throw error
     }
+  }
+
+  private getErrorTypeForAgent(agent: string): 'retrieval' | 'llm' | 'unknown' {
+    if (agent === 'Retrieval' || agent === 'Router') {
+      return 'retrieval'
+    }
+    if (agent === 'Generator' || agent === 'Classifier' || agent === 'Planner' || agent === 'Critic' || agent === 'ReAct' || agent === 'Expansion') {
+      return 'llm'
+    }
+    return 'unknown'
   }
 
   private async executeSubQueries(
@@ -287,7 +307,7 @@ export class AgenticOrchestrator {
                 workflow,
                 'Router',
                 `Select strategy for sub-query: ${sq.id}`,
-                () => this.routingAgent.selectStrategy(sq.query),
+                () => this.routingAgent.selectStrategy(sq.query, { totalDocuments: documents.length }),
                 emitWorkflowUpdate,
                 emitStepEvent
               )
@@ -313,7 +333,7 @@ export class AgenticOrchestrator {
           workflow,
           'Router',
           `Select strategy for sub-query: ${sq.id}`,
-          () => this.routingAgent.selectStrategy(sq.query),
+          () => this.routingAgent.selectStrategy(sq.query, { totalDocuments: documents.length }),
           emitWorkflowUpdate,
           emitStepEvent
         )
@@ -351,6 +371,15 @@ export class AgenticOrchestrator {
       return await findRelevantChunks(query, documents, 5, strategy)
     } catch (error) {
       console.warn('Primary retrieval path failed, using local fallback:', error)
+
+      // Track retrieval error
+      if (error instanceof Error) {
+        errorTracking.record(error, {
+          type: 'retrieval',
+          code: 'RETRIEVAL_FALLBACK'
+        })
+      }
+
       return findRelevantChunksLocal(query, documents, 5)
     }
   }

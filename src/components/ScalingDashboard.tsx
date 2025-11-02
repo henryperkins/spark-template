@@ -6,19 +6,25 @@ import { Progress } from '@/components/ui/progress'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Separator } from '@/components/ui/separator'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { 
-  ArrowsClockwise, 
-  Database, 
-  Lightning, 
+import {
+  ArrowsClockwise,
+  Database,
+  Lightning,
   ChartBar,
   CheckCircle,
   Warning,
   Clock,
-  Trash
+  Trash,
+  CurrencyDollar,
+  WarningCircle,
+  Bell
 } from '@phosphor-icons/react'
 import { Document } from '@/types'
 import { embeddingManager } from '@/lib/embedding-manager'
 import { cacheManager } from '@/lib/cache-manager'
+import { tokenTracker } from '@/lib/services/token-tracker'
+import { errorTracking } from '@/lib/services/error-tracker'
+import { AlertPanel } from './AlertPanel'
 import { toast } from 'sonner'
 
 interface ScalingDashboardProps {
@@ -32,9 +38,15 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
   const [refreshMetrics, setRefreshMetrics] = useState<any>(null)
   const [cacheMetrics, setCacheMetrics] = useState<any>(null)
   const [lastRefreshResult, setLastRefreshResult] = useState<any>(null)
+  const [tokenMetrics, setTokenMetrics] = useState<any>(null)
+  const [errorMetrics, setErrorMetrics] = useState<any>(null)
 
   useEffect(() => {
     loadMetrics()
+
+    // Refresh metrics every 5 seconds for real-time updates
+    const interval = setInterval(loadMetrics, 5000)
+    return () => clearInterval(interval)
   }, [documents])
 
   const loadMetrics = async () => {
@@ -45,6 +57,20 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
       ])
       setRefreshMetrics(refresh)
       setCacheMetrics(cache)
+
+      // Get token metrics (some async for Spark KV)
+      const dailyUsage = tokenTracker.getDailyUsage()
+      const budgetStatus = await tokenTracker.getBudgetStatus()
+      const byModel = tokenTracker.getMetricsByModel()
+
+      setTokenMetrics({
+        daily: dailyUsage,
+        budget: budgetStatus,
+        byModel
+      })
+
+      // Get error metrics (synchronous)
+      setErrorMetrics(errorTracking.getMetrics())
     } catch (error) {
       console.error('Failed to load metrics:', error)
     }
@@ -53,16 +79,16 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
   const handleIncrementalRefresh = async () => {
     setRefreshing(true)
     setRefreshProgress({ current: 0, total: documents.length, documentName: '' })
-    
+
     try {
       const result = await embeddingManager.performIncrementalRefresh(
         documents,
         (progress) => setRefreshProgress(progress)
       )
-      
+
       setLastRefreshResult(result)
       await loadMetrics()
-      
+
       toast.success('Incremental Refresh Complete', {
         description: `Refreshed ${result.refreshedCount}, skipped ${result.skippedCount} (${(result.duration / 1000).toFixed(2)}s)`
       })
@@ -79,16 +105,16 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
   const handleFullRefresh = async () => {
     setRefreshing(true)
     setRefreshProgress({ current: 0, total: documents.length, documentName: '' })
-    
+
     try {
       const result = await embeddingManager.performFullRefresh(
         documents,
         (progress) => setRefreshProgress(progress)
       )
-      
+
       setLastRefreshResult(result)
       await loadMetrics()
-      
+
       toast.success('Full Refresh Complete', {
         description: `All ${result.refreshedCount} documents refreshed (${(result.duration / 1000).toFixed(2)}s)`
       })
@@ -104,11 +130,11 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
 
   const handleCleanCache = async () => {
     setCleaning(true)
-    
+
     try {
       const cleaned = await cacheManager.cleanStaleEntries()
       await loadMetrics()
-      
+
       toast.success('Cache Cleaned', {
         description: `Removed ${cleaned} stale entries`
       })
@@ -140,8 +166,11 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
         </p>
       </div>
 
+      {/* Alert Panel at the top */}
+      <AlertPanel />
+
       <Tabs defaultValue="embeddings" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-3 max-w-md">
+        <TabsList className="grid w-full grid-cols-5 max-w-3xl">
           <TabsTrigger value="embeddings">
             <Database size={16} className="mr-2" />
             Embeddings
@@ -149,6 +178,14 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
           <TabsTrigger value="cache">
             <Lightning size={16} className="mr-2" />
             Cache
+          </TabsTrigger>
+          <TabsTrigger value="costs">
+            <CurrencyDollar size={16} className="mr-2" />
+            Costs
+          </TabsTrigger>
+          <TabsTrigger value="errors">
+            <WarningCircle size={16} className="mr-2" />
+            Errors
           </TabsTrigger>
           <TabsTrigger value="metrics">
             <ChartBar size={16} className="mr-2" />
@@ -198,8 +235,8 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
                       {refreshProgress.current} / {refreshProgress.total}
                     </span>
                   </div>
-                  <Progress 
-                    value={refreshProgress.total > 0 ? (refreshProgress.current / refreshProgress.total) * 100 : 0} 
+                  <Progress
+                    value={refreshProgress.total > 0 ? (refreshProgress.current / refreshProgress.total) * 100 : 0}
                   />
                 </div>
               )}
@@ -381,6 +418,265 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
                   </div>
                 </div>
               </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="metrics" className="space-y-4">
+          <div className="grid gap-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>System Overview</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="space-y-1">
+                    <div className="text-sm text-muted-foreground">Documents</div>
+                    <div className="text-2xl font-bold">{documents.length}</div>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-sm text-muted-foreground">Total Chunks</div>
+                    <div className="text-2xl font-bold">
+                      {documents.reduce((acc, doc) => acc + doc.chunks.length, 0)}
+                    </div>
+                  </div>
+                  {refreshMetrics && (
+                    <>
+                      <div className="space-y-1">
+                        <div className="text-sm text-muted-foreground">Embedding Version</div>
+                        <Badge variant="outline" className="mt-1">v2025.01</Badge>
+                      </div>
+                      <div className="space-y-1">
+                        <div className="text-sm text-muted-foreground">Cache Version</div>
+                        <Badge variant="outline" className="mt-1">v2025.01</Badge>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+
+            {refreshMetrics && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Volatility Distribution</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-2">
+                    {Object.entries(refreshMetrics.byVolatility).map(([volatility, count]) => (
+                      <div key={volatility} className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          {volatility === 'high' && <Warning size={16} className="text-red-600" />}
+                          {volatility === 'medium' && <Clock size={16} className="text-orange-600" />}
+                          {volatility === 'low' && <CheckCircle size={16} className="text-green-600" />}
+                          <span className="capitalize">{volatility}</span>
+                        </div>
+                        <Badge>{count as number} docs</Badge>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        </TabsContent>
+
+        <TabsContent value="costs" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <CurrencyDollar size={20} />
+                Token Usage & Costs
+              </CardTitle>
+              <CardDescription>
+                Monitor LLM token consumption and estimated costs
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {tokenMetrics && (
+                <>
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="space-y-1">
+                      <div className="text-sm text-muted-foreground">Today's Tokens</div>
+                      <div className="text-2xl font-bold">
+                        {tokenMetrics.daily.tokens.toLocaleString()}
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-sm text-muted-foreground">Today's Cost</div>
+                      <div className="text-2xl font-bold text-green-600">
+                        ${tokenMetrics.daily.cost.toFixed(3)}
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-sm text-muted-foreground">Queries Today</div>
+                      <div className="text-2xl font-bold">
+                        {tokenMetrics.daily.queryCount}
+                      </div>
+                    </div>
+                  </div>
+
+                  <Separator />
+
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="font-medium text-sm">Daily Budget Status</h4>
+                      <Badge variant={tokenMetrics.budget.isOverLimit ? 'destructive' : tokenMetrics.budget.isNearLimit ? 'secondary' : 'default'}>
+                        {tokenMetrics.budget.percentageUsed.toFixed(1)}% used
+                      </Badge>
+                    </div>
+                    <Progress value={tokenMetrics.budget.percentageUsed} />
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                      <div className="text-muted-foreground">
+                        Limit: {tokenMetrics.budget.dailyLimit.toLocaleString()} tokens
+                      </div>
+                      <div className="text-muted-foreground text-right">
+                        Remaining: {tokenMetrics.budget.remainingTokens.toLocaleString()} tokens
+                      </div>
+                    </div>
+                  </div>
+
+                  {tokenMetrics.budget.isNearLimit && (
+                    <Alert>
+                      <Warning size={16} />
+                      <AlertTitle>Approaching Budget Limit</AlertTitle>
+                      <AlertDescription>
+                        You've used {tokenMetrics.budget.percentageUsed.toFixed(1)}% of your daily token budget.
+                      </AlertDescription>
+                    </Alert>
+                  )}
+
+                  <Separator />
+
+                  <div className="space-y-2">
+                    <h4 className="font-medium text-sm">Usage by Model</h4>
+                    <div className="space-y-2">
+                      {Object.entries(tokenMetrics.byModel).map(([model, stats]: [string, any]) => (
+                        <div key={model} className="p-3 bg-muted rounded-lg">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="font-medium text-sm">{model}</span>
+                            <Badge variant="outline">{stats.count} requests</Badge>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2 text-xs">
+                            <div className="text-muted-foreground">
+                              {stats.totalTokens.toLocaleString()} tokens
+                            </div>
+                            <div className="text-muted-foreground text-right">
+                              ${stats.totalCost.toFixed(3)}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="errors" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <WarningCircle size={20} />
+                Error Tracking
+              </CardTitle>
+              <CardDescription>
+                Monitor system errors and failure rates
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {errorMetrics && (
+                <>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <div className="text-sm text-muted-foreground">Error Rate (last hour)</div>
+                      <div className="text-2xl font-bold text-red-600">
+                        {errorMetrics.errorRate}
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-sm text-muted-foreground">Total Errors</div>
+                      <div className="text-2xl font-bold">
+                        {errorMetrics.totalErrors}
+                      </div>
+                    </div>
+                  </div>
+
+                  {errorMetrics.errorRate > 5 && (
+                    <Alert variant="destructive">
+                      <WarningCircle size={16} />
+                      <AlertTitle>High Error Rate</AlertTitle>
+                      <AlertDescription>
+                        Error rate is above normal threshold. Check recent errors below.
+                      </AlertDescription>
+                    </Alert>
+                  )}
+
+                  <Separator />
+
+                  <div className="space-y-2">
+                    <h4 className="font-medium text-sm">Error Types</h4>
+                    <div className="space-y-1">
+                      {Object.entries(errorMetrics.byType).map(([type, count]) => {
+                        const errorCount = count as number
+                        return errorCount > 0 ? (
+                          <div key={type} className="flex items-center justify-between text-sm p-2 bg-muted rounded">
+                            <span className="capitalize">{type}</span>
+                            <Badge variant="destructive">{errorCount}</Badge>
+                          </div>
+                        ) : null
+                      })}
+                    </div>
+                  </div>
+
+                  {Object.keys(errorMetrics.errorsByAgent).length > 0 && (
+                    <>
+                      <Separator />
+                      <div className="space-y-2">
+                        <h4 className="font-medium text-sm">Errors by Agent</h4>
+                        <div className="space-y-1">
+                          {Object.entries(errorMetrics.errorsByAgent).map(([agent, count]) => (
+                            <div key={agent} className="flex items-center justify-between text-sm p-2 bg-muted rounded">
+                              <span>{agent}</span>
+                              <Badge variant="outline">{count as number}</Badge>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {errorMetrics.recentErrors.length > 0 && (
+                    <>
+                      <Separator />
+                      <div className="space-y-2">
+                        <h4 className="font-medium text-sm">Recent Errors</h4>
+                        <div className="space-y-2 max-h-60 overflow-y-auto">
+                          {errorMetrics.recentErrors.map((error: any) => (
+                            <div key={error.errorId} className="p-3 bg-destructive/10 rounded-lg text-xs">
+                              <div className="flex items-center justify-between mb-1">
+                                <div className="flex items-center gap-2">
+                                  <Badge variant="outline" className="text-xs">{error.type}</Badge>
+                                  {error.agent && <Badge variant="secondary" className="text-xs">{error.agent}</Badge>}
+                                </div>
+                                <span className="text-muted-foreground">
+                                  {new Date(error.timestamp).toLocaleTimeString()}
+                                </span>
+                              </div>
+                              <p className="text-destructive font-medium mb-1">{error.message}</p>
+                              {error.code && (
+                                <p className="text-muted-foreground">Code: {error.code}</p>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
             </CardContent>
           </Card>
         </TabsContent>

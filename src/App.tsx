@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { useSparkKV } from '@/hooks/use-spark-kv'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { ResponsiveNavigation } from '@/components/ResponsiveNavigation'
 import { DocumentUpload } from '@/components/DocumentUpload'
 import { DocumentList } from '@/components/DocumentList'
 import { QueryInterface } from '@/components/QueryInterface'
@@ -47,6 +47,56 @@ function App() {
     setDocuments((prev = []) => prev.filter(doc => doc.id !== documentId))
   }
 
+  const navigationTabs = [
+    {
+      value: 'query',
+      label: 'Query',
+      icon: <ChatCircle size={20} />,
+      content: <QueryInterface documents={documents || []} />
+    },
+    {
+      value: 'upload',
+      label: 'Upload',
+      icon: <FileText size={20} />,
+      content: <DocumentUpload onDocumentUploaded={handleDocumentUploaded} />
+    },
+    {
+      value: 'integrations',
+      label: 'Integrations',
+      icon: <PlugsConnected size={20} />,
+      content: <Integrations onDocumentsIngested={handleDocumentsIngested} />
+    },
+    {
+      value: 'knowledge',
+      label: 'Knowledge',
+      icon: <Brain size={20} />,
+      content: (
+        <DocumentList
+          documents={documents || []}
+          onDeleteDocument={handleDeleteDocument}
+        />
+      )
+    },
+    {
+      value: 'scaling',
+      label: 'Scaling',
+      icon: <ChartBar size={20} />,
+      content: <ScalingDashboard documents={documents || []} />
+    },
+    {
+      value: 'azure',
+      label: 'Azure',
+      icon: <CloudArrowUp size={20} />,
+      content: <AzureConfiguration />
+    },
+    {
+      value: 'architecture',
+      label: 'Architecture',
+      icon: <TreeStructure size={20} />,
+      content: <ArchitectureDiagram />
+    }
+  ]
+
   return (
     <div className="min-h-screen bg-background">
       <div className="container mx-auto py-8 px-4">
@@ -60,69 +110,11 @@ function App() {
           </div>
         </div>
 
-        <Tabs defaultValue="query" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-7">
-            <TabsTrigger value="query" className="flex items-center gap-2">
-              <ChatCircle size={16} />
-              Query
-            </TabsTrigger>
-            <TabsTrigger value="upload" className="flex items-center gap-2">
-              <FileText size={16} />
-              Upload
-            </TabsTrigger>
-            <TabsTrigger value="integrations" className="flex items-center gap-2">
-              <PlugsConnected size={16} />
-              Integrations
-            </TabsTrigger>
-            <TabsTrigger value="knowledge" className="flex items-center gap-2">
-              <Brain size={16} />
-              Knowledge
-            </TabsTrigger>
-            <TabsTrigger value="scaling" className="flex items-center gap-2">
-              <ChartBar size={16} />
-              Scaling
-            </TabsTrigger>
-            <TabsTrigger value="azure" className="flex items-center gap-2">
-              <CloudArrowUp size={16} />
-              Azure
-            </TabsTrigger>
-            <TabsTrigger value="architecture" className="flex items-center gap-2">
-              <TreeStructure size={16} />
-              Architecture
-            </TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="query" className="space-y-6">
-            <QueryInterface documents={documents || []} />
-          </TabsContent>
-
-          <TabsContent value="upload" className="space-y-6">
-            <DocumentUpload onDocumentUploaded={handleDocumentUploaded} />
-          </TabsContent>
-
-          <TabsContent value="integrations" className="space-y-6">
-            <Integrations onDocumentsIngested={handleDocumentsIngested} />
-          </TabsContent>
-
-          <TabsContent value="knowledge" className="space-y-6">
-            <DocumentList 
-              documents={documents || []} 
-              onDeleteDocument={handleDeleteDocument}
-            />
-          </TabsContent>
-
-          <TabsContent value="scaling" className="space-y-6">
-            <ScalingDashboard documents={documents || []} />
-          </TabsContent>
-
-          <TabsContent value="azure" className="space-y-6">
-            <AzureConfiguration />
-          </TabsContent>
-
-          <TabsContent value="architecture" className="space-y-6">
-            <ArchitectureDiagram />
-          </TabsContent>
-        </Tabs>
+        <ResponsiveNavigation
+          tabs={navigationTabs}
+          defaultValue="query"
+          className="space-y-6"
+        />
       </div>
     </div>
   )

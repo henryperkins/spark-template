@@ -1,5 +1,7 @@
 import { z } from 'zod'
 import { llmService } from '../services/llm-service'
+import { appConfig } from '../config'
+import { sanitizeQueryForPrompt, JSON_OUTPUT_REQUIREMENTS } from '../prompt-utils'
 
 export type QueryComplexity = 'simple' | 'moderate' | 'complex'
 
@@ -46,14 +48,15 @@ Example:
 
     try {
       const prompt = (window as any).spark.llmPrompt`${systemPrompt}
+${JSON_OUTPUT_REQUIREMENTS}
 
-User query: ${query}
+User query: ${sanitizeQueryForPrompt(query)}
 
 Provide your classification as a JSON object:`
 
       return await llmService.generateJson(prompt, queryClassificationSchema, {
-        maxTokens: 300,
-        temperature: 0.3
+        maxTokens: appConfig.truncation.classifierMaxTokens,
+        temperature: appConfig.temps.classifier
       })
     } catch (error) {
       console.warn('LLM classification failed, using fallback:', error)
@@ -65,7 +68,7 @@ Provide your classification as a JSON object:`
   private fallbackClassification(query: string): QueryClassification {
     const questionWords = ['how', 'why', 'explain', 'compare', 'analyze', 'evaluate']
     const multiPartIndicators = ['and', 'versus', 'vs', 'compared to', 'relationship between']
-    
+
     const lowerQuery = query.toLowerCase()
     const hasQuestionWord = questionWords.some(word => lowerQuery.includes(word))
     const hasMultipleParts = multiPartIndicators.some(ind => lowerQuery.includes(ind))

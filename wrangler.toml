@@ -1,0 +1,58 @@
+# Cloudflare Workers Configuration for React + Vite SPA
+# Documentation: https://developers.cloudflare.com/workers/
+
+name = "agentic-rag"
+main = "worker/index.ts"
+compatibility_date = "2025-11-02"
+
+# Enable Logpush for Worker logs
+# Active Logpush job: cloudflare-managed-17bd49a0
+# Destination R2 bucket: cloudflare-managed-17bd49a0
+# Logs are automatically sent to R2 for analysis and debugging
+logpush = true
+
+# Static assets configuration for React SPA
+# Serves built Vite app from dist/
+[assets]
+directory = "./dist"
+
+# R2 Bucket binding for accessing Logpush logs
+# Allows worker to programmatically read its own logs
+[[r2_buckets]]
+binding = "LOGS"
+bucket_name = "cloudflare-managed-17bd49a0"
+
+# KV Namespace bindings for data persistence
+#
+# FIRST TIME SETUP:
+# 1. Run: npm run cf:kv:create
+#    Output will show: { binding = "RAG_KV", id = "abc123..." }
+# 2. Copy the production ID to "id" below
+# 3. Run: npm run cf:kv:create:preview
+#    Output will show: { binding = "RAG_KV", preview_id = "xyz789..." }
+# 4. Copy the preview ID to "preview_id" below
+# 5. Deploy: npm run cf:deploy
+#
+# Note: Binding name "RAG_KV" must match the TypeScript Env interface
+[[kv_namespaces]]
+binding = "RAG_KV"
+id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"        # Replace with your production namespace ID
+preview_id = "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"  # Replace with your preview namespace ID
+
+# Optional legacy KV namespace for one-shot migration (/api/migrate)
+# [[kv_namespaces]]
+# binding = "LEGACY_KV"
+# id = "legacy-production-kv-namespace-id"
+# preview_id = "legacy-preview-kv-namespace-id"
+
+# Environment variables (non-sensitive, exposed to client via VITE_ prefix)
+[vars]
+VITE_APP_ENV = "production"
+
+# Secrets (sensitive values - use: npx wrangler secret put <KEY_NAME>)
+# After deployment, run these commands:
+# npx wrangler secret put VITE_CLOUDFLARE_API_TOKEN
+# npx wrangler secret put VITE_AZURE_OPENAI_KEY (if using Azure)
+# npx wrangler secret put VITE_AZURE_SEARCH_KEY (if using Azure)
+# npx wrangler secret put LOGS_API_KEY       # used to authorize /api/logs (Bearer token)
+# npx wrangler secret put MIGRATION_KEY      # used to authorize /api/migrate (Bearer token)

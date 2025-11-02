@@ -32,6 +32,7 @@ export class AzureSearchService {
 
       return { success: true }
     } catch (error) {
+      console.error('Azure Search testConnection error:', error)
       // Check if it's a CORS error
       if (error instanceof TypeError && error.message.includes('Failed to fetch')) {
         return {
