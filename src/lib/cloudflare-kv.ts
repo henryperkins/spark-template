@@ -63,17 +63,37 @@ export class CloudflareKV implements CloudflareKVAdapter {
     }
   }
 
+  private getBearerToken(): string | undefined {
+    // Prefer compile-time env for production builds; allow runtime override via localStorage for dev
+    const fromEnv = (import.meta as any).env?.VITE_KV_API_KEY as string | undefined
+    let fromLocal: string | undefined
+    if (typeof window !== 'undefined') {
+      fromLocal = window.localStorage?.getItem('KV_API_KEY') ?? undefined
+    }
+    return fromLocal || fromEnv
+  }
+
   private async request(
     path: string,
     options: RequestInit = {}
   ): Promise<Response> {
     const url = `${this.baseUrl}${path}`
 
+    // Re-attach Authorization dynamically to support rotation without full reload
+    const authHeaders: Record<string, string> = {}
+    if (this.useWorkerAPI) {
+      const token = this.getBearerToken()
+      if (token) {
+        authHeaders['Authorization'] = `Bearer ${token}`
+      }
+    }
+
     const response = await fetch(url, {
       ...options,
       headers: {
         ...this.headers,
-        ...options.headers,
+        ...authHeaders,
+        ...(options.headers as any),
       },
     })
 
@@ -89,24 +109,38 @@ export class CloudflareKV implements CloudflareKVAdapter {
 
   async keys(): Promise<string[]> {
     try {
-      const path = this.useWorkerAPI ? '' : '/keys'
-      const response = await this.request(path)
-
       if (this.useWorkerAPI) {
-        // Worker API returns array directly
-        return await response.json() as string[]
+        // Worker API now returns a paginated shape: { keys: string[], cursor: string|null, list_complete?: boolean }
+        const all: string[] = []
+        let cursor: string | undefined = undefined
+        do {
+          const path = cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''
+          const response = await this.request(path)
+          const data = (await response.json()) as {
+            keys: string[]
+            cursor: string | null
+            list_complete?: boolean
+          }
+          if (Array.isArray(data.keys)) {
+            all.push(...data.keys)
+          }
+          cursor = data.cursor ?? undefined
+        } while (cursor)
+        return all
       } else {
         // REST API returns object with result
-        const data = await response.json() as {
+        const response = await this.request('/keys')
+        const data = (await response.json()) as {
           result: Array<{ name: string }>
           success: boolean
+          cursor?: string
         }
 
         if (!data.success) {
           throw new Error('API returned success: false')
         }
 
-        return data.result.map(item => item.name)
+        return data.result.map((item) => item.name)
       }
     } catch (error) {
       console.error(`${LOG_PREFIX} Failed to list keys:`, error)

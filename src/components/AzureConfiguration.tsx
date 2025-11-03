@@ -10,13 +10,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Switch } from '@/components/ui/switch'
 import { Slider } from '@/components/ui/slider'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { CloudArrowUp, CloudCheck, CloudX, Eye, EyeSlash, TestTube, Sparkle, Lightning } from '@phosphor-icons/react'
-import { AzureConfig, AzureConnectionStatus } from '@/types'
+import { CloudArrowUp, CloudCheck, CloudX, Eye, EyeSlash, TestTube, Sparkle, Lightning, FloppyDisk, Trash, FolderOpen } from '@phosphor-icons/react'
+import { AzureConfig, AzureConnectionStatus, SavedAzureConfig } from '@/types'
 import { azureServiceManager } from '@/lib/azure-service-manager'
 
 export function AzureConfiguration() {
   const [config, setConfig] = useSparkKV<AzureConfig | null>('azure-config', null)
   const [status, setStatus] = useSparkKV<AzureConnectionStatus | null>('azure-status', null)
+  const [savedConfigs, setSavedConfigs] = useSparkKV<SavedAzureConfig[]>('azure-saved-configs', [])
   const [formData, setFormData] = useState<AzureConfig>({
     openai: {
       endpoint: '',
@@ -50,12 +51,62 @@ export function AzureConfiguration() {
   })
   const [testing, setTesting] = useState(false)
   const [showKeys, setShowKeys] = useState({ openai: false, search: false })
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false)
+  const [configName, setConfigName] = useState('')
+  const [configDescription, setConfigDescription] = useState('')
+  const [selectedConfigId, setSelectedConfigId] = useState<string>('')
 
   useEffect(() => {
     if (config) {
       setFormData(config)
     }
   }, [config])
+
+  // Save current configuration
+  const handleSaveConfig = () => {
+    if (!configName.trim()) return
+
+    const newConfig: SavedAzureConfig = {
+      id: Date.now().toString(),
+      name: configName.trim(),
+      description: configDescription.trim() || undefined,
+      config: formData,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    }
+
+    setSavedConfigs([...(savedConfigs || []), newConfig])
+    setConfigName('')
+    setConfigDescription('')
+    setSaveDialogOpen(false)
+  }
+
+  // Load a saved configuration
+  const handleLoadConfig = (configId: string) => {
+    const savedConfig = savedConfigs?.find(c => c.id === configId)
+    if (savedConfig) {
+      setFormData(savedConfig.config)
+      setSelectedConfigId(configId)
+    }
+  }
+
+  // Delete a saved configuration
+  const handleDeleteConfig = (configId: string) => {
+    setSavedConfigs((savedConfigs || []).filter(c => c.id !== configId))
+    if (selectedConfigId === configId) {
+      setSelectedConfigId('')
+    }
+  }
+
+  // Update an existing saved configuration
+  const handleUpdateConfig = (configId: string) => {
+    const updatedConfigs = (savedConfigs || []).map(c =>
+      c.id === configId
+        ? { ...c, config: formData, updatedAt: new Date().toISOString() }
+        : c
+    )
+    setSavedConfigs(updatedConfigs)
+  }
 
   const handleInputChange = (service: 'openai' | 'search', field: string, value: string) => {
     setFormData(prev => ({
@@ -144,6 +195,133 @@ export function AzureConfiguration() {
           </p>
         </CardHeader>
         <CardContent>
+          {/* Saved Configurations Section */}
+          <div className="mb-6 p-4 border rounded-lg space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="font-medium flex items-center gap-2">
+                  <FolderOpen size={16} />
+                  Saved Configurations
+                </h4>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Save and load different Azure configurations
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Load Configuration */}
+              <div className="space-y-2">
+                <Label htmlFor="load-config">Load Configuration</Label>
+                <Select value={selectedConfigId} onValueChange={handleLoadConfig}>
+                  <SelectTrigger id="load-config">
+                    <SelectValue placeholder="Select a saved configuration" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {savedConfigs && savedConfigs.length > 0 ? (
+                      savedConfigs.map((cfg) => (
+                        <SelectItem key={cfg.id} value={cfg.id}>
+                          <div className="flex flex-col">
+                            <span>{cfg.name}</span>
+                            {cfg.description && (
+                              <span className="text-xs text-muted-foreground">{cfg.description}</span>
+                            )}
+                          </div>
+                        </SelectItem>
+                      ))
+                    ) : (
+                      <SelectItem value="none" disabled>
+                        No saved configurations
+                      </SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="space-y-2">
+                <Label>Actions</Label>
+                <div className="flex gap-2">
+                  <Button
+                    onClick={() => setSaveDialogOpen(true)}
+                    disabled={!isFormValid()}
+                    variant="outline"
+                    className="flex-1"
+                  >
+                    <FloppyDisk size={16} className="mr-2" />
+                    Save Current
+                  </Button>
+                  {selectedConfigId && (
+                    <>
+                      <Button
+                        onClick={() => handleUpdateConfig(selectedConfigId)}
+                        disabled={!isFormValid()}
+                        variant="outline"
+                        size="icon"
+                        title="Update selected config"
+                      >
+                        <FloppyDisk size={16} />
+                      </Button>
+                      <Button
+                        onClick={() => handleDeleteConfig(selectedConfigId)}
+                        variant="destructive"
+                        size="icon"
+                        title="Delete selected config"
+                      >
+                        <Trash size={16} />
+                      </Button>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Save Dialog */}
+            {saveDialogOpen && (
+              <div className="mt-4 p-4 border rounded-lg bg-muted/50 space-y-3">
+                <h5 className="font-medium text-sm">Save Configuration</h5>
+                <div className="space-y-2">
+                  <Label htmlFor="config-name">Configuration Name *</Label>
+                  <Input
+                    id="config-name"
+                    placeholder="e.g., Production, Development, Staging"
+                    value={configName}
+                    onChange={(e) => setConfigName(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="config-description">Description (Optional)</Label>
+                  <Input
+                    id="config-description"
+                    placeholder="Brief description of this configuration"
+                    value={configDescription}
+                    onChange={(e) => setConfigDescription(e.target.value)}
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    onClick={handleSaveConfig}
+                    disabled={!configName.trim()}
+                    size="sm"
+                  >
+                    Save
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      setSaveDialogOpen(false)
+                      setConfigName('')
+                      setConfigDescription('')
+                    }}
+                    variant="outline"
+                    size="sm"
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+
           {status && (
             <div className="mb-6 p-4 bg-muted rounded-lg">
               <div className="flex items-center justify-between mb-3">

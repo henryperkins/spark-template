@@ -180,3 +180,12 @@ export interface IntegrationSource {
   status: 'active' | 'syncing' | 'error' | 'paused'
   errorMessage?: string
 }
+
+export interface SavedAzureConfig {
+  id: string
+  name: string
+  description?: string
+  config: AzureConfig
+  createdAt: string
+  updatedAt: string
+}

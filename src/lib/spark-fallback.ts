@@ -66,6 +66,15 @@ const setMode = (value: KvMode) => {
 const shouldUseLocal = (): boolean => loadMode() === 'local';
 const shouldUseCloudflare = (): boolean => loadMode() === 'cloudflare';
 
+const getCloudflareAdapter = (): CloudflareKVAdapter | null => {
+  if (cloudflareKV) {
+    return cloudflareKV;
+  }
+
+  cloudflareKV = createCloudflareKV();
+  return cloudflareKV;
+};
+
 const loadStore = (): KvRecord => {
   if (memoryStore) {
     return memoryStore;
@@ -383,12 +392,7 @@ const installFetchInterceptor = () => {
   (window as any).sparkFallback = controls;
 };
 
-export interface SparkKv {
-  keys: () => Promise<string[]>;
-  get: (key: string) => Promise<unknown>;
-  set: (key: string, value: unknown) => Promise<void>;
-  delete: (key: string) => Promise<void>;
-}
+export interface SparkKv extends CloudflareKVAdapter {}
 
 export const fallbackKv: SparkKv = {
   keys: fallbackKeys,
@@ -397,11 +401,16 @@ export const fallbackKv: SparkKv = {
   delete: fallbackDelete,
 };
 
-const logFallback = (operation: string) => {
-  const storageMode = shouldUseCloudflare() ? 'Cloudflare KV' : 'localStorage';
-  console.warn(`${FALLBACK_LOG_PREFIX} Using ${storageMode} for ${operation}`);
+type KvSource = 'remote' | 'cloudflare' | 'local';
 
-  // Show user-friendly notification for critical operations
+const logLocalFallback = (operation: string, reason?: string, error?: unknown) => {
+  const details = reason ? ` (${reason})` : '';
+  if (error) {
+    console.warn(`${FALLBACK_LOG_PREFIX} Using localStorage fallback for ${operation}${details}`, error);
+  } else {
+    console.warn(`${FALLBACK_LOG_PREFIX} Using localStorage fallback for ${operation}${details}`);
+  }
+
   if (operation === 'llm') {
     console.warn(`${FALLBACK_LOG_PREFIX} 💡 AI features are using mock responses. Configure Azure OpenAI for full functionality.`);
   }
@@ -429,53 +438,104 @@ export const installSparkFallbacks = () => {
     return;
   }
 
-  installFetchInterceptor();
-
   const globalSpark = ((window as any).spark ??= {});
   const remoteKv: SparkKv | undefined = globalSpark.kv;
 
+  const resolveActiveKv = (): { client: SparkKv; source: KvSource } => {
+    if (!shouldUseLocal()) {
+      if (shouldUseCloudflare()) {
+        const adapter = getCloudflareAdapter();
+        if (adapter) {
+          return { client: adapter, source: 'cloudflare' };
+        }
+        console.warn(`${FALLBACK_LOG_PREFIX} Cloudflare KV mode requested but adapter is not configured. Falling back to ${remoteKv ? 'remote Spark KV' : 'localStorage'}.`);
+      }
+
+      if (remoteKv) {
+        return { client: remoteKv, source: 'remote' };
+      }
+    }
+
+    return { client: fallbackKv, source: 'local' };
+  };
+
+  const getFallbackReason = (): string | undefined => {
+    if (shouldUseLocal()) {
+      return 'local mode enabled';
+    }
+    if (shouldUseCloudflare()) {
+      return 'Cloudflare KV unavailable';
+    }
+    if (!remoteKv) {
+      return 'remote Spark KV not detected';
+    }
+    return undefined;
+  };
+
+  installFetchInterceptor();
+
   globalSpark.kv = {
     async keys() {
-      if (!remoteKv || shouldUseLocal()) {
-        if (!remoteKv) {
-          logFallback('keys');
-        }
+      const { client, source } = resolveActiveKv();
+
+      if (source === 'local') {
+        logLocalFallback('keys', getFallbackReason());
         return fallbackKeys();
       }
 
-      return remoteKv.keys();
+      try {
+        return await client.keys();
+      } catch (error) {
+        logLocalFallback('keys', `${source} request failed`, error);
+        return fallbackKeys();
+      }
     },
     async get(key: string) {
-      if (!remoteKv || shouldUseLocal()) {
-        if (!remoteKv) {
-          logFallback('get');
-        }
+      const { client, source } = resolveActiveKv();
+
+      if (source === 'local') {
+        logLocalFallback('get', getFallbackReason());
         return fallbackGet(key);
       }
 
-      return remoteKv.get(key);
+      try {
+        return await client.get(key);
+      } catch (error) {
+        logLocalFallback('get', `${source} request failed`, error);
+        return fallbackGet(key);
+      }
     },
     async set(key: string, value: unknown) {
-      if (!remoteKv || shouldUseLocal()) {
-        if (!remoteKv) {
-          logFallback('set');
-        }
+      const { client, source } = resolveActiveKv();
+
+      if (source === 'local') {
+        logLocalFallback('set', getFallbackReason());
         await fallbackSet(key, value);
         return;
       }
 
-      await remoteKv.set(key, value);
+      try {
+        await client.set(key, value);
+      } catch (error) {
+        logLocalFallback('set', `${source} request failed`, error);
+        await fallbackSet(key, value);
+      }
     },
     async delete(key: string) {
-      if (!remoteKv || shouldUseLocal()) {
-        if (!remoteKv) {
-          logFallback('delete');
-        }
+      const { client, source } = resolveActiveKv();
+
+      if (source === 'local') {
+        logLocalFallback('delete', getFallbackReason());
         await fallbackDelete(key);
         return;
       }
 
-      await remoteKv.delete(key);
+      try {
+        await client.delete(key);
+      } catch (error) {
+        logLocalFallback('delete', `${source} request failed`, error);
+        await fallbackDelete(key);
+      }
     },
   };
 };

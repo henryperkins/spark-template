@@ -128,24 +128,29 @@ export class AgenticOrchestrator {
     let response = await this.executeStep(
       workflow,
       'Generator',
-      'Generate initial response',
-      () => generateResponse(query, allSources),
+      allSources.length > 0 ? 'Generate initial response' : 'Generate diagnostic message (no sources)',
+      () => (allSources.length > 0
+        ? generateResponse(query, allSources)
+        : Promise.resolve(this.buildNoSourcesMessage(query, documents, routing?.strategy))),
       emitWorkflowUpdate,
       emitStepEvent
     )
 
-    const validation = await this.executeStep(
-      workflow,
-      'Critic',
-      'Validate response quality',
-      () => this.criticAgent.validateResponse(query, response, allSources),
-      emitWorkflowUpdate,
-      emitStepEvent
-    )
+    let validation: ValidationResult | undefined
+    if (allSources.length > 0) {
+      validation = await this.executeStep(
+        workflow,
+        'Critic',
+        'Validate response quality',
+        () => this.criticAgent.validateResponse(query, response, allSources),
+        emitWorkflowUpdate,
+        emitStepEvent
+      )
+    }
 
     let refinement: ReActResult | undefined
 
-    if (!validation.isValid || validation.faithfulnessScore < 0.7) {
+    if (validation && (!validation.isValid || validation.faithfulnessScore < 0.7)) {
       refinement = await this.executeStep(
         workflow,
         'ReAct',
@@ -154,7 +159,7 @@ export class AgenticOrchestrator {
           query,
           response,
           allSources,
-          validation.issues
+          validation!.issues
         ),
         emitWorkflowUpdate,
         emitStepEvent
@@ -382,6 +387,18 @@ export class AgenticOrchestrator {
 
       return findRelevantChunksLocal(query, documents, 5)
     }
+  }
+
+  private buildNoSourcesMessage(query: string, documents: Document[], strategy?: RetrievalStrategy): string {
+    const totalDocs = documents.length
+    const totalChunks = documents.reduce((acc, d) => acc + (d.chunks?.length || 0), 0)
+    const strat = strategy ?? 'hybrid'
+    return [
+      `I could not retrieve any sources for "${query}".`,
+      `Detected ${totalDocs} documents with ${totalChunks} chunks in the knowledge base.`,
+      `This indicates a retrieval issue (strategy=${strat}).`,
+      `Try re-running or refining the query; if the issue persists, check indexing and hybrid search settings.`
+    ].join(' ')
   }
 
   private generateRunId(): string {

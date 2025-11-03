@@ -5,29 +5,118 @@ export class AzureSearchService {
 
   constructor(config: AzureConfig['search']) {
     this.config = config
+    // Normalize endpoint to avoid accidental double slashes in URLs
+    this.config.endpoint = this.config.endpoint.replace(/\/+$/, '')
+  }
+
+  private shouldProxy(): boolean {
+    return typeof window !== 'undefined'
+  }
+
+  private getBearerToken(): string | undefined {
+    try {
+      if (typeof window !== 'undefined') {
+        const token = window.localStorage?.getItem('KV_API_KEY')
+        return token || undefined
+      }
+    } catch (e) {
+      // ignore storage access errors (Safari ITP, disabled storage, etc.)
+    }
+    return undefined
+  }
+
+  private proxyHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Accept: 'application/json'
+    }
+    const token = this.getBearerToken()
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`
+    }
+    return headers
   }
 
   async testConnection(): Promise<{ success: boolean; error?: string }> {
     try {
-      const response = await fetch(
-        `${this.config.endpoint}/indexes/${this.config.indexName}?api-version=${this.config.apiVersion}`,
-        {
-          method: 'GET',
-          headers: {
-            'api-key': this.config.apiKey,
-            'Content-Type': 'application/json'
-          }
-        }
-      )
+      const pingBody = JSON.stringify({
+        search: '*',
+        queryType: 'simple',
+        top: 0,
+        count: false
+      })
 
-      if (response.status === 404) {
-        // Index doesn't exist, try to create it
-        return this.createSearchIndex()
+      const searchPing = await (this.shouldProxy()
+        ? fetch('/api/azure-search/search', {
+            method: 'POST',
+            headers: this.proxyHeaders(),
+            body: JSON.stringify({
+              indexName: this.config.indexName,
+              apiVersion: this.config.apiVersion,
+              request: JSON.parse(pingBody)
+            })
+          })
+        : fetch(
+            `${this.config.endpoint}/indexes/${this.config.indexName}/docs/search?api-version=${this.config.apiVersion}`,
+            {
+              method: 'POST',
+              headers: {
+                'api-key': this.config.apiKey,
+                'Content-Type': 'application/json',
+                Accept: 'application/json'
+              },
+              body: pingBody
+            }
+          ))
+
+      if (searchPing.ok) {
+        return { success: true }
       }
 
-      if (!response.ok) {
-        const errorText = await response.text()
-        return { success: false, error: `HTTP ${response.status}: ${errorText}` }
+      if (searchPing.status === 404) {
+        // Index doesn't exist, try to create it (requires admin key).
+        const creationResult = await this.createSearchIndex()
+        return creationResult
+      }
+
+      if (searchPing.status === 400) {
+        const errorText = await searchPing.text()
+        if (errorText.includes('Index') && errorText.includes('does not exist')) {
+          return this.createSearchIndex()
+        }
+        return { success: false, error: `HTTP 400: ${errorText}` }
+      }
+
+      if (searchPing.status === 401 || searchPing.status === 403) {
+        const errorText = await searchPing.text()
+        return {
+          success: false,
+          error:
+            'Authentication failed for Azure AI Search. Ensure you are using an admin key for index management or switch to an existing index that is accessible with the provided key. ' +
+            `Details: HTTP ${searchPing.status} ${errorText}`
+        }
+      }
+
+      // Fall back to checking service metadata for other errors
+      const metadataResponse = await (this.shouldProxy()
+        ? fetch(`/api/azure-search/indexes/${encodeURIComponent(this.config.indexName)}?apiVersion=${encodeURIComponent(this.config.apiVersion)}`, {
+            method: 'GET',
+            headers: this.proxyHeaders()
+          })
+        : fetch(
+            `${this.config.endpoint}/indexes/${this.config.indexName}?api-version=${this.config.apiVersion}`,
+            {
+              method: 'GET',
+              headers: {
+                'api-key': this.config.apiKey,
+                'Content-Type': 'application/json'
+              }
+            }
+          ))
+
+      if (!metadataResponse.ok) {
+        const metadataError = await metadataResponse.text()
+        return { success: false, error: `HTTP ${metadataResponse.status}: ${metadataError}` }
       }
 
       return { success: true }
@@ -221,17 +310,26 @@ export class AzureSearchService {
         ]
       }
 
-      const response = await fetch(
-        `${this.config.endpoint}/indexes?api-version=${this.config.apiVersion}`,
-        {
-          method: 'POST',
-          headers: {
-            'api-key': this.config.apiKey,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(indexSchema)
-        }
-      )
+      const response = await (this.shouldProxy()
+        ? fetch('/api/azure-search/create-index', {
+            method: 'POST',
+            headers: this.proxyHeaders(),
+            body: JSON.stringify({
+              apiVersion: this.config.apiVersion,
+              schema: indexSchema
+            })
+          })
+        : fetch(
+            `${this.config.endpoint}/indexes?api-version=${this.config.apiVersion}`,
+            {
+              method: 'POST',
+              headers: {
+                'api-key': this.config.apiKey,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify(indexSchema)
+            }
+          ))
 
       if (!response.ok) {
         const errorText = await response.text()
@@ -254,7 +352,7 @@ export class AzureSearchService {
   async indexDocuments(documents: AzureSearchDocument[], namespace?: string): Promise<{ success: boolean; error?: string }> {
     try {
       const effectiveNamespace = namespace || this.config.namespace || 'default'
-      
+
       const batch = {
         value: documents.map(doc => ({
           '@search.action': 'mergeOrUpload',
@@ -275,17 +373,27 @@ export class AzureSearchService {
         }))
       }
 
-      const response = await fetch(
-        `${this.config.endpoint}/indexes/${this.config.indexName}/docs/index?api-version=${this.config.apiVersion}`,
-        {
-          method: 'POST',
-          headers: {
-            'api-key': this.config.apiKey,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(batch)
-        }
-      )
+      const response = await (this.shouldProxy()
+        ? fetch('/api/azure-search/index', {
+            method: 'POST',
+            headers: this.proxyHeaders(),
+            body: JSON.stringify({
+              indexName: this.config.indexName,
+              apiVersion: this.config.apiVersion,
+              batch
+            })
+          })
+        : fetch(
+            `${this.config.endpoint}/indexes/${this.config.indexName}/docs/index?api-version=${this.config.apiVersion}`,
+            {
+              method: 'POST',
+              headers: {
+                'api-key': this.config.apiKey,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify(batch)
+            }
+          ))
 
       if (!response.ok) {
         const errorText = await response.text()
@@ -294,7 +402,7 @@ export class AzureSearchService {
 
       const result = await response.json()
       const failedDocs = result.value?.filter((item: any) => !item.status || item.status >= 400)
-      
+
       if (failedDocs && failedDocs.length > 0) {
         return { success: false, error: `Some documents failed to index: ${JSON.stringify(failedDocs)}` }
       }
@@ -319,17 +427,27 @@ export class AzureSearchService {
         ]
       }
 
-      const response = await fetch(
-        `${this.config.endpoint}/indexes/${this.config.indexName}/docs/search?api-version=${this.config.apiVersion}`,
-        {
-          method: 'POST',
-          headers: {
-            'api-key': this.config.apiKey,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(searchRequest)
-        }
-      )
+      const response = await (this.shouldProxy()
+        ? fetch('/api/azure-search/search', {
+            method: 'POST',
+            headers: this.proxyHeaders(),
+            body: JSON.stringify({
+              indexName: this.config.indexName,
+              apiVersion: this.config.apiVersion,
+              request: searchRequest
+            })
+          })
+        : fetch(
+            `${this.config.endpoint}/indexes/${this.config.indexName}/docs/search?api-version=${this.config.apiVersion}`,
+            {
+              method: 'POST',
+              headers: {
+                'api-key': this.config.apiKey,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify(searchRequest)
+            }
+          ))
 
       if (!response.ok) {
         const errorText = await response.text()
@@ -337,7 +455,7 @@ export class AzureSearchService {
       }
 
       const result: AzureSearchResult = await response.json()
-      
+
       return result.value.map(doc => ({
         documentId: doc.documentId,
         documentName: doc.documentName,
@@ -367,17 +485,27 @@ export class AzureSearchService {
         searchRequest.filter = `metadata/any(m: contains(m, 'namespace_id":"${effectiveNamespace}"'))`
       }
 
-      const response = await fetch(
-        `${this.config.endpoint}/indexes/${this.config.indexName}/docs/search?api-version=${this.config.apiVersion}`,
-        {
-          method: 'POST',
-          headers: {
-            'api-key': this.config.apiKey,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(searchRequest)
-        }
-      )
+      const response = await (this.shouldProxy()
+        ? fetch('/api/azure-search/search', {
+            method: 'POST',
+            headers: this.proxyHeaders(),
+            body: JSON.stringify({
+              indexName: this.config.indexName,
+              apiVersion: this.config.apiVersion,
+              request: searchRequest
+            })
+          })
+        : fetch(
+            `${this.config.endpoint}/indexes/${this.config.indexName}/docs/search?api-version=${this.config.apiVersion}`,
+            {
+              method: 'POST',
+              headers: {
+                'api-key': this.config.apiKey,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify(searchRequest)
+            }
+          ))
 
       if (!response.ok) {
         const errorText = await response.text()
@@ -425,7 +553,7 @@ export class AzureSearchService {
             k: Math.max(top, 50)
           }
         ]
-        
+
         if (this.config.hybridSearch?.enableRRF) {
           searchRequest.hybridSearch = {
             maxTextRecallSize,
@@ -453,17 +581,27 @@ export class AzureSearchService {
         searchRequest.answers = 'extractive|count-3'
       }
 
-      const response = await fetch(
-        `${this.config.endpoint}/indexes/${this.config.indexName}/docs/search?api-version=${this.config.apiVersion}`,
-        {
-          method: 'POST',
-          headers: {
-            'api-key': this.config.apiKey,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(searchRequest)
-        }
-      )
+      const response = await (this.shouldProxy()
+        ? fetch('/api/azure-search/search', {
+            method: 'POST',
+            headers: this.proxyHeaders(),
+            body: JSON.stringify({
+              indexName: this.config.indexName,
+              apiVersion: this.config.apiVersion,
+              request: searchRequest
+            })
+          })
+        : fetch(
+            `${this.config.endpoint}/indexes/${this.config.indexName}/docs/search?api-version=${this.config.apiVersion}`,
+            {
+              method: 'POST',
+              headers: {
+                'api-key': this.config.apiKey,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify(searchRequest)
+            }
+          ))
 
       if (!response.ok) {
         const errorText = await response.text()
@@ -496,31 +634,31 @@ export class AzureSearchService {
 
   private async applyContextualCompression(sources: Source[], query: string): Promise<Source[]> {
     const compressionRatio = this.config.contextCompression?.compressionRatio ?? 0.5
-    
+
     if (this.config.contextCompression?.method === 'extractive') {
       return sources.map(source => {
         const sentences = source.content.split(/[.!?]+/).filter(s => s.trim().length > 0)
         const targetSentences = Math.max(1, Math.floor(sentences.length * compressionRatio))
-        
+
         const queryWords = new Set(query.toLowerCase().split(/\s+/))
         const scoredSentences = sentences.map(sentence => {
           const sentenceWords = sentence.toLowerCase().split(/\s+/)
           const relevance = sentenceWords.filter(w => queryWords.has(w)).length
           return { sentence, relevance }
         })
-        
+
         const topSentences = scoredSentences
           .sort((a, b) => b.relevance - a.relevance)
           .slice(0, targetSentences)
           .sort((a, b) => sentences.indexOf(a.sentence) - sentences.indexOf(b.sentence))
-        
+
         return {
           ...source,
           content: topSentences.map(s => s.sentence).join('. ') + '.'
         }
       })
     }
-    
+
     return sources
   }
 
@@ -532,17 +670,27 @@ export class AzureSearchService {
         select: 'id'
       }
 
-      const searchResponse = await fetch(
-        `${this.config.endpoint}/indexes/${this.config.indexName}/docs/search?api-version=${this.config.apiVersion}`,
-        {
-          method: 'POST',
-          headers: {
-            'api-key': this.config.apiKey,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(searchRequest)
-        }
-      )
+      const searchResponse = await (this.shouldProxy()
+        ? fetch('/api/azure-search/search', {
+            method: 'POST',
+            headers: this.proxyHeaders(),
+            body: JSON.stringify({
+              indexName: this.config.indexName,
+              apiVersion: this.config.apiVersion,
+              request: searchRequest
+            })
+          })
+        : fetch(
+            `${this.config.endpoint}/indexes/${this.config.indexName}/docs/search?api-version=${this.config.apiVersion}`,
+            {
+              method: 'POST',
+              headers: {
+                'api-key': this.config.apiKey,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify(searchRequest)
+            }
+          ))
 
       if (!searchResponse.ok) {
         const errorText = await searchResponse.text()
@@ -550,7 +698,7 @@ export class AzureSearchService {
       }
 
       const searchResult = await searchResponse.json()
-      
+
       if (!searchResult.value || searchResult.value.length === 0) {
         return { success: true } // No documents to delete
       }
@@ -562,17 +710,27 @@ export class AzureSearchService {
         }))
       }
 
-      const deleteResponse = await fetch(
-        `${this.config.endpoint}/indexes/${this.config.indexName}/docs/index?api-version=${this.config.apiVersion}`,
-        {
-          method: 'POST',
-          headers: {
-            'api-key': this.config.apiKey,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(deleteBatch)
-        }
-      )
+      const deleteResponse = await (this.shouldProxy()
+        ? fetch('/api/azure-search/index', {
+            method: 'POST',
+            headers: this.proxyHeaders(),
+            body: JSON.stringify({
+              indexName: this.config.indexName,
+              apiVersion: this.config.apiVersion,
+              batch: deleteBatch
+            })
+          })
+        : fetch(
+            `${this.config.endpoint}/indexes/${this.config.indexName}/docs/index?api-version=${this.config.apiVersion}`,
+            {
+              method: 'POST',
+              headers: {
+                'api-key': this.config.apiKey,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify(deleteBatch)
+            }
+          ))
 
       if (!deleteResponse.ok) {
         const errorText = await deleteResponse.text()

@@ -13,6 +13,7 @@ import {
   Database,
   CloudArrowUp,
   ChartBar,
+  Bug,
   ArrowsDownUp,
   Gear,
   TreeStructure,
@@ -452,6 +453,11 @@ export function ArchitectureDiagram() {
     ]
   }
 
+  const getLayerConnections = (layerId: string): string[] => {
+    const layer = layers.find(l => l.id === layerId)
+    return layer?.interactions || []
+  }
+
   return (
     <div className="space-y-6">
       <Card>
@@ -480,12 +486,12 @@ export function ArchitectureDiagram() {
                   <h3 className="font-semibold text-lg">System Architecture Overview</h3>
                   <Badge variant="outline">14 Layers</Badge>
                 </div>
-                
+
                 <ScrollArea className="h-[600px] pr-4">
                   <div className="space-y-3">
                     {layers.map((layer, index) => (
                       <div key={layer.id}>
-                        <Card 
+                        <Card
                           className={cn(
                             "transition-all cursor-pointer hover:shadow-lg",
                             selectedLayer === layer.id && "ring-2 ring-primary shadow-lg",
@@ -500,7 +506,7 @@ export function ArchitectureDiagram() {
                               <div className={cn("p-3 rounded-lg text-white", layer.color)}>
                                 {layer.icon}
                               </div>
-                              
+
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-2 mb-1">
                                   <h4 className="font-semibold text-sm">{layer.name}</h4>
@@ -511,7 +517,7 @@ export function ArchitectureDiagram() {
                                 <p className="text-xs text-muted-foreground mb-3">
                                   {layer.description}
                                 </p>
-                                
+
                                 {selectedLayer === layer.id && (
                                   <div className="space-y-3 animate-in slide-in-from-top-2">
                                     <div>
@@ -521,9 +527,9 @@ export function ArchitectureDiagram() {
                                       </div>
                                       <div className="grid grid-cols-2 gap-2">
                                         {layer.components.map((component, idx) => (
-                                          <Badge 
-                                            key={idx} 
-                                            variant="secondary" 
+                                          <Badge
+                                            key={idx}
+                                            variant="secondary"
                                             className="text-xs justify-start"
                                           >
                                             <Circle size={6} className="mr-1.5 flex-shrink-0" />
@@ -532,7 +538,7 @@ export function ArchitectureDiagram() {
                                         ))}
                                       </div>
                                     </div>
-                                    
+
                                     <div>
                                       <div className="text-xs font-medium mb-2 flex items-center gap-2">
                                         <ArrowRight size={14} />
@@ -540,9 +546,9 @@ export function ArchitectureDiagram() {
                                       </div>
                                       <div className="flex flex-wrap gap-2">
                                         {layer.interactions.map((interaction, idx) => (
-                                          <Badge 
-                                            key={idx} 
-                                            variant="outline" 
+                                          <Badge
+                                            key={idx}
+                                            variant="outline"
                                             className="text-xs"
                                           >
                                             {interaction}
@@ -556,7 +562,7 @@ export function ArchitectureDiagram() {
                             </div>
                           </CardContent>
                         </Card>
-                        
+
                         {index < layers.length - 1 && (
                           <div className="flex justify-center py-2">
                             <ArrowRight size={20} className="text-muted-foreground rotate-90" />
@@ -622,7 +628,7 @@ export function ArchitectureDiagram() {
                           <h4 className="font-semibold text-sm mb-2">Components</h4>
                           <div className="grid grid-cols-2 gap-2">
                             {layer.components.map((component, idx) => (
-                              <div 
+                              <div
                                 key={idx}
                                 className="flex items-start gap-2 p-2 bg-muted/50 rounded text-xs"
                               >
@@ -632,9 +638,9 @@ export function ArchitectureDiagram() {
                             ))}
                           </div>
                         </div>
-                        
+
                         <Separator />
-                        
+
                         <div>
                           <h4 className="font-semibold text-sm mb-2">Layer Interactions</h4>
                           <div className="flex flex-wrap gap-2">
@@ -668,7 +674,7 @@ export function ArchitectureDiagram() {
                           </div>
                           <h3 className="font-semibold">{layer.name}</h3>
                         </div>
-                        
+
                         <div className="grid gap-3 ml-12">
                           {components.map((component, idx) => (
                             <Card key={idx} className="bg-muted/30">
@@ -677,7 +683,7 @@ export function ArchitectureDiagram() {
                                 <p className="text-xs text-muted-foreground mb-3">
                                   {component.purpose}
                                 </p>
-                                
+
                                 <div className="space-y-2">
                                   <div>
                                     <span className="text-xs font-medium">Technologies:</span>
@@ -689,7 +695,7 @@ export function ArchitectureDiagram() {
                                       ))}
                                     </div>
                                   </div>
-                                  
+
                                   <div>
                                     <span className="text-xs font-medium">Patterns:</span>
                                     <div className="flex flex-wrap gap-1 mt-1">
@@ -705,7 +711,7 @@ export function ArchitectureDiagram() {
                             </Card>
                           ))}
                         </div>
-                        
+
                         {entryIdx < Object.entries(componentDetails).length - 1 && (
                           <Separator className="my-6" />
                         )}
@@ -734,7 +740,7 @@ export function ArchitectureDiagram() {
                 Runs entirely in the browser using Spark Runtime for LLM access and KV persistence, with optional Azure integration for production scale
               </p>
             </div>
-            
+
             <div className="p-4 bg-primary/5 rounded-lg border border-primary/20">
               <h4 className="font-semibold text-sm mb-2 flex items-center gap-2">
                 <GitBranch size={16} className="text-primary" />
@@ -744,7 +750,7 @@ export function ArchitectureDiagram() {
                 7 specialized agents (Classifier, Planner, Router, Analyzer, Critic, ReAct, Expansion) coordinated by AgenticOrchestrator for intelligent query processing
               </p>
             </div>
-            
+
             <div className="p-4 bg-primary/5 rounded-lg border border-primary/20">
               <h4 className="font-semibold text-sm mb-2 flex items-center gap-2">
                 <ArrowsDownUp size={16} className="text-primary" />
@@ -754,7 +760,7 @@ export function ArchitectureDiagram() {
                 Multi-level caching with TTL, prefix-based invalidation, and semantic drift detection achieving 80%+ cache hit rates
               </p>
             </div>
-            
+
             <div className="p-4 bg-primary/5 rounded-lg border border-primary/20">
               <h4 className="font-semibold text-sm mb-2 flex items-center gap-2">
                 <ShieldCheck size={16} className="text-primary" />

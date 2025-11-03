@@ -10,11 +10,11 @@ export async function intelligentChunkDocument(
 ): Promise<{ chunks: DocumentChunk[]; strategy: ChunkingStrategy }> {
   const analyzer = new DocumentAnalyzerAgent()
   const contentSample = content.substring(0, 500)
-  
+
   const decision = await analyzer.analyzeDocument(fileName, contentSample)
-  
+
   let chunks: DocumentChunk[]
-  
+
   switch (decision.strategy) {
     case 'paragraph':
       chunks = chunkByParagraph(content, documentId, decision.chunkSize, decision.overlap)
@@ -31,7 +31,7 @@ export async function intelligentChunkDocument(
     default:
       chunks = chunkDocument(content, documentId, decision.chunkSize)
   }
-  
+
   return { chunks, strategy: decision.strategy }
 }
 
@@ -58,7 +58,7 @@ function chunkByParagraph(
         documentId,
         chunkIndex
       })
-      
+
       previousOverlap = currentChunk.substring(Math.max(0, currentChunk.length - overlap))
       currentChunk = trimmed
       chunkIndex++
@@ -108,7 +108,7 @@ function chunkBySentence(
         documentId,
         chunkIndex
       })
-      
+
       const overlapSentences = Math.ceil(sentenceBuffer.length * 0.2)
       sentenceBuffer = sentenceBuffer.slice(-overlapSentences)
       currentChunk = sentenceBuffer.join('. ') + '.'
@@ -157,14 +157,14 @@ function chunkByFixed(
   while (position < content.length) {
     const end = Math.min(position + chunkSize, content.length)
     const chunk = content.substring(position, end)
-    
+
     chunks.push({
       id: `${documentId}-chunk-${chunkIndex}`,
       content: chunk.trim(),
       documentId,
       chunkIndex
     })
-    
+
     position += chunkSize - overlap
     chunkIndex++
   }
@@ -229,13 +229,13 @@ export function chunkDocument(content: string, documentId: string, maxChunkSize:
 export function calculateSimilarity(query: string, chunk: DocumentChunk): number {
   const queryWords = query.toLowerCase().split(/\s+/)
   const chunkWords = chunk.content.toLowerCase().split(/\s+/)
-  
+
   const querySet = new Set(queryWords)
   const chunkSet = new Set(chunkWords)
-  
+
   const intersection = new Set([...querySet].filter(word => chunkSet.has(word)))
   const union = new Set([...querySet, ...chunkSet])
-  
+
   return intersection.size / union.size
 }
 
@@ -247,7 +247,7 @@ export async function findRelevantChunks(
 ): Promise<Source[]> {
   const normalizedQuery = query.trim().toLowerCase()
   const documentFingerprint = documents
-    .filter(doc => doc.processed && doc.chunks)
+    .filter(doc => doc.chunks && doc.chunks.length > 0)
     .map(doc => `${doc.id}:${doc.chunks.length}:${doc.azureIndexed ? '1' : '0'}`)
     .sort()
     .join('|') || 'no-docs'
@@ -282,28 +282,39 @@ export async function findRelevantChunks(
 
 export function findRelevantChunksLocal(query: string, documents: Document[], maxResults: number = 5): Source[] {
   const allChunks: Array<{ chunk: DocumentChunk; document: Document }> = []
-  
+
   documents.forEach(doc => {
-    if (doc.processed && doc.chunks) {
+    if (doc.chunks && doc.chunks.length > 0) {
       doc.chunks.forEach(chunk => {
         allChunks.push({ chunk, document: doc })
       })
     }
   })
 
-  const scoredChunks = allChunks
+  const scored = allChunks
     .map(({ chunk, document }) => ({
       documentId: document.id,
       documentName: document.name,
       chunkId: chunk.id,
       content: chunk.content,
-      relevanceScore: calculateSimilarity(query, chunk)
+      relevanceScore: calculateSimilarity(query, chunk),
     }))
-    .filter(source => source.relevanceScore > 0.1)
     .sort((a, b) => b.relevanceScore - a.relevanceScore)
-    .slice(0, maxResults)
 
-  return scoredChunks
+  // Primary lexical threshold
+  let filtered = scored.filter(s => s.relevanceScore > 0.1)
+
+  // If nothing passes, relax threshold
+  if (filtered.length === 0) {
+    filtered = scored.filter(s => s.relevanceScore > 0.0)
+  }
+
+  // Still nothing? Return top-N by heuristic score (may be 0 but avoids total failure)
+  if (filtered.length === 0 && scored.length > 0) {
+    filtered = scored.slice(0, maxResults)
+  }
+
+  return filtered.slice(0, maxResults)
 }
 
 export async function generateResponse(query: string, sources: Source[]): Promise<string> {

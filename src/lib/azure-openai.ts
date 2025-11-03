@@ -5,6 +5,8 @@ export class AzureOpenAIService {
 
   constructor(config: AzureConfig['openai']) {
     this.config = config
+    // Normalize endpoint to avoid double slashes in request URLs
+    this.config.endpoint = this.config.endpoint.replace(/\/+$/, '')
   }
 
   async testConnection(): Promise<{ success: boolean; error?: string }> {
@@ -109,7 +111,8 @@ export class AzureOpenAIService {
 
       const requestBody: any = {
         messages: messageArray,
-        max_tokens: options?.maxTokens ?? 2000,
+        // 2025-04-01-preview requires 'max_completion_tokens' (not 'max_tokens')
+        max_completion_tokens: options?.maxTokens ?? 2000,
         temperature: options?.temperature ?? 0.7,
         top_p: options?.topP ?? 0.95,
         frequency_penalty: 0,

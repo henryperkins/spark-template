@@ -1,8 +1,22 @@
-/// <reference types="@cloudflare/workers-types" />
-/**
- * Cloudflare Worker entry point
- * Serves the React SPA and provides API endpoints for KV operations
- */
+ // <reference types="@cloudflare/workers-types" />
+ /**
+  * Cloudflare Worker entry point
+  * Serves the React SPA and provides API endpoints for KV operations
+  */
+
+ // Local fallbacks for types to avoid editor/tsserver resolution issues
+ // (build still succeeds with official Workers types in production)
+ type KVNamespaceListOptions = {
+   prefix?: string
+   cursor?: string
+   limit?: number
+ }
+ // Fallback CF types if Workers types aren't available in local tsserver
+ // (Build uses official @cloudflare/workers-types via triple-slash reference)
+ type KVNamespace = any
+ type R2Bucket = any
+ type Fetcher = any
+ type ExecutionContext = any
 
 export interface Env {
   RAG_KV: KVNamespace
@@ -12,10 +26,14 @@ export interface Env {
   VITE_AZURE_OPENAI_KEY?: string
   VITE_AZURE_SEARCH_KEY?: string
   LOGS_API_KEY?: string
+  KV_API_KEY?: string
   // Optional legacy KV for one-shot migration
   LEGACY_KV?: KVNamespace
   // Secret key to authorize migration
   MIGRATION_KEY?: string
+  // Azure Search (server-side)
+  AZURE_SEARCH_ENDPOINT?: string
+  AZURE_SEARCH_KEY?: string
 }
 
 // Structured log types
@@ -45,6 +63,8 @@ function logStructured(entry: Omit<LogEntry, 'timestamp'>): void {
 const ALLOWED_ORIGINS = [
   'https://spark.example.com',
   'https://staging.spark.example.com',
+  'https://paradigmfind.com',
+  'https://www.paradigmfind.com',
 ]
 
 function isOriginAllowed(request: Request): boolean {
@@ -94,6 +114,26 @@ export default {
         })
 
         return response
+      }
+
+      // API endpoint for Azure Search proxy (avoids CORS)
+      if (url.pathname.startsWith('/api/azure-search')) {
+        return handleAzureSearchRequest(request, env)
+      }
+
+      // Health/ping for Spark front-end integrations
+      if (url.pathname === '/_spark/loaded') {
+        const corsHeaders = corsHeadersFor(request, { methods: ['GET', 'OPTIONS'] })
+        if (request.method === 'OPTIONS') {
+          if (!isOriginAllowed(request)) {
+            return new Response('CORS origin not allowed', { status: 403, headers: corsHeaders })
+          }
+          return new Response(null, { headers: corsHeaders })
+        }
+        if (request.headers.get('Origin') && !isOriginAllowed(request)) {
+          return new Response('CORS origin not allowed', { status: 403, headers: corsHeaders })
+        }
+        return Response.json({ loaded: true }, { headers: corsHeaders })
       }
 
       // API endpoint for accessing logs
@@ -149,7 +189,10 @@ async function handleKVRequest(request: Request, env: Env): Promise<Response> {
   const key = path.slice(1) // Remove leading slash
 
   // CORS headers for restricted origins
-  const corsHeaders = corsHeadersFor(request, { methods: ['GET', 'POST', 'DELETE', 'OPTIONS'] })
+  const corsHeaders = corsHeadersFor(request, {
+    methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+    allowAuth: true,
+  })
 
   // Handle preflight
   if (request.method === 'OPTIONS') {
@@ -164,18 +207,65 @@ async function handleKVRequest(request: Request, env: Env): Promise<Response> {
     return new Response('CORS origin not allowed', { status: 403, headers: corsHeaders })
   }
 
+  const expectedApiKey = env.KV_API_KEY
+  if (!expectedApiKey) {
+    logStructured({
+      level: 'error',
+      event: 'kv_api_key_missing',
+    })
+    return new Response('KV API key not configured', { status: 503, headers: corsHeaders })
+  }
+
+  const authHeader = request.headers.get('Authorization') || ''
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : authHeader.trim()
+  if (!token || token !== expectedApiKey) {
+    logStructured({
+      level: 'warn',
+      event: 'kv_auth_failed',
+      method: request.method,
+      path: url.pathname,
+    })
+    return new Response('Unauthorized', { status: 401, headers: corsHeaders })
+  }
+
   try {
     switch (request.method) {
       case 'GET': {
         if (!key) {
           // List all keys
-          const keys = await env.RAG_KV.list()
+          const cursorParam = url.searchParams.get('cursor') ?? undefined
+          const prefixParam = url.searchParams.get('prefix') ?? undefined
+          const limitParam = url.searchParams.get('limit')
+          const parsedLimit = limitParam ? Number.parseInt(limitParam, 10) : undefined
+          const safeLimit =
+            parsedLimit && Number.isFinite(parsedLimit) && parsedLimit > 0
+              ? Math.min(parsedLimit, 1000)
+              : undefined
+
+          const listOptions: { cursor?: string; prefix?: string; limit?: number } = {}
+          if (cursorParam) listOptions.cursor = cursorParam
+          if (prefixParam) listOptions.prefix = prefixParam
+          if (safeLimit) listOptions.limit = safeLimit
+
+          const listed = await env.RAG_KV.list(listOptions as KVNamespaceListOptions)
           logStructured({
             level: 'info',
             event: 'kv_list_keys',
-            metadata: { count: keys.keys.length },
+            metadata: {
+              count: listed.keys.length,
+              cursorSupplied: Boolean(cursorParam),
+              nextCursor: listed.cursor ?? null,
+              listComplete: listed.list_complete ?? false,
+            },
           })
-          return Response.json(keys.keys.map((k: { name: string }) => k.name), { headers: corsHeaders })
+          return Response.json(
+            {
+              keys: listed.keys.map((k: { name: string }) => k.name),
+              cursor: listed.cursor ?? null,
+              list_complete: listed.list_complete ?? false,
+            },
+            { headers: corsHeaders }
+          )
         }
 
         // Get single key
@@ -251,6 +341,155 @@ async function handleKVRequest(request: Request, env: Env): Promise<Response> {
 }
 
 /**
+ * Handle Azure Search proxy requests (server-side fetch to avoid browser CORS)
+ */
+async function handleAzureSearchRequest(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url)
+  const corsHeaders = corsHeadersFor(request, { methods: ['GET', 'POST', 'OPTIONS'], allowAuth: true })
+
+  // Preflight
+  if (request.method === 'OPTIONS') {
+    if (!isOriginAllowed(request)) {
+      return new Response('CORS origin not allowed', { status: 403, headers: corsHeaders })
+    }
+    return new Response(null, { headers: corsHeaders })
+  }
+
+  // Enforce CORS allowlist
+  if (request.headers.get('Origin') && !isOriginAllowed(request)) {
+    return new Response('CORS origin not allowed', { status: 403, headers: corsHeaders })
+  }
+
+  // Optional bearer enforcement (reuse KV_API_KEY if configured)
+  const expectedBearer = (env as any).KV_API_KEY as string | undefined
+  if (expectedBearer) {
+    const authHeader = request.headers.get('Authorization') || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : authHeader.trim()
+    if (!token || token !== expectedBearer) {
+      return new Response('Unauthorized', { status: 401, headers: corsHeaders })
+    }
+  }
+
+  // Resolve Azure Search endpoint and key (prefer server-side names, then VITE_ fallbacks)
+  const rawEndpoint =
+    env.AZURE_SEARCH_ENDPOINT ||
+    (env as any).VITE_AZURE_SEARCH_ENDPOINT
+  const endpoint = (rawEndpoint || '').replace(/\/+$/, '')
+  const apiKey =
+    env.AZURE_SEARCH_KEY ||
+    (env as any).VITE_AZURE_SEARCH_KEY
+
+  if (!endpoint || !apiKey) {
+    return new Response('Azure Search not configured', { status: 503, headers: corsHeaders })
+  }
+
+  try {
+    // POST /api/azure-search/search
+    if (request.method === 'POST' && url.pathname === '/api/azure-search/search') {
+      const body = (await request.json()) as {
+        indexName: string
+        apiVersion?: string
+        request: Record<string, unknown>
+      }
+      if (!body?.indexName || !body?.request) {
+        return new Response('indexName and request required', { status: 400, headers: corsHeaders })
+      }
+      const apiVersion = body.apiVersion || '2025-08-01-preview'
+      const forwardUrl = `${endpoint}/indexes/${encodeURIComponent(body.indexName)}/docs/search?api-version=${encodeURIComponent(apiVersion)}`
+      const resp = await fetch(forwardUrl, {
+        method: 'POST',
+        headers: { 'api-key': apiKey, 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(body.request),
+      })
+      const text = await resp.text()
+      return new Response(text, {
+        status: resp.status,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+
+    // POST /api/azure-search/index  (documents index endpoint)
+    if (request.method === 'POST' && url.pathname === '/api/azure-search/index') {
+      const body = (await request.json()) as {
+        indexName: string
+        apiVersion?: string
+        batch: Record<string, unknown>
+      }
+      if (!body?.indexName || !body?.batch) {
+        return new Response('indexName and batch required', { status: 400, headers: corsHeaders })
+      }
+      const apiVersion = body.apiVersion || '2025-08-01-preview'
+      const forwardUrl = `${endpoint}/indexes/${encodeURIComponent(body.indexName)}/docs/index?api-version=${encodeURIComponent(apiVersion)}`
+      const resp = await fetch(forwardUrl, {
+        method: 'POST',
+        headers: { 'api-key': apiKey, 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(body.batch),
+      })
+      const text = await resp.text()
+      return new Response(text, {
+        status: resp.status,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+
+    // POST /api/azure-search/create-index
+    if (request.method === 'POST' && url.pathname === '/api/azure-search/create-index') {
+      const body = (await request.json()) as {
+        apiVersion?: string
+        schema: Record<string, unknown>
+      }
+      if (!body?.schema) {
+        return new Response('schema required', { status: 400, headers: corsHeaders })
+      }
+      const apiVersion = body.apiVersion || '2025-08-01-preview'
+      const forwardUrl = `${endpoint}/indexes?api-version=${encodeURIComponent(apiVersion)}`
+      const resp = await fetch(forwardUrl, {
+        method: 'POST',
+        headers: { 'api-key': apiKey, 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(body.schema),
+      })
+      const text = await resp.text()
+      return new Response(text, {
+        status: resp.status,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+
+    // GET /api/azure-search/indexes/:index (metadata)
+    if (request.method === 'GET' && url.pathname.startsWith('/api/azure-search/indexes/')) {
+      const parts = url.pathname.split('/')
+      const indexName = decodeURIComponent(parts[parts.length - 1] || '')
+      if (!indexName) {
+        return new Response('index required', { status: 400, headers: corsHeaders })
+      }
+      const apiVersion = url.searchParams.get('apiVersion') || '2025-08-01-preview'
+      const forwardUrl = `${endpoint}/indexes/${encodeURIComponent(indexName)}?api-version=${encodeURIComponent(apiVersion)}`
+      const resp = await fetch(forwardUrl, {
+        method: 'GET',
+        headers: { 'api-key': apiKey, Accept: 'application/json' },
+      })
+      const text = await resp.text()
+      return new Response(text, {
+        status: resp.status,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+
+    return new Response('Not Found', { status: 404, headers: corsHeaders })
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error)
+    logStructured({
+      level: 'error',
+      event: 'azure_search_proxy_error',
+      method: request.method,
+      path: url.pathname,
+      error: message,
+    })
+    return new Response(message || 'Internal server error', { status: 500, headers: corsHeaders })
+  }
+}
+
+/**
  * Handle Logs API requests
  * Provides programmatic access to Logpush logs stored in R2
  */
@@ -296,7 +535,12 @@ async function handleLogsRequest(request: Request, env: Env): Promise<Response> 
             files: listed.objects.map((obj: any) => ({
               key: obj.key,
               size: obj.size,
-              uploaded: obj.uploaded.toISOString(),
+              uploaded: (() => {
+                if (typeof obj.uploaded === 'string') return obj.uploaded
+                if (obj.uploaded instanceof Date) return obj.uploaded.toISOString()
+                const asDate = new Date(obj.uploaded as any)
+                return Number.isNaN(asDate.getTime()) ? String(obj.uploaded ?? '') : asDate.toISOString()
+              })(),
             })),
             truncated: listed.truncated,
           },
@@ -365,14 +609,15 @@ async function handleLogsRequest(request: Request, env: Env): Promise<Response> 
       default:
         return new Response('Invalid action', { status: 400, headers: corsHeaders })
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : String(error)
     logStructured({
       level: 'error',
       event: 'logs_api_error',
-      error: error.message,
+      error: errorMessage,
     })
 
-    return new Response(error.message || 'Internal server error', {
+    return new Response(errorMessage || 'Internal server error', {
       status: 500,
       headers: corsHeaders,
     })

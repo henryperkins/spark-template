@@ -48,6 +48,11 @@ preview_id = "ddc0a1afeb0141719657098396b17bd7"  # Preview namespace ID
 # Environment variables (non-sensitive, exposed to client via VITE_ prefix)
 [vars]
 VITE_APP_ENV = "production"
+VITE_AZURE_OPENAI_ENDPOINT = "https://thefoundry.openai.azure.com/"
+VITE_AZURE_SEARCH_ENDPOINT = "https://thesearch.search.windows.net"
+VITE_AZURE_OPENAI_DEPLOYMENT = "gpt-5-mini"
+VITE_AZURE_OPENAI_EMBEDDING_DEPLOYMENT = "text-embedding-3-large"
+VITE_AZURE_SEARCH_INDEX = "documents"
 
 # Secrets (sensitive values - use: npx wrangler secret put <KEY_NAME>)
 # After deployment, run these commands:
@@ -55,4 +60,5 @@ VITE_APP_ENV = "production"
 # npx wrangler secret put VITE_AZURE_OPENAI_KEY (if using Azure)
 # npx wrangler secret put VITE_AZURE_SEARCH_KEY (if using Azure)
 # npx wrangler secret put LOGS_API_KEY       # used to authorize /api/logs (Bearer token)
+# npx wrangler secret put KV_API_KEY         # used to authorize /api/kv (Bearer token) → must match Authorization: Bearer sent by the client
 # npx wrangler secret put MIGRATION_KEY      # used to authorize /api/migrate (Bearer token)
