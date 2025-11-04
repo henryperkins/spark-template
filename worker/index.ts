@@ -21,9 +21,19 @@ interface R2ObjectLike {
 
  // Fallback CF types if Workers types aren't available in local tsserver
  // (Build uses official @cloudflare/workers-types via triple-slash reference)
- type KVNamespace = unknown
- type R2Bucket = unknown
- type Fetcher = unknown
+ interface KVNamespace {
+   get(key: string, options?: { type?: 'text' | 'json' | 'arrayBuffer' | 'stream' }): Promise<unknown>
+   put(key: string, value: string | ArrayBuffer | ReadableStream): Promise<void>
+   delete(key: string): Promise<void>
+   list(options?: { prefix?: string; cursor?: string; limit?: number }): Promise<{ keys: Array<{ name: string }>; cursor?: string; list_complete?: boolean }>
+ }
+ interface R2Bucket {
+   get(key: string): Promise<{ text(): Promise<string>; size: number } | null>
+   list(options?: { limit?: number }): Promise<{ objects: Array<R2ObjectLike>; truncated?: boolean }>
+ }
+ interface Fetcher {
+   fetch(request: Request): Promise<Response>
+ }
  type ExecutionContext = unknown
 
 export interface Env {
@@ -161,7 +171,7 @@ export default {
       }
 
       // Serve static assets (React app)
-      const response = await env.ASSETS.fetch(request)
+      const response = await (env.ASSETS as any).fetch(request)
 
       // Only log non-asset requests to reduce noise
       if (!url.pathname.match(/\.(js|css|png|jpg|svg|ico|woff2?)$/)) {
@@ -261,29 +271,29 @@ async function handleKVRequest(request: Request, env: Env): Promise<Response> {
           if (prefixParam) listOptions.prefix = prefixParam
           if (safeLimit) listOptions.limit = safeLimit
 
-          const listed = await env.RAG_KV.list(listOptions as KVNamespaceListOptions)
+          const listed = await (env.RAG_KV as any).list(listOptions as KVNamespaceListOptions)
           logStructured({
             level: 'info',
             event: 'kv_list_keys',
             metadata: {
-              count: listed.keys.length,
+              count: (listed as any).keys.length,
               cursorSupplied: Boolean(cursorParam),
-              nextCursor: listed.cursor ?? null,
-              listComplete: listed.list_complete ?? false,
+              nextCursor: (listed as any).cursor ?? null,
+              listComplete: (listed as any).list_complete ?? false,
             },
           })
           return Response.json(
             {
-              keys: listed.keys.map((k: { name: string }) => k.name),
-              cursor: listed.cursor ?? null,
-              list_complete: listed.list_complete ?? false,
+              keys: (listed as any).keys.map((k: { name: string }) => k.name),
+              cursor: (listed as any).cursor ?? null,
+              list_complete: (listed as any).list_complete ?? false,
             },
             { headers: corsHeaders }
           )
         }
 
         // Get single key
-        const value = await env.RAG_KV.get(key, { type: 'json' })
+        const value = await (env.RAG_KV as any).get(key, { type: 'json' })
         if (value === null) {
           logStructured({
             level: 'warn',
@@ -307,7 +317,7 @@ async function handleKVRequest(request: Request, env: Env): Promise<Response> {
         }
 
         const body = await request.text()
-        await env.RAG_KV.put(key, body)
+        await (env.RAG_KV as any).put(key, body)
 
         logStructured({
           level: 'info',
@@ -324,7 +334,7 @@ async function handleKVRequest(request: Request, env: Env): Promise<Response> {
           return new Response('Key required', { status: 400, headers: corsHeaders })
         }
 
-        await env.RAG_KV.delete(key)
+        await (env.RAG_KV as any).delete(key)
 
         logStructured({
           level: 'info',
@@ -543,7 +553,7 @@ async function handleLogsRequest(request: Request, env: Env): Promise<Response> 
       case 'list': {
         // List recent log files
         const limit = parseInt(url.searchParams.get('limit') || '10')
-        const listed = await env.LOGS.list({ limit })
+        const listed = await (env.LOGS as any).list({ limit })
 
         logStructured({
           level: 'info',
@@ -576,7 +586,7 @@ async function handleLogsRequest(request: Request, env: Env): Promise<Response> 
           return new Response('Key parameter required', { status: 400, headers: corsHeaders })
         }
 
-        const object = await env.LOGS.get(key)
+        const object = await (env.LOGS as any).get(key)
         if (!object) {
           return new Response('Log file not found', { status: 404, headers: corsHeaders })
         }
@@ -595,14 +605,14 @@ async function handleLogsRequest(request: Request, env: Env): Promise<Response> 
       case 'recent': {
         // Get most recent log entries
         const limit = parseInt(url.searchParams.get('limit') || '100')
-        const listed = await env.LOGS.list({ limit: 1 })
+        const listed = await (env.LOGS as any).list({ limit: 1 })
 
         if (listed.objects.length === 0) {
           return Response.json({ logs: [] }, { headers: corsHeaders })
         }
 
         const latestFile = listed.objects[0]
-        const object = await env.LOGS.get(latestFile.key)
+        const object = await (env.LOGS as any).get(latestFile.key)
 
         if (!object) {
           return Response.json({ logs: [] }, { headers: corsHeaders })
@@ -712,13 +722,13 @@ async function handleMigrationRequest(request: Request, env: Env): Promise<Respo
         scanned += 1
 
         try {
-          const value = await env.LEGACY_KV!.get(k.name)
+          const value = await (env.LEGACY_KV as any)!.get(k.name)
           if (value === null) {
             skipped += 1
             continue
           }
           if (!dryRun) {
-            await env.RAG_KV.put(k.name, value)
+            await (env.RAG_KV as any).put(k.name, value)
           }
           copied += 1
         } catch (e: unknown) {

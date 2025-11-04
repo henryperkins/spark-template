@@ -127,14 +127,13 @@ export function ArchitectureDiagram() {
       components: [
         'AgenticOrchestrator Engine',
         'Workflow Step Tracking',
-        'Agent Communication Pipeline',
         'Error Recovery & Fallbacks',
         'Execution Timing Metrics',
         'State Management'
       ],
       icon: <Brain size={20} />,
       accent: 'orchestration',
-      interactions: ['Agent Layer', 'Retrieval Layer', 'LLM Services']
+      interactions: ['Agent Layer', 'Retrieval Layer', 'LLM Services', 'Observability Layer', 'Cache Layer']
     },
     {
       id: 'agents',
@@ -144,14 +143,14 @@ export function ArchitectureDiagram() {
         'QueryClassifierAgent (complexity analysis)',
         'QueryPlannerAgent (decomposition)',
         'RoutingAgent (vector/keyword/hybrid)',
-        'DocumentAnalyzerAgent (chunking strategy)',
+        'DocumentAnalyzerAgent (chunking strategy, ingestion-only, optional)',
         'CriticAgent (hallucination detection)',
         'ReActAgent (iterative refinement)',
         'QueryExpansionAgent (related questions)'
       ],
       icon: <GitBranch size={20} />,
       accent: 'agents',
-      interactions: ['LLM Services', 'Retrieval Layer', 'Cache Layer']
+      interactions: ['LLM Services', 'Retrieval Layer', 'Cache Layer', 'Observability Layer']
     },
     {
       id: 'llm-services',
@@ -275,15 +274,13 @@ export function ArchitectureDiagram() {
       components: [
         'AgentWorkflowVisualizer',
         'ScalingDashboard (metrics)',
-        'Workflow Step Tracking',
-        'Performance Timing',
         'Cache Hit Rate Monitoring',
-        'Error Logging (console)',
+        'Error Tracking, Analytics Emission, UI Surfacing',
         'Quality Metrics (faithfulness, relevance)'
       ],
       icon: <Eye size={20} />,
       accent: 'observability',
-      interactions: ['Orchestration Layer', 'Cache Layer', 'UI Components']
+      interactions: ['Orchestration Layer', 'Cache Layer', 'Document Processing Layer', 'LLM Services Layer', 'UI Components']
     },
     {
       id: 'infrastructure',
@@ -469,6 +466,138 @@ export function ArchitectureDiagram() {
         purpose: 'Unified ingestion from files, GitHub, websites, Dropbox, OneDrive',
         technologies: ['File API', 'GitHub API', 'Web Scraping', 'OAuth'],
         patterns: ['Adapter Pattern', 'Source Attribution', 'Metadata Preservation']
+      }
+    ],
+    'security': [
+      {
+        name: 'Client-side KV Storage',
+        purpose: 'Browser-based storage for Azure API keys using Spark KV with localStorage fallback',
+        technologies: ['Spark KV API', 'localStorage', 'Cloudflare KV REST API'],
+        patterns: ['Secure Storage', 'Runtime Detection', 'Fallback Strategy']
+      },
+      {
+        name: 'OAuth Token Management',
+        purpose: 'Manages access tokens for GitHub, Dropbox, OneDrive integrations',
+        technologies: ['Bearer Tokens', 'OAuth 2.0', 'Token Refresh'],
+        patterns: ['Token Lifecycle', 'Secure Transmission', 'Client-side Validation']
+      },
+      {
+        name: 'Input Sanitization',
+        purpose: 'Sanitizes user queries to prevent prompt injection and jailbreak attempts',
+        technologies: ['Regex Filtering', 'PII Redaction', 'Length Enforcement'],
+        patterns: ['Input Validation', 'Prompt Safety', 'Content Filtering']
+      }
+    ],
+    'llm-services': [
+      {
+        name: 'LLMService',
+        purpose: 'Unified LLM interface with Azure OpenAI primary and Spark fallback',
+        technologies: ['Azure OpenAI', 'Spark Runtime LLM', 'Token Bucket Rate Limiting'],
+        patterns: ['Provider Abstraction', 'Retry with Backoff', 'Timeout Management']
+      },
+      {
+        name: 'Prompt Engineering',
+        purpose: 'Utilities for sanitization, tokenization, truncation, and JSON output enforcement',
+        technologies: ['tiktoken', 'Prompt Templates', 'Context Truncation'],
+        patterns: ['Template Method', 'Token Estimation', 'Safe Interpolation']
+      },
+      {
+        name: 'Response Parsing',
+        purpose: 'Parses JSON from LLM responses with fallback extraction (markdown, substring)',
+        technologies: ['JSON.parse', 'Regex Extraction', 'Error Recovery'],
+        patterns: ['Lenient Parsing', 'Fallback Chain', 'Schema Validation (Zod)']
+      }
+    ],
+    'vector-store': [
+      {
+        name: 'In-Memory Vector Store',
+        purpose: 'Browser-based vector storage with cosine similarity search',
+        technologies: ['JavaScript Arrays', 'Cosine Similarity', 'Embedding Cache'],
+        patterns: ['In-Memory Index', 'Linear Scan', 'Score Normalization']
+      },
+      {
+        name: 'Azure AI Search Integration',
+        purpose: 'Enterprise vector search with HNSW indexing, semantic ranking, and compression',
+        technologies: ['Azure AI Search API', 'HNSW Algorithm', 'Scalar/Binary Compression'],
+        patterns: ['External Index', 'Hybrid Search', 'Semantic Reranking']
+      },
+      {
+        name: 'Vector Namespace Management',
+        purpose: 'Isolates embeddings by version, tenant, and environment with namespace isolation',
+        technologies: ['Namespace Manager', 'Checksum-based Versioning'],
+        patterns: ['Multi-tenancy', 'Version Control', 'Namespace Isolation']
+      }
+    ],
+    'document-store': [
+      {
+        name: 'useSparkKV Hook',
+        purpose: 'React hook for persistent document storage with automatic sync to Cloudflare KV or localStorage',
+        technologies: ['React Hooks', 'Spark KV', 'Cloudflare KV', 'localStorage'],
+        patterns: ['Custom Hook', 'Auto-sync', 'Optimistic Updates']
+      },
+      {
+        name: 'Document Metadata Storage',
+        purpose: 'Stores document metadata including source, processing status, Azure indexing state',
+        technologies: ['JSON Serialization', 'KV Namespacing (rag-documents)'],
+        patterns: ['Metadata Schema', 'Status Tracking', 'Source Attribution']
+      },
+      {
+        name: 'Chunk Storage & Indexing',
+        purpose: 'Stores document chunks with embeddings, chunkIndex, and optional Azure vectorId',
+        technologies: ['Structured Clone', 'Embedding Arrays', 'Chunk Metadata'],
+        patterns: ['Hierarchical Storage', 'Chunk Versioning', 'ID Generation']
+      }
+    ],
+    'observability': [
+      {
+        name: 'AgentWorkflowVisualizer',
+        purpose: 'Real-time timeline visualization of agent steps with status, duration, and results',
+        technologies: ['Framer Motion', 'React State', 'Phosphor Icons'],
+        patterns: ['Timeline UI', 'Progressive Disclosure', 'Live Updates']
+      },
+      {
+        name: 'Telemetry Service',
+        purpose: 'Emits agent step events and alerts to Spark analytics with fallback console logging',
+        technologies: ['Spark Telemetry SDK', 'Structured Events'],
+        patterns: ['Event Emission', 'Telemetry Sink Abstraction', 'Dev Fallback']
+      },
+      {
+        name: 'Error Tracking Service',
+        purpose: 'Classifies, aggregates, and analyzes errors by type (LLM, retrieval, network) and agent',
+        technologies: ['In-Memory Store', 'Error Classification', 'Metrics Aggregation'],
+        patterns: ['Error Categorization', 'Retention Limit', 'Trend Analysis']
+      },
+      {
+        name: 'Token & Cost Tracker',
+        purpose: 'Tracks LLM token usage, estimates costs per model, enforces daily budgets with alerts',
+        technologies: ['Model Pricing Tables', 'Spark KV Budget Persistence'],
+        patterns: ['Usage Metering', 'Budget Enforcement', 'Cost Estimation']
+      }
+    ],
+    'infrastructure': [
+      {
+        name: 'Cloudflare Workers Runtime',
+        purpose: 'Edge API gateway serving SPA, KV bridge, logs, Azure Search proxy, and migration endpoints',
+        technologies: ['Cloudflare Workers', 'KV Bindings', 'R2 Logpush', 'CORS Middleware'],
+        patterns: ['API Gateway', 'Bearer Auth', 'Structured Logging', 'Static Asset Serving']
+      },
+      {
+        name: 'Vite Build System',
+        purpose: 'Fast builds with React SWC, Tailwind CSS 4, WASM support, and Spark plugin integration',
+        technologies: ['Vite 6', 'SWC', 'Tailwind CSS', 'WASM Plugin', 'Spark Plugin'],
+        patterns: ['Plugin Architecture', 'Phosphor Icon Proxy', 'Path Aliases (@/*)']
+      },
+      {
+        name: 'Runtime Environment Detection',
+        purpose: 'Auto-detects Cloudflare Workers, KV config, Azure config to select storage and LLM providers',
+        technologies: ['Environment Variables', 'Domain Detection (.workers.dev)'],
+        patterns: ['Runtime Abstraction', 'Auto-configuration', 'Fallback Chains']
+      },
+      {
+        name: 'Spark Fallback System',
+        purpose: 'Fetch interceptor providing localStorage and mock LLM fallbacks when Spark/Azure unavailable',
+        technologies: ['Fetch Interception', 'In-Memory KV', 'Mock LLM Responses'],
+        patterns: ['Transparent Fallback', 'Mode Switching', 'Auto-recovery']
       }
     ]
   }

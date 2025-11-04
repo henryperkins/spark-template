@@ -20,9 +20,9 @@ import {
 } from '@phosphor-icons/react'
 import { Document } from '@/types'
 import { embeddingManager, type RefreshResult } from '@/lib/embedding-manager'
-import { cacheManager, type CacheMetrics } from '@/lib/cache-manager'
-import { tokenTracker } from '@/lib/services/token-tracker'
-import { errorTracking, type ErrorMetrics } from '@/lib/services/error-tracker'
+import { cacheManager, type CacheMetrics, type CacheInvalidationEvent } from '@/lib/cache-manager'
+import { tokenTracker, type ModelStats } from '@/lib/services/token-tracker'
+import { errorTracking, type ErrorMetrics, type ErrorEvent } from '@/lib/services/error-tracker'
 import { AlertPanel } from './AlertPanel'
 import { toast } from 'sonner'
 
@@ -382,7 +382,7 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
                       <div className="space-y-2">
                         <h4 className="font-medium text-sm">Recent Invalidations</h4>
                         <div className="space-y-2">
-                          {cacheMetrics.recentInvalidations.slice(0, 5).map((event: unknown, idx: number) => (
+                          {cacheMetrics.recentInvalidations.slice(0, 5).map((event: CacheInvalidationEvent, idx: number) => (
                             <div key={idx} className="p-2 bg-muted rounded-md text-xs">
                               <div className="flex items-center justify-between mb-1">
                                 <Badge variant="outline" className="text-xs">
@@ -558,7 +558,7 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
                   <div className="space-y-2">
                     <h4 className="font-medium text-sm">Usage by Model</h4>
                     <div className="space-y-2">
-                      {Object.entries(tokenMetrics.byModel).map(([model, stats]: [string, unknown]) => (
+                      {Object.entries(tokenMetrics.byModel).map(([model, stats]: [string, ModelStats]) => (
                         <div key={model} className="p-3 bg-muted rounded-lg">
                           <div className="flex items-center justify-between mb-2">
                             <span className="font-medium text-sm">{model}</span>
@@ -661,7 +661,7 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
                       <div className="space-y-2">
                         <h4 className="font-medium text-sm">Recent Errors</h4>
                         <div className="space-y-2 max-h-60 overflow-y-auto">
-                          {errorMetrics.recentErrors.map((error: unknown) => (
+                          {errorMetrics.recentErrors.map((error: ErrorEvent) => (
                             <div key={error.errorId} className="p-3 bg-destructive/10 rounded-lg text-xs">
                               <div className="flex items-center justify-between mb-1">
                                 <div className="flex items-center gap-2">

@@ -191,7 +191,7 @@ export class AzureSearchService {
         ]
       }
 
-      const indexSchema: unknown = {
+      const indexSchema: Record<string, unknown> = {
         name: this.config.indexName,
         fields: [
           {
@@ -442,7 +442,7 @@ export class AzureSearchService {
       }
 
       const result = await response.json()
-      const failedDocs = result.value?.filter((item: unknown) => !item.status || item.status >= 400)
+      const failedDocs = result.value?.filter((item: { status?: number }) => !item.status || item.status >= 400)
 
       if (failedDocs && failedDocs.length > 0) {
         return { success: false, error: `Some documents failed to index: ${JSON.stringify(failedDocs)}` }
@@ -513,7 +513,7 @@ export class AzureSearchService {
 
   async keywordSearch(query: string, top: number = 5, namespace?: string): Promise<Source[]> {
     try {
-      const searchRequest: unknown = {
+      const searchRequest: Record<string, unknown> = {
         search: query,
         searchMode: 'all',
         queryType: 'simple',
@@ -553,15 +553,15 @@ export class AzureSearchService {
         throw new Error(`Keyword search failed: ${response.status} ${errorText}`)
       }
 
-      const result: unknown = await response.json()
+      const result: { value: Array<Record<string, unknown>> } = await response.json()
 
-      return result.value.map((doc: unknown) => ({
-        documentId: doc.documentId,
-        documentName: doc.documentName,
-        chunkId: doc.id,
-        content: doc.content,
-        relevanceScore: doc['@search.score'] ? doc['@search.score'] / 100 : 0.6,
-        azureScore: doc['@search.score'] || 60
+      return result.value.map((doc: Record<string, unknown>) => ({
+        documentId: doc.documentId as string,
+        documentName: doc.documentName as string,
+        chunkId: doc.id as string,
+        content: doc.content as string,
+        relevanceScore: doc['@search.score'] ? (doc['@search.score'] as number) / 100 : 0.6,
+        azureScore: (doc['@search.score'] as number | undefined) || 60
       }))
     } catch (error) {
       console.error('Error performing keyword search:', error)
@@ -577,7 +577,7 @@ export class AzureSearchService {
       const effectiveNamespace = namespace || this.config.namespace
       const maxTextRecallSize = this.config.hybridSearch?.maxTextRecallSize ?? 2000
 
-      const searchRequest: unknown = {
+      const searchRequest: Record<string, unknown> = {
         search: query,
         count: true,
         select: 'id,content,documentId,documentName,chunkIndex,createdAt,contentLength,metadata',
@@ -649,17 +649,17 @@ export class AzureSearchService {
         throw new Error(`Semantic hybrid search failed: ${response.status} ${errorText}`)
       }
 
-      const result: unknown = await response.json()
+      const result: { value: Array<Record<string, unknown>> } = await response.json()
 
-      let sources = result.value.map((doc: unknown) => ({
-        documentId: doc.documentId,
-        documentName: doc.documentName,
-        chunkId: doc.id,
-        content: doc.content,
-        relevanceScore: doc['@search.score'] ? doc['@search.score'] / 100 : 0.85,
-        azureScore: doc['@search.score'] || 85,
-        semanticCaption: doc['@search.captions']?.[0]?.text,
-        semanticRerankerScore: doc['@search.rerankerScore']
+      let sources: Source[] = result.value.map((doc: Record<string, unknown>) => ({
+        documentId: doc.documentId as string,
+        documentName: doc.documentName as string,
+        chunkId: doc.id as string,
+        content: doc.content as string,
+        relevanceScore: doc['@search.score'] ? (doc['@search.score'] as number) / 100 : 0.85,
+        azureScore: (doc['@search.score'] as number | undefined) ?? 85,
+        semanticCaption: (doc['@search.captions'] as Array<{ text?: string }> | undefined)?.[0]?.text,
+        semanticRerankerScore: doc['@search.rerankerScore'] as number | undefined
       }))
 
       if (this.config.contextCompression?.enabled && this.config.contextCompression.method !== 'none') {
@@ -745,7 +745,7 @@ export class AzureSearchService {
       }
 
       const deleteBatch = {
-        value: searchResult.value.map((doc: unknown) => ({
+        value: searchResult.value.map((doc: { id: string }) => ({
           '@search.action': 'delete',
           id: doc.id
         }))

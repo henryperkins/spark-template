@@ -141,6 +141,14 @@ Your agents currently suffer from **context amnesia** - each agent operates in a
 
 ---
 
+## Current Implementation Notes (v2025.11)
+
+- Orchestrator: Synchronous step chaining (executeStep) with workflow telemetry events; there is no AgentBus/message queue yet.
+- Retrieval Routing (local mode): Router strategy is enforced even without Azure Search.
+  - Vector: uses existing chunk embeddings; computes query embedding via Azure OpenAI if available; otherwise degrades to keyword.
+  - Hybrid: fuses vector and keyword lists via RRF; if vector is unavailable, falls back to keyword.
+- Transparent Degradation: When Azure retrieval fails or is not configured, the Retrieval step emits status “degraded” and the Query UI shows a banner. Caching keeps azure/local results separated to avoid mode mixing.
+
 ## Context Object Design
 
 Here's the comprehensive solution:

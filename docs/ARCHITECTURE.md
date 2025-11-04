@@ -53,6 +53,13 @@ This application implements production-ready agentic RAG patterns based on indus
 - **Intelligent Indexing**: Adaptive document processing based on content analysis
 - **Enterprise Integration**: Azure OpenAI and Azure AI Search for security and scale
 
+### Degraded Operation & Fallbacks
+
+- **Azure-optional retrieval**: When Azure AI Search is unavailable or fails, the system transparently switches to local retrieval while honoring the Router’s strategy (vector | keyword | hybrid).
+- **Local Vector**: Uses existing chunk embeddings (azureEmbedding or embedding) and attempts query embeddings via Azure OpenAI when available; if embeddings are unavailable, vector degrades to keyword deterministically.
+- **Local Hybrid**: Executes vector and keyword locally and fuses with Reciprocal Rank Fusion (RRF). If vector candidates are unavailable, hybrid falls back to keyword.
+- **Telemetry & UI**: Retrieval steps emit status “degraded” and the Query UI surfaces a banner when Azure fallback occurs. Mode-specific caches prevent mixing Azure and local results for the same query/doc state.
+
 ### 📊 Quality Metrics
 
 Each response includes:
@@ -73,7 +80,7 @@ Classifier Agent → Complexity Assessment
     ↓
 ┌─────────────┬─────────────┐
 │   Simple    │   Complex   │
-↓             ↓             
+↓             ↓
 Routing Agent   Query Planner
 ↓             ↓
 Retrieval     Sub-Query Execution
@@ -86,6 +93,8 @@ ReAct Refinement (if needed)
 ↓
 Final Response
 ```
+
+Note: The current implementation uses synchronous step chaining within the orchestrator (no global message bus). Agent decisions are passed through structured return values and tracked in workflow telemetry. A dedicated AgentBus may be introduced in a future iteration.
 
 ### Document Processing
 

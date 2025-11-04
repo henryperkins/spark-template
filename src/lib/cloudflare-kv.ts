@@ -65,7 +65,8 @@ export class CloudflareKV implements CloudflareKVAdapter {
 
   private getBearerToken(): string | undefined {
     // Prefer compile-time env for production builds; allow runtime override via localStorage for dev
-    const fromEnv = (import.meta as unknown).env?.VITE_KV_API_KEY as string | undefined
+    const env = (import.meta as any)?.env
+    const fromEnv = env?.VITE_KV_API_KEY as string | undefined
     let fromLocal: string | undefined
     if (typeof window !== 'undefined') {
       fromLocal = window.localStorage?.getItem('KV_API_KEY') ?? undefined
@@ -93,7 +94,7 @@ export class CloudflareKV implements CloudflareKVAdapter {
       headers: {
         ...this.headers,
         ...authHeaders,
-        ...(options.headers as unknown),
+        ...(options.headers || {}),
       },
     })
 
@@ -172,7 +173,8 @@ export class CloudflareKV implements CloudflareKVAdapter {
         }
       }
     } catch (error: unknown) {
-      if (error.message?.includes('404')) {
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      if (errorMessage.includes('404')) {
         return undefined
       }
       console.error(`${LOG_PREFIX} Failed to get key "${key}":`, error)
@@ -211,7 +213,8 @@ export class CloudflareKV implements CloudflareKVAdapter {
       console.debug(`${LOG_PREFIX} Deleted key "${key}"`)
     } catch (error: unknown) {
       // Ignore 404 errors on delete
-      if (!error.message?.includes('404')) {
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      if (!errorMessage.includes('404')) {
         console.error(`${LOG_PREFIX} Failed to delete key "${key}":`, error)
         throw error
       }

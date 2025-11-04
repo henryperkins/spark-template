@@ -1,4 +1,4 @@
-export type AgentStepStatus = 'running' | 'completed' | 'failed' | 'pending'
+export type AgentStepStatus = 'running' | 'completed' | 'failed' | 'pending' | 'degraded'
 
 export interface AgentStepEvent {
   type: 'agent_step_status'

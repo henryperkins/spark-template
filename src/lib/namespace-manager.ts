@@ -30,23 +30,24 @@ export class NamespaceManager {
     }
 
     const key = this.buildNamespaceKey(namespace.id)
-    await (window as unknown).spark.kv.set(key, namespace)
+    await (window.spark!.kv)!.set(key, namespace)
     
     return namespace
   }
 
   async getNamespace(namespaceId: string): Promise<NamespaceConfig | null> {
     const key = this.buildNamespaceKey(namespaceId)
-    return await (window as unknown).spark.kv.get(key) || null
+    const result = await (window.spark!.kv)!.get(key)
+    return (result as NamespaceConfig | undefined) || null
   }
 
   async listNamespaces(): Promise<NamespaceConfig[]> {
-    const allKeys = await (window as unknown).spark.kv.keys()
+    const allKeys = await (window.spark!.kv)!.keys()
     const namespaceKeys = allKeys.filter((key: string) => key.startsWith(this.NAMESPACE_PREFIX))
     
     const namespaces: NamespaceConfig[] = []
     for (const key of namespaceKeys) {
-      const namespace = await (window as unknown).spark.kv.get(key)
+      const namespace = await (window.spark!.kv)!.get(key) as NamespaceConfig | null
       if (namespace) {
         namespaces.push(namespace)
       }
@@ -60,13 +61,13 @@ export class NamespaceManager {
     if (namespace) {
       namespace.documentCount = Math.max(0, namespace.documentCount + delta)
       const key = this.buildNamespaceKey(namespaceId)
-      await (window as unknown).spark.kv.set(key, namespace)
+      await (window.spark!.kv)!.set(key, namespace)
     }
   }
 
   async deleteNamespace(namespaceId: string): Promise<void> {
     const key = this.buildNamespaceKey(namespaceId)
-    await (window as unknown).spark.kv.delete(key)
+    await (window.spark!.kv)!.delete(key)
   }
 
   buildMetadataFilter(

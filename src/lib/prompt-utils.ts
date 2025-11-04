@@ -48,7 +48,8 @@ export function sanitizeQueryForPrompt(input: string): string {
 function getEncodingForModel(modelName?: string) {
   try {
     if (modelName) {
-      return encoding_for_model(modelName as unknown)
+      // Type assertion to satisfy tiktoken's expected model type
+      return encoding_for_model(modelName as 'gpt-4' | 'gpt-3.5-turbo')
     }
   } catch {
     // ignore and try explicit encodings

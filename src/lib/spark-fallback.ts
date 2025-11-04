@@ -17,6 +17,9 @@ interface SparkFallbackControls {
 
 export interface SparkGlobal {
   kv?: CloudflareKVAdapter;
+  llm?: (prompt: string, model?: string, forceJson?: boolean) => Promise<string>;
+  llmPrompt?: (...args: unknown[]) => string;
+  user?: unknown;
   sparkFallback?: SparkFallbackControls;
 }
 
@@ -457,7 +460,7 @@ export const installSparkFallbacks = () => {
     return;
   }
 
-  const globalSpark: SparkGlobal = ((window as unknown).spark ??= {}) as SparkGlobal;
+  const globalSpark: SparkGlobal = (window.spark ??= {} as never) as unknown as SparkGlobal;
   const remoteKv: SparkKv | undefined = globalSpark.kv;
 
   const resolveActiveKv = (): { client: SparkKv; source: KvSource } => {
@@ -564,6 +567,6 @@ export const getActiveSparkKv = (): SparkKv => {
     return fallbackKv;
   }
 
-  const globalSpark: SparkGlobal = ((window as unknown).spark ??= {}) as SparkGlobal;
+  const globalSpark: SparkGlobal = (window.spark ??= {} as never) as unknown as SparkGlobal;
   return globalSpark.kv ?? fallbackKv;
 };

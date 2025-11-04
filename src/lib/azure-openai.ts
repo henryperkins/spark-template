@@ -86,7 +86,7 @@ export class AzureOpenAIService {
       }
 
       const data = await response.json()
-      return data.data.map((item: unknown) => item.embedding)
+      return data.data.map((item: { embedding: number[] }) => item.embedding)
     } catch (error) {
       console.error('Error generating batch embeddings:', error)
       throw error
@@ -109,7 +109,7 @@ export class AzureOpenAIService {
         ? [{ role: 'user', content: messages }]
         : messages
 
-      const requestBody: unknown = {
+      const requestBody: Record<string, unknown> = {
         messages: messageArray,
         max_tokens: options?.maxTokens ?? 2000,
         temperature: options?.temperature ?? 0.7,

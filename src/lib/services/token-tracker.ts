@@ -10,7 +10,7 @@ class StorageManager {
   async get(key: string): Promise<string | null> {
     // Try Spark KV first
     try {
-      const spark = (window as unknown).spark
+      const spark = window.spark
       if (spark?.kv) {
         const value = await spark.kv.get(key)
         return value ? String(value) : null
@@ -26,7 +26,7 @@ class StorageManager {
   async set(key: string, value: string): Promise<void> {
     // Try Spark KV first
     try {
-      const spark = (window as unknown).spark
+      const spark = window.spark
       if (spark?.kv) {
         await spark.kv.set(key, value)
         return
@@ -42,7 +42,7 @@ class StorageManager {
   async delete(key: string): Promise<void> {
     // Try Spark KV first
     try {
-      const spark = (window as unknown).spark
+      const spark = window.spark
       if (spark?.kv) {
         await spark.kv.delete(key)
         return
@@ -57,6 +57,12 @@ class StorageManager {
 }
 
 const storage = new StorageManager()
+
+export interface ModelStats {
+  count: number
+  totalTokens: number
+  totalCost: number
+}
 
 export interface LLMUsageMetrics {
   promptTokens: number

@@ -67,7 +67,7 @@ export class LLMService {
   }
 
   private async withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-    let timeoutId: unknown
+    let timeoutId: ReturnType<typeof setTimeout> | undefined
     const timeoutPromise = new Promise<never>((_, reject) => {
       timeoutId = setTimeout(() => {
         reject(new LLMError('ETIMEDOUT', `LLM request timed out after ${timeoutMs}ms`))
@@ -77,7 +77,9 @@ export class LLMService {
       const result = await Promise.race([promise, timeoutPromise])
       return result as T
     } finally {
-      clearTimeout(timeoutId)
+      if (timeoutId !== undefined) {
+        clearTimeout(timeoutId)
+      }
     }
   }
 
@@ -231,7 +233,7 @@ export class LLMService {
         ? prompt
         : prompt.map(message => message.content).join('\n')
 
-    const spark = (window as unknown).spark
+    const spark = window.spark
 
     if (!spark?.llm) {
       throw new LLMError(
@@ -286,8 +288,8 @@ export class LLMService {
     const timeoutMs = Math.max(1000, appConfig.llm.timeoutMs)
 
     try {
-      if (azureServiceManager.isConfigured() && (azureServiceManager as unknown).generateStream) {
-        const stream = await (azureServiceManager as unknown).generateStream(prompt, {
+      if (azureServiceManager.isConfigured() && (azureServiceManager as {generateStream?: unknown}).generateStream) {
+        const stream = await (azureServiceManager as unknown as { generateStream: (prompt: CompletionPayload, options: unknown) => Promise<unknown> }).generateStream(prompt, {
           maxTokens: options.maxTokens,
           temperature: options.temperature,
           topP: options.topP

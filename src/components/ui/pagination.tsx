@@ -2,7 +2,7 @@ import { ComponentProps } from "react"
 import { CaretLeft as ChevronLeftIcon, CaretRight as ChevronRightIcon, DotsThree as MoreHorizontalIcon } from "@phosphor-icons/react"
 
 import { cn } from "@/lib/utils"
-import { Button, buttonVariants } from "@/components/ui/button-variants"
+import { Button, buttonVariants } from "@/components/ui/button"
 
 function Pagination({ className, ...props }: ComponentProps<"nav">) {
   return (
@@ -63,12 +63,13 @@ function PaginationLink({
 
 function PaginationPrevious({
   className,
+  size = "default",
   ...props
 }: ComponentProps<typeof PaginationLink>) {
   return (
     <PaginationLink
       aria-label="Go to previous page"
-      size="default"
+      size={size}
       className={cn("gap-1 px-2.5 sm:pl-2.5", className)}
       {...props}
     >
@@ -80,12 +81,13 @@ function PaginationPrevious({
 
 function PaginationNext({
   className,
+  size = "default",
   ...props
 }: ComponentProps<typeof PaginationLink>) {
   return (
     <PaginationLink
       aria-label="Go to next page"
-      size="default"
+      size={size}
       className={cn("gap-1 px-2.5 sm:pr-2.5", className)}
       {...props}
     >

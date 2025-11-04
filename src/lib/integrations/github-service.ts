@@ -90,8 +90,8 @@ export class GitHubService {
     const data = await response.json()
     
     return data.tree
-      .filter((item: unknown) => item.type === 'blob' && this.isTextFile(item.path))
-      .map((item: unknown) => ({
+      .filter((item: { type: string; path: string }) => item.type === 'blob' && this.isTextFile(item.path))
+      .map((item: { path: string; sha: string; size: number }) => ({
         name: item.path.split('/').pop(),
         path: item.path,
         type: 'file',

@@ -132,7 +132,7 @@ Iteration: ${iteration}
 Provide a brief thought about the next improvement step.`
 
     try {
-      const prompt = (window as unknown).spark.llmPrompt`${systemPrompt}
+      const prompt = `${systemPrompt}
 
 Query: ${sanitizeQueryForPrompt(query)}
 Current response: ${currentResponse}
@@ -204,7 +204,7 @@ Source documents:
 ${contextSnippets}`
 
     try {
-      const prompt = (window as unknown).spark.llmPrompt`${systemPrompt}
+      const prompt = `${systemPrompt}
 
 Refinement plan:
 ${thought ?? '(none provided)'}

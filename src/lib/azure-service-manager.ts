@@ -50,6 +50,21 @@ export class AzureServiceManager {
     return this.openaiService !== null && this.searchService !== null
   }
 
+  hasOpenAI(): boolean {
+    return this.openaiService !== null
+  }
+
+  async tryGenerateQueryEmbedding(query: string): Promise<number[] | null> {
+    if (!this.openaiService) {
+      return null
+    }
+    try {
+      return await this.openaiService.generateEmbedding(query)
+    } catch {
+      return null
+    }
+  }
+
   async processDocumentWithAzure(document: Document): Promise<Document> {
     if (!this.isConfigured()) {
       throw new Error('Azure services not configured')
