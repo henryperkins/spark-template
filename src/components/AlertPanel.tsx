@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Bell, X, CheckCircle } from '@phosphor-icons/react'
+import { Bell, X, CheckCircle, WarningCircle, XCircle } from '@phosphor-icons/react'
 import { useSparkKV } from '@/hooks/use-spark-kv'
 
 interface SystemAlert {
@@ -63,7 +63,11 @@ export function AlertPanel() {
   }
 
   const getAlertIcon = (severity: 'warning' | 'error') => {
-    return severity === 'error' ? '🔴' : '⚠️'
+    return severity === 'error' ? (
+      <XCircle size={16} className="text-status-error" weight="fill" />
+    ) : (
+      <WarningCircle size={16} className="text-status-warning" weight="fill" />
+    )
   }
 
   return (
@@ -103,7 +107,7 @@ export function AlertPanel() {
       <CardContent>
         {alertList.length === 0 ? (
           <div className="text-center py-8">
-            <CheckCircle size={48} className="mx-auto text-green-600 mb-2" />
+            <CheckCircle size={48} className="mx-auto text-status-success mb-2" />
             <p className="text-sm text-muted-foreground">No alerts</p>
             <p className="text-xs text-muted-foreground mt-1">
               System is operating normally
@@ -120,7 +124,7 @@ export function AlertPanel() {
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex-1">
                     <AlertTitle className="flex items-center gap-2 mb-1">
-                      <span>{getAlertIcon(alert.severity)}</span>
+                      {getAlertIcon(alert.severity)}
                       <span className="capitalize">{alert.code.replace(/_/g, ' ')}</span>
                       {alert.agent && (
                         <Badge variant="outline" className="text-xs">

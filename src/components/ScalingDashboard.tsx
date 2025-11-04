@@ -16,7 +16,8 @@ import {
   Clock,
   Trash,
   CurrencyDollar,
-  WarningCircle
+  WarningCircle,
+  Bug
 } from '@phosphor-icons/react'
 import { Document } from '@/types'
 import { embeddingManager, type RefreshResult } from '@/lib/embedding-manager'
@@ -24,6 +25,7 @@ import { cacheManager, type CacheMetrics, type CacheInvalidationEvent } from '@/
 import { tokenTracker, type ModelStats } from '@/lib/services/token-tracker'
 import { errorTracking, type ErrorMetrics, type ErrorEvent } from '@/lib/services/error-tracker'
 import { AlertPanel } from './AlertPanel'
+import { SearchDebugger } from './SearchDebugger'
 import { toast } from 'sonner'
 
 interface ScalingDashboardProps {
@@ -177,7 +179,7 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
       <AlertPanel />
 
       <Tabs defaultValue="embeddings" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-5 max-w-3xl">
+        <TabsList className="grid w-full grid-cols-6 max-w-4xl">
           <TabsTrigger value="embeddings">
             <Database size={16} className="mr-2" />
             Embeddings
@@ -197,6 +199,10 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
           <TabsTrigger value="metrics">
             <ChartBar size={16} className="mr-2" />
             Metrics
+          </TabsTrigger>
+          <TabsTrigger value="debug">
+            <Bug size={16} className="mr-2" />
+            Search Debug
           </TabsTrigger>
         </TabsList>
 
@@ -256,7 +262,7 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
                   </div>
                   <div className="space-y-1">
                     <div className="text-sm text-muted-foreground">Needing Refresh</div>
-                    <div className="text-2xl font-bold text-orange-600">
+                    <div className="text-2xl font-bold text-orange-11">
                       {refreshMetrics.needingRefresh}
                     </div>
                   </div>
@@ -299,13 +305,13 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
                 <h4 className="font-medium text-sm">Volatility-Based Refresh Intervals</h4>
                 <div className="grid grid-cols-3 gap-2">
                   <Badge variant="outline" className="justify-center py-2">
-                    <span className="text-red-600 mr-1">●</span> High: 1 day
+                    <span className="text-red-11 mr-1">●</span> High: 1 day
                   </Badge>
                   <Badge variant="outline" className="justify-center py-2">
-                    <span className="text-orange-600 mr-1">●</span> Medium: 7 days
+                    <span className="text-orange-11 mr-1">●</span> Medium: 7 days
                   </Badge>
                   <Badge variant="outline" className="justify-center py-2">
-                    <span className="text-green-600 mr-1">●</span> Low: 30 days
+                    <span className="text-green-11 mr-1">●</span> Low: 30 days
                   </Badge>
                 </div>
               </div>
@@ -344,13 +350,13 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
                     </div>
                     <div className="space-y-1">
                       <div className="text-sm text-muted-foreground">Hit Rate</div>
-                      <div className="text-2xl font-bold text-green-600">
+                      <div className="text-2xl font-bold text-green-11">
                         {(cacheMetrics.hitRate * 100).toFixed(1)}%
                       </div>
                     </div>
                     <div className="space-y-1">
                       <div className="text-sm text-muted-foreground">Stale Entries</div>
-                      <div className="text-2xl font-bold text-orange-600">
+                      <div className="text-2xl font-bold text-orange-11">
                         {cacheMetrics.staleEntries}
                       </div>
                     </div>
@@ -473,9 +479,9 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
                     {Object.entries(refreshMetrics.byVolatility).map(([volatility, count]) => (
                       <div key={volatility} className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
-                          {volatility === 'high' && <Warning size={16} className="text-red-600" />}
-                          {volatility === 'medium' && <Clock size={16} className="text-orange-600" />}
-                          {volatility === 'low' && <CheckCircle size={16} className="text-green-600" />}
+                          {volatility === 'high' && <Warning size={16} className="text-red-11" />}
+                          {volatility === 'medium' && <Clock size={16} className="text-orange-11" />}
+                          {volatility === 'low' && <CheckCircle size={16} className="text-green-11" />}
                           <span className="capitalize">{volatility}</span>
                         </div>
                         <Badge>{count as number} docs</Badge>
@@ -511,7 +517,7 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
                     </div>
                     <div className="space-y-1">
                       <div className="text-sm text-muted-foreground">Today's Cost</div>
-                      <div className="text-2xl font-bold text-green-600">
+                      <div className="text-2xl font-bold text-green-11">
                         ${tokenMetrics.daily.cost.toFixed(3)}
                       </div>
                     </div>
@@ -599,7 +605,7 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-1">
                       <div className="text-sm text-muted-foreground">Error Rate (last hour)</div>
-                      <div className="text-2xl font-bold text-red-600">
+                      <div className="text-2xl font-bold text-red-11">
                         {errorMetrics.errorRate}
                       </div>
                     </div>
@@ -732,9 +738,9 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
                     {Object.entries(refreshMetrics.byVolatility).map(([volatility, count]) => (
                       <div key={volatility} className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
-                          {volatility === 'high' && <Warning size={16} className="text-red-600" />}
-                          {volatility === 'medium' && <Clock size={16} className="text-orange-600" />}
-                          {volatility === 'low' && <CheckCircle size={16} className="text-green-600" />}
+                          {volatility === 'high' && <Warning size={16} className="text-red-11" />}
+                          {volatility === 'medium' && <Clock size={16} className="text-orange-11" />}
+                          {volatility === 'low' && <CheckCircle size={16} className="text-green-11" />}
                           <span className="capitalize">{volatility}</span>
                         </div>
                         <Badge>{count as number} docs</Badge>
@@ -745,6 +751,10 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
               </Card>
             )}
           </div>
+        </TabsContent>
+
+        <TabsContent value="debug" className="space-y-4">
+          <SearchDebugger documents={documents} />
         </TabsContent>
       </Tabs>
     </div>

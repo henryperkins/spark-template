@@ -30,6 +30,14 @@ const getExecutionMode = (): string | undefined => {
 
 const isDevEnvironment = (): boolean => getExecutionMode() !== 'production'
 
+const ENABLE_ANALYTICS = (() => {
+  try {
+    return import.meta?.env?.VITE_ENABLE_ANALYTICS === 'true'
+  } catch {
+    return false
+  }
+})()
+
 const computeEndpoint = (): string | null => {
   if (typeof window === 'undefined') {
     return null
@@ -51,6 +59,7 @@ const computeEndpoint = (): string | null => {
 
 class AnalyticsBackend {
   private endpoint: string | null
+  private static warnedNoEndpoint = false
 
   constructor() {
     this.endpoint = computeEndpoint()
@@ -68,11 +77,23 @@ class AnalyticsBackend {
   }
 
   async send(event: string, data: unknown): Promise<void> {
+    if (!ENABLE_ANALYTICS) {
+      if (isDevEnvironment()) {
+        console.debug('[analytics-backend disabled]', event, data)
+      }
+      return
+    }
+
     const endpoint = this.refreshEndpoint()
 
     if (!endpoint) {
       if (isDevEnvironment()) {
         console.debug('[analytics-backend skipped]', event, data)
+      } else if (!AnalyticsBackend.warnedNoEndpoint) {
+        console.warn(
+          '[analytics-backend] No endpoint configured; events will be dropped. Configure VITE_ANALYTICS_ENDPOINT or disable via VITE_ENABLE_ANALYTICS=false.'
+        )
+        AnalyticsBackend.warnedNoEndpoint = true
       }
       return
     }

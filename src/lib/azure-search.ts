@@ -427,6 +427,7 @@ export class AzureSearchService {
         if (missingFieldMessageMatch && allowSchemaRefresh) {
           const refreshResult = await this.createSearchIndex()
           if (!refreshResult.success) {
+            console.error('Schema refresh failed:', refreshResult.error)
             return {
               success: false,
               error: `Indexing failed after attempting to refresh index schema: ${refreshResult.error || 'Unknown schema refresh error'}. Original error: ${errorText}`
@@ -781,6 +782,80 @@ export class AzureSearchService {
       return { success: true }
     } catch (error) {
       return { success: false, error: `Delete failed: ${error instanceof Error ? error.message : 'Unknown error'}` }
+    }
+  }
+
+  async testAnalyzer(text: string, analyzer: string = 'en.microsoft'): Promise<{ tokens: Array<{ token: string; startOffset: number; endOffset: number; position: number }>; error?: string }> {
+    try {
+      const analyzeRequest = {
+        text,
+        analyzer
+      }
+
+      const response = await (this.shouldProxy()
+        ? fetch('/api/azure-search/analyze', {
+            method: 'POST',
+            headers: this.proxyHeaders(),
+            body: JSON.stringify({
+              indexName: this.config.indexName,
+              apiVersion: this.config.apiVersion,
+              request: analyzeRequest
+            })
+          })
+        : fetch(
+            `${this.config.endpoint}/indexes/${this.config.indexName}/analyze?api-version=${this.config.apiVersion}`,
+            {
+              method: 'POST',
+              headers: {
+                'api-key': this.config.apiKey,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify(analyzeRequest)
+            }
+          ))
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        return { tokens: [], error: `Analyzer test failed: ${response.status} ${errorText}` }
+      }
+
+      const result = await response.json()
+      return { tokens: result.tokens || [] }
+    } catch (error) {
+      return { tokens: [], error: `Analyzer test failed: ${error instanceof Error ? error.message : 'Unknown error'}` }
+    }
+  }
+
+  async getIndexStats(): Promise<{ documentCount: number; storageSize: number; error?: string }> {
+    try {
+      const response = await (this.shouldProxy()
+        ? fetch(`/api/azure-search/indexes/${encodeURIComponent(this.config.indexName)}/stats?apiVersion=${encodeURIComponent(this.config.apiVersion)}`, {
+            method: 'GET',
+            headers: this.proxyHeaders()
+          })
+        : fetch(
+            `${this.config.endpoint}/indexes/${this.config.indexName}/stats?api-version=${this.config.apiVersion}`,
+            {
+              method: 'GET',
+              headers: {
+                'api-key': this.config.apiKey,
+                'Content-Type': 'application/json'
+              }
+            }
+          ))
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        return { documentCount: 0, storageSize: 0, error: `Failed to get index stats: ${response.status} ${errorText}` }
+      }
+
+      const result = await response.json()
+      return {
+        documentCount: result.documentCount || 0,
+        storageSize: result.storageSize || 0
+      }
+    } catch (error) {
+      return { documentCount: 0, storageSize: 0, error: `Failed to get index stats: ${error instanceof Error ? error.message : 'Unknown error'}` }
     }
   }
 }

@@ -36,15 +36,15 @@ export function SuggestedQuestions({ expansion, onQuestionSelect, loading = fals
   const getCategoryColor = (category: string) => {
     switch (category) {
       case 'clarification':
-        return 'bg-blue-100 text-blue-700 border-blue-200'
+        return 'bg-blue-2 text-blue-11 border-blue-9'
       case 'related':
-        return 'bg-purple-100 text-purple-700 border-purple-200'
+        return 'bg-purple-2 text-purple-11 border-purple-9'
       case 'deeper':
-        return 'bg-green-100 text-green-700 border-green-200'
+        return 'bg-green-2 text-green-11 border-green-9'
       case 'broader':
-        return 'bg-orange-100 text-orange-700 border-orange-200'
+        return 'bg-orange-2 text-orange-11 border-orange-9'
       default:
-        return 'bg-gray-100 text-gray-700 border-gray-200'
+        return 'bg-neutral-2 text-neutral-11 border-neutral-9'
     }
   }
 

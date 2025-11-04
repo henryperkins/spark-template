@@ -1,11 +1,11 @@
 
-/* Azure AI Search REST client for 2025-08-01-preview */
+/* Azure AI Search REST client for 2025-09-01 (stable) */
 
 export type BearerProvider = () => Promise<string>
 
 export interface SearchRestClientOptions {
   endpoint: string            // e.g., https://{service}.search.windows.net
-  apiVersion?: string         // default 2025-08-01-preview
+  apiVersion?: string         // default 2025-09-01 (stable)
   apiKey?: string             // admin or query key
   useRBAC?: boolean           // when true, use bearerProvider()
   bearerProvider?: BearerProvider // provides 'Bearer <token>'
@@ -22,7 +22,7 @@ export class SearchRestClient {
 
   constructor(options: SearchRestClientOptions) {
     this.endpoint = options.endpoint.replace(/\/+$/, '')
-    this.apiVersion = options.apiVersion ?? '2025-08-01-preview'
+    this.apiVersion = options.apiVersion ?? '2025-09-01'
     this.apiKey = options.apiKey
     this.useRBAC = options.useRBAC ?? false
     this.bearerProvider = options.bearerProvider

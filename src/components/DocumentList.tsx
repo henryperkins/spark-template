@@ -151,7 +151,7 @@ export function DocumentList({ documents, onDeleteDocument }: DocumentListProps)
                     </a>
                   )}
                   {document.errorMessage && (
-                    <p className="text-xs text-red-500 mt-1">
+                    <p className="text-xs text-status-error mt-1">
                       Error: {document.errorMessage}
                     </p>
                   )}

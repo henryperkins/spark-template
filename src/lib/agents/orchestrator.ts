@@ -10,6 +10,7 @@ import { azureServiceManager } from '../azure-service-manager'
 import { AgentStepEvent, telemetry } from '../services/telemetry'
 import { agentAnalytics } from '../services/agent-analytics'
 import { errorTracking } from '../services/error-tracker'
+import { queryHistoryService } from '../services/query-history'
 
 export interface AgentWorkflowStep {
   agent: string
@@ -188,7 +189,7 @@ export class AgenticOrchestrator {
 
     const totalDuration = Date.now() - startTime
 
-    return {
+    const result = {
       response,
       sources: allSources,
       classification,
@@ -201,6 +202,44 @@ export class AgenticOrchestrator {
       totalDuration,
       azureFallback
     }
+
+    // Log to query history (async, don't block return)
+    queryHistoryService.add({
+      id: runId,
+      timestamp: new Date().toISOString(),
+      query,
+      routing: routing ? {
+        strategy: routing.strategy,
+        reasoning: routing.reasoning,
+        confidence: routing.confidence
+      } : {
+        strategy: 'hybrid',
+        reasoning: 'Query decomposed into sub-queries',
+        confidence: 1.0
+      },
+      resultCount: allSources.length,
+      topScore: allSources[0]?.relevanceScore || 0,
+      azureUsed: azureServiceManager.isConfigured(),
+      azureFallback,
+      totalDuration,
+      workflow: workflow.map(s => ({
+        agent: s.agent,
+        action: s.action,
+        duration: s.duration || 0,
+        status: s.status
+      })),
+      complexity: classification.complexity,
+      requiresDecomposition: classification.requiresDecomposition,
+      validation: validation ? {
+        faithfulnessScore: validation.faithfulnessScore,
+        relevanceScore: validation.relevanceScore,
+        isValid: validation.isValid
+      } : undefined
+    }).catch(error => {
+      console.error('Failed to log query to history:', error)
+    })
+
+    return result
   }
 
   private async executeStep<T>(

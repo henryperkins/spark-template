@@ -134,12 +134,12 @@ export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
   const getStatusIcon = (status: UploadProgress['status']) => {
     switch (status) {
       case 'completed':
-        return <CheckCircle className="text-green-500" size={16} />
+        return <CheckCircle className="text-status-success" size={16} />
       case 'error':
-        return <XCircle className="text-red-500" size={16} />
+        return <XCircle className="text-status-error" size={16} />
       case 'embedding':
       case 'indexing':
-        return <CloudArrowUp className="text-blue-500" size={16} />
+        return <CloudArrowUp className="text-status-info" size={16} />
       default:
         return <FileText className="text-muted-foreground" size={16} />
     }
@@ -275,7 +275,7 @@ export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
                   </div>
                   <Progress value={progress.progress} className="h-2" />
                   {progress.error && (
-                    <p className="text-xs text-red-500">{progress.error}</p>
+                    <p className="text-xs text-status-error">{progress.error}</p>
                   )}
                 </div>
               ))}

@@ -13,6 +13,8 @@ import { findRelevantChunks, generateResponse } from '@/lib/rag'
 import { AgenticOrchestrator, AgenticRAGResult, AgentWorkflowStep } from '@/lib/agents'
 import { AgentWorkflowVisualizer } from './AgentWorkflowVisualizer'
 import { SuggestedQuestions } from './SuggestedQuestions'
+import { queryHistoryService } from '@/lib/services/query-history'
+import { azureServiceManager } from '@/lib/azure-service-manager'
 
 interface QueryInterfaceProps {
   documents: Document[]
@@ -60,6 +62,7 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
       let response: string
       let agenticResult: AgenticRAGResult | undefined
       let azureFallbackDetected = false
+      const startTime = Date.now()
 
       if (agenticMode) {
         const runId = userMessage.id
@@ -67,18 +70,48 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
           runId,
           onWorkflowUpdate: (steps) => {
             setActiveWorkflow(steps)
+          },
+          onStepEvent: (event) => {
+            if (event.status === 'failed') {
+              console.error('[agent-step failed]', event)
+            } else if (import.meta.env?.MODE !== 'production') {
+              console.debug('[agent-step]', event.agent, event.action, event.status)
+            }
           }
         })
         sources = agenticResult.sources
         response = agenticResult.response
         azureFallbackDetected = agenticResult.azureFallback
+        // Agentic queries are logged by AgenticOrchestrator
       } else {
+        // Non-agentic query: log manually
         sources = await findRelevantChunks(queryText, documents, 5, 'hybrid', {
           onAzureFallback: () => {
             azureFallbackDetected = true
           }
         })
         response = await generateResponse(queryText, sources)
+
+        const totalDuration = Date.now() - startTime
+
+        // Log non-agentic query to history
+        queryHistoryService.add({
+          id: userMessage.id,
+          timestamp: new Date().toISOString(),
+          query: queryText,
+          routing: {
+            strategy: 'hybrid',
+            reasoning: 'Non-agentic mode: default hybrid search',
+            confidence: 1.0
+          },
+          resultCount: sources.length,
+          topScore: sources[0]?.relevanceScore || 0,
+          azureUsed: azureServiceManager.isConfigured(),
+          azureFallback: azureFallbackDetected,
+          totalDuration
+        }).catch(error => {
+          console.error('Failed to log query to history:', error)
+        })
       }
 
       const assistantMessage: ExtendedChatMessage = {

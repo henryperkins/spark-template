@@ -418,7 +418,7 @@ async function handleAzureSearchRequest(request: Request, env: Env): Promise<Res
       if (!body?.indexName || !body?.request) {
         return new Response('indexName and request required', { status: 400, headers: corsHeaders })
       }
-      const apiVersion = body.apiVersion || '2025-08-01-preview'
+      const apiVersion = body.apiVersion || '2025-09-01'
       const forwardUrl = `${endpoint}/indexes/${encodeURIComponent(body.indexName)}/docs/search?api-version=${encodeURIComponent(apiVersion)}`
       const resp = await fetch(forwardUrl, {
         method: 'POST',
@@ -442,7 +442,7 @@ async function handleAzureSearchRequest(request: Request, env: Env): Promise<Res
       if (!body?.indexName || !body?.batch) {
         return new Response('indexName and batch required', { status: 400, headers: corsHeaders })
       }
-      const apiVersion = body.apiVersion || '2025-08-01-preview'
+      const apiVersion = body.apiVersion || '2025-09-01'
       const forwardUrl = `${endpoint}/indexes/${encodeURIComponent(body.indexName)}/docs/index?api-version=${encodeURIComponent(apiVersion)}`
       const resp = await fetch(forwardUrl, {
         method: 'POST',
@@ -467,7 +467,7 @@ async function handleAzureSearchRequest(request: Request, env: Env): Promise<Res
       if (!body?.schema || !body?.indexName) {
         return new Response('indexName and schema required', { status: 400, headers: corsHeaders })
       }
-      const apiVersion = body.apiVersion || '2025-08-01-preview'
+      const apiVersion = body.apiVersion || '2025-09-01'
       const allowIndexDowntime =
         body.allowIndexDowntime === undefined ? true : Boolean(body.allowIndexDowntime)
       const downtimeParam = allowIndexDowntime ? '&allowIndexDowntime=true' : ''
@@ -493,8 +493,52 @@ async function handleAzureSearchRequest(request: Request, env: Env): Promise<Res
       if (!indexName) {
         return new Response('index required', { status: 400, headers: corsHeaders })
       }
-      const apiVersion = url.searchParams.get('apiVersion') || '2025-08-01-preview'
+      const apiVersion = url.searchParams.get('apiVersion') || '2025-09-01'
       const forwardUrl = `${endpoint}/indexes/${encodeURIComponent(indexName)}?api-version=${encodeURIComponent(apiVersion)}`
+      const resp = await fetch(forwardUrl, {
+        method: 'GET',
+        headers: { 'api-key': apiKey, Accept: 'application/json' },
+      })
+      const text = await resp.text()
+      return new Response(text, {
+        status: resp.status,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+
+    // POST /api/azure-search/analyze (analyzer testing)
+    if (request.method === 'POST' && url.pathname === '/api/azure-search/analyze') {
+      const body = (await request.json()) as {
+        indexName: string
+        apiVersion?: string
+        request: Record<string, unknown>
+      }
+      if (!body?.indexName || !body?.request) {
+        return new Response('indexName and request required', { status: 400, headers: corsHeaders })
+      }
+      const apiVersion = body.apiVersion || '2025-09-01'
+      const forwardUrl = `${endpoint}/indexes/${encodeURIComponent(body.indexName)}/analyze?api-version=${encodeURIComponent(apiVersion)}`
+      const resp = await fetch(forwardUrl, {
+        method: 'POST',
+        headers: { 'api-key': apiKey, 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(body.request),
+      })
+      const text = await resp.text()
+      return new Response(text, {
+        status: resp.status,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+
+    // GET /api/azure-search/indexes/:index/stats (index statistics)
+    if (request.method === 'GET' && url.pathname.match(/^\/api\/azure-search\/indexes\/[^/]+\/stats$/)) {
+      const parts = url.pathname.split('/')
+      const indexName = decodeURIComponent(parts[parts.length - 2] || '')
+      if (!indexName) {
+        return new Response('index required', { status: 400, headers: corsHeaders })
+      }
+      const apiVersion = url.searchParams.get('apiVersion') || '2025-09-01'
+      const forwardUrl = `${endpoint}/indexes/${encodeURIComponent(indexName)}/stats?api-version=${encodeURIComponent(apiVersion)}`
       const resp = await fetch(forwardUrl, {
         method: 'GET',
         headers: { 'api-key': apiKey, Accept: 'application/json' },

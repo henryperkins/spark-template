@@ -21,6 +21,9 @@ export interface SparkGlobal {
   llmPrompt?: (...args: unknown[]) => string;
   user?: unknown;
   sparkFallback?: SparkFallbackControls;
+  telemetry?: { track: (eventName: string, payload: unknown) => void };
+  analytics?: { track?: (eventName: string, payload: unknown) => void; capture?: (eventName: string, payload: unknown) => void };
+  analyticsClient?: { track?: (eventName: string, payload: unknown) => void; capture?: (eventName: string, payload: unknown) => void };
 }
 
 declare global {
@@ -560,6 +563,16 @@ export const installSparkFallbacks = () => {
       }
     },
   };
+
+  if (!globalSpark.telemetry && !globalSpark.analytics && !globalSpark.analyticsClient) {
+    globalSpark.telemetry = {
+      track: (eventName: string, payload: unknown) => {
+        if (import.meta.env?.MODE !== 'production') {
+          console.debug(`[telemetry:${eventName}]`, payload);
+        }
+      },
+    };
+  }
 };
 
 export const getActiveSparkKv = (): SparkKv => {

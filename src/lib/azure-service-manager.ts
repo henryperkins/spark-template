@@ -54,6 +54,10 @@ export class AzureServiceManager {
     return this.openaiService !== null
   }
 
+  getSearchService(): AzureSearchService | null {
+    return this.searchService
+  }
+
   async tryGenerateQueryEmbedding(query: string): Promise<number[] | null> {
     if (!this.openaiService) {
       return null
