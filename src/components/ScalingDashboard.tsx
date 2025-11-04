@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -49,6 +49,15 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
   const [lastRefreshResult, setLastRefreshResult] = useState<RefreshResult | null>(null)
   const [tokenMetrics, setTokenMetrics] = useState<TokenDashboardMetrics | null>(null)
   const [errorMetrics, setErrorMetrics] = useState<ErrorMetrics | null>(null)
+  const documentsWithErrors = useMemo(
+    () =>
+      documents.filter((document) => {
+        const hasProcessingError = document.processingStatus === 'error'
+        const hasErrorMessage = typeof document.errorMessage === 'string' && document.errorMessage.trim().length > 0
+        return hasProcessingError || hasErrorMessage
+      }),
+    [documents]
+  )
 
   useEffect(() => {
     loadMetrics()
@@ -166,6 +175,14 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
     return `${days.toFixed(1)}d`
   }
 
+  const formatUploadDate = (uploadedAt?: string) => {
+    if (!uploadedAt) return 'Unknown'
+    const parsed = new Date(uploadedAt)
+    return Number.isNaN(parsed.getTime()) ? 'Unknown' : parsed.toLocaleDateString()
+  }
+
+  const tabTriggerClass = 'text-xs sm:text-sm min-h-[2.75rem] flex-shrink-0 basis-[140px] px-3 sm:basis-auto sm:w-full whitespace-nowrap'
+
   return (
     <div className="space-y-6">
       <div>
@@ -179,28 +196,28 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
       <AlertPanel />
 
       <Tabs defaultValue="embeddings" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-6 max-w-4xl">
-          <TabsTrigger value="embeddings">
+        <TabsList className="flex w-full gap-2 overflow-x-auto pb-1 px-1 sm:grid sm:grid-cols-3 xl:grid-cols-6 sm:overflow-visible sm:p-[3px]">
+          <TabsTrigger value="embeddings" className={tabTriggerClass}>
             <Database size={16} className="mr-2" />
             Embeddings
           </TabsTrigger>
-          <TabsTrigger value="cache">
+          <TabsTrigger value="cache" className={tabTriggerClass}>
             <Lightning size={16} className="mr-2" />
             Cache
           </TabsTrigger>
-          <TabsTrigger value="costs">
+          <TabsTrigger value="costs" className={tabTriggerClass}>
             <CurrencyDollar size={16} className="mr-2" />
             Costs
           </TabsTrigger>
-          <TabsTrigger value="errors">
+          <TabsTrigger value="errors" className={tabTriggerClass}>
             <WarningCircle size={16} className="mr-2" />
             Errors
           </TabsTrigger>
-          <TabsTrigger value="metrics">
+          <TabsTrigger value="metrics" className={tabTriggerClass}>
             <ChartBar size={16} className="mr-2" />
             Metrics
           </TabsTrigger>
-          <TabsTrigger value="debug">
+          <TabsTrigger value="debug" className={tabTriggerClass}>
             <Bug size={16} className="mr-2" />
             Search Debug
           </TabsTrigger>
@@ -255,7 +272,7 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
               )}
 
               {refreshMetrics && (
-                <div className="grid grid-cols-2 gap-4 pt-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4">
                   <div className="space-y-1">
                     <div className="text-sm text-muted-foreground">Total Documents</div>
                     <div className="text-2xl font-bold">{refreshMetrics.totalDocuments}</div>
@@ -290,7 +307,7 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
                   <CheckCircle size={16} />
                   <AlertTitle>Last Refresh Result</AlertTitle>
                   <AlertDescription>
-                    <div className="grid grid-cols-3 gap-2 mt-2 text-sm">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-2 text-sm">
                       <div>Refreshed: <strong>{lastRefreshResult.refreshedCount}</strong></div>
                       <div>Skipped: <strong>{lastRefreshResult.skippedCount}</strong></div>
                       <div>Duration: <strong>{formatDuration(lastRefreshResult.duration)}</strong></div>
@@ -303,7 +320,7 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
 
               <div className="space-y-2">
                 <h4 className="font-medium text-sm">Volatility-Based Refresh Intervals</h4>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   <Badge variant="outline" className="justify-center py-2">
                     <span className="text-red-11 mr-1">●</span> High: 1 day
                   </Badge>
@@ -343,7 +360,7 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
 
               {cacheMetrics && (
                 <>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div className="space-y-1">
                       <div className="text-sm text-muted-foreground">Total Cached</div>
                       <div className="text-2xl font-bold">{cacheMetrics.totalKeys}</div>
@@ -412,7 +429,7 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
 
               <div className="space-y-2">
                 <h4 className="font-medium text-sm">Cache Strategies</h4>
-                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
                   <div className="p-2 bg-muted rounded">
                     <div className="font-medium mb-1">TTL-Based</div>
                     <div className="text-muted-foreground">Tiered expiration by content type</div>
@@ -435,65 +452,6 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
           </Card>
         </TabsContent>
 
-        <TabsContent value="metrics" className="space-y-4">
-          <div className="grid gap-4">
-            <Card>
-              <CardHeader>
-                <CardTitle>System Overview</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <div className="space-y-1">
-                    <div className="text-sm text-muted-foreground">Documents</div>
-                    <div className="text-2xl font-bold">{documents.length}</div>
-                  </div>
-                  <div className="space-y-1">
-                    <div className="text-sm text-muted-foreground">Total Chunks</div>
-                    <div className="text-2xl font-bold">
-                      {documents.reduce((acc, doc) => acc + doc.chunks.length, 0)}
-                    </div>
-                  </div>
-                  {refreshMetrics && (
-                    <>
-                      <div className="space-y-1">
-                        <div className="text-sm text-muted-foreground">Embedding Version</div>
-                        <Badge variant="outline" className="mt-1">v2025.01</Badge>
-                      </div>
-                      <div className="space-y-1">
-                        <div className="text-sm text-muted-foreground">Cache Version</div>
-                        <Badge variant="outline" className="mt-1">v2025.01</Badge>
-                      </div>
-                    </>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-
-            {refreshMetrics && (
-              <Card>
-                <CardHeader>
-                  <CardTitle>Volatility Distribution</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-2">
-                    {Object.entries(refreshMetrics.byVolatility).map(([volatility, count]) => (
-                      <div key={volatility} className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          {volatility === 'high' && <Warning size={16} className="text-red-11" />}
-                          {volatility === 'medium' && <Clock size={16} className="text-orange-11" />}
-                          {volatility === 'low' && <CheckCircle size={16} className="text-green-11" />}
-                          <span className="capitalize">{volatility}</span>
-                        </div>
-                        <Badge>{count as number} docs</Badge>
-                      </div>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-          </div>
-        </TabsContent>
-
         <TabsContent value="costs" className="space-y-4">
           <Card>
             <CardHeader>
@@ -508,7 +466,7 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
             <CardContent className="space-y-4">
               {tokenMetrics && (
                 <>
-                  <div className="grid grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div className="space-y-1">
                       <div className="text-sm text-muted-foreground">Today's Tokens</div>
                       <div className="text-2xl font-bold">
@@ -539,7 +497,7 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
                       </Badge>
                     </div>
                     <Progress value={tokenMetrics.budget.percentageUsed} />
-                    <div className="grid grid-cols-2 gap-2 text-sm">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
                       <div className="text-muted-foreground">
                         Limit: {tokenMetrics.budget.dailyLimit.toLocaleString()} tokens
                       </div>
@@ -570,7 +528,7 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
                             <span className="font-medium text-sm">{model}</span>
                             <Badge variant="outline">{stats.count} requests</Badge>
                           </div>
-                          <div className="grid grid-cols-2 gap-2 text-xs">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
                             <div className="text-muted-foreground">
                               {stats.totalTokens.toLocaleString()} tokens
                             </div>
@@ -594,15 +552,20 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
               <CardTitle className="flex items-center gap-2">
                 <WarningCircle size={20} />
                 Error Tracking
+                {documentsWithErrors.length > 0 && (
+                  <Badge variant="destructive" className="ml-auto">
+                    {documentsWithErrors.length} doc issue{documentsWithErrors.length === 1 ? '' : 's'}
+                  </Badge>
+                )}
               </CardTitle>
               <CardDescription>
                 Monitor system errors and failure rates
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {errorMetrics && (
+              {errorMetrics ? (
                 <>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div className="space-y-1">
                       <div className="text-sm text-muted-foreground">Error Rate (last hour)</div>
                       <div className="text-2xl font-bold text-red-11">
@@ -689,7 +652,53 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
                     </>
                   )}
                 </>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  No runtime error metrics available.
+                </p>
               )}
+
+              <div className="space-y-2">
+                <h4 className="font-medium text-sm">Knowledge Base Documents</h4>
+                {documentsWithErrors.length > 0 ? (
+                  <div className="space-y-2">
+                    {documentsWithErrors.map((document) => (
+                      <div key={document.id} className="p-3 bg-destructive/10 rounded-lg text-xs space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-semibold text-destructive">{document.name}</span>
+                          <Badge variant="outline" className="uppercase">
+                            {document.processingStatus || 'unknown'}
+                          </Badge>
+                        </div>
+                        {document.errorMessage ? (
+                          <p className="text-destructive">{document.errorMessage}</p>
+                        ) : (
+                          <p className="text-muted-foreground">
+                            Document is marked as errored but no message was captured.
+                          </p>
+                        )}
+                        <div className="flex flex-wrap gap-2 text-muted-foreground">
+                          {document.source && (
+                            <Badge variant="secondary" className="text-[10px]">
+                              Source: {document.source}
+                            </Badge>
+                          )}
+                          <Badge variant="secondary" className="text-[10px]">
+                            {document.chunks.length} chunk{document.chunks.length === 1 ? '' : 's'}
+                          </Badge>
+                          <Badge variant="secondary" className="text-[10px]">
+                            Uploaded {formatUploadDate(document.uploadedAt)}
+                          </Badge>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="p-3 bg-muted rounded-lg text-xs text-muted-foreground">
+                    All knowledge base documents are healthy.
+                  </div>
+                )}
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
@@ -701,7 +710,7 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
                 <CardTitle>System Overview</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
                   <div className="space-y-1">
                     <div className="text-sm text-muted-foreground">Documents</div>
                     <div className="text-2xl font-bold">{documents.length}</div>

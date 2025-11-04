@@ -99,6 +99,7 @@ export interface AzureConfig {
       enabled: boolean
       method: 'scalar' | 'binary'
     }
+    vectorDimensions?: number
     customScoring?: {
       enabled: boolean
       recencyWeight: number

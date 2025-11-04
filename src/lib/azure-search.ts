@@ -142,11 +142,12 @@ export class AzureSearchService {
     }
   }
 
-  async createSearchIndex(): Promise<{ success: boolean; error?: string }> {
+  async createSearchIndex(vectorDimensions?: number): Promise<{ success: boolean; error?: string }> {
     try {
       const compressionEnabled = this.config.vectorCompression?.enabled ?? false
       const compressionMethod = this.config.vectorCompression?.method
       const compressionName = 'vector-compression'
+      const dimensions = vectorDimensions ?? this.getDefaultVectorDimensions()
 
       const vectorSearchConfig: Record<string, unknown> = {
         algorithms: [
@@ -216,7 +217,7 @@ export class AzureSearchService {
             searchable: true,
             filterable: false,
             retrievable: true,
-            dimensions: 1536,
+            dimensions,
             vectorSearchProfile: 'vector-profile-hnsw'
           },
           {
@@ -275,15 +276,15 @@ export class AzureSearchService {
             {
               name: this.config.semanticConfiguration.configName || 'semantic-config',
               prioritizedFields: {
-                contentFields: [
-                  { name: 'content' }
+                prioritizedContentFields: [
+                  { fieldName: 'content' }
                 ],
                 ...(this.config.semanticConfiguration.prioritizeTitle && {
-                  titleField: { name: 'documentName' }
+                  titleField: { fieldName: 'documentName' }
                 }),
                 ...(this.config.semanticConfiguration.prioritizeKeywords && {
-                  keywordsFields: [
-                    { name: 'metadata' }
+                  prioritizedKeywordsFields: [
+                    { fieldName: 'metadata' }
                   ]
                 })
               }
@@ -371,6 +372,14 @@ export class AzureSearchService {
     }
   }
 
+  private getDefaultVectorDimensions(): number {
+    const configuredDimension = (this.config as { vectorDimensions?: number }).vectorDimensions
+    if (typeof configuredDimension === 'number' && configuredDimension > 0) {
+      return configuredDimension
+    }
+    return 1536
+  }
+
   async indexDocuments(
     documents: AzureSearchDocument[],
     namespace?: string,
@@ -423,6 +432,21 @@ export class AzureSearchService {
 
       if (!response.ok) {
         const errorText = await response.text()
+        const dimensionMismatch = /mismatch in vector dimensions/i.test(errorText)
+        const providedMatch = /provided vector has a length of '(\d+)'/i.exec(errorText)
+        if (dimensionMismatch && allowSchemaRefresh) {
+          const providedDimensions = providedMatch
+            ? Number.parseInt(providedMatch[1], 10)
+            : (documents[0]?.contentVector?.length ?? this.getDefaultVectorDimensions())
+          const refreshResult = await this.createSearchIndex(providedDimensions)
+          if (!refreshResult.success) {
+            return {
+              success: false,
+              error: `Indexing failed due to vector dimension mismatch and automatic schema update failed: ${refreshResult.error || 'Unknown schema update error'}. Original error: ${errorText}`
+            }
+          }
+          return this.indexDocuments(documents, namespace, false)
+        }
         const missingFieldMessageMatch = /The property '(\w+)' does not exist on type 'search\.documentFields'/i.exec(errorText)
         if (missingFieldMessageMatch && allowSchemaRefresh) {
           const refreshResult = await this.createSearchIndex()

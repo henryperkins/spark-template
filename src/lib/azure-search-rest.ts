@@ -152,9 +152,9 @@ export class SearchRestClient {
           {
             name: 'semantic-config',
             prioritizedFields: {
-              contentFields: [{ name: textFieldName }],
-              titleField: { name: 'documentName' },
-              keywordsFields: [{ name: 'metadata' }]
+              prioritizedContentFields: [{ fieldName: textFieldName }],
+              titleField: { fieldName: 'documentName' },
+              prioritizedKeywordsFields: [{ fieldName: 'metadata' }]
             }
           }
         ]
