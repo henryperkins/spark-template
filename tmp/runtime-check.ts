@@ -12,7 +12,7 @@ if (!globalThis.crypto) {
   globalThis.crypto = nodeCrypto
 }
 
-const kvStore = new Map<string, any>()
+const kvStore = new Map<string, unknown>()
 const localStorageStore = new Map<string, string>()
 
 const llmCallLog: Array<{ tag: string; snippet: string }> = []
@@ -22,10 +22,10 @@ const kv = {
   async keys(): Promise<string[]> {
     return Array.from(kvStore.keys())
   },
-  async get(key: string): Promise<any> {
+  async get(key: string): Promise<unknown> {
     return kvStore.get(key)
   },
-  async set(key: string, value: any): Promise<void> {
+  async set(key: string, value: unknown): Promise<void> {
     kvStore.set(key, value)
   },
   async delete(key: string): Promise<void> {
@@ -34,7 +34,7 @@ const kv = {
 }
 
 const sparkStub = {
-  llmPrompt(strings: TemplateStringsArray, ...values: any[]): string {
+  llmPrompt(strings: TemplateStringsArray, ...values: unknown[]): string {
     let combined = ''
     for (let i = 0; i < strings.length; i++) {
       combined += strings[i]
@@ -257,7 +257,7 @@ const sparkStub = {
   endpoint: null
 }
 
-const windowStub: any = {
+const windowStub: unknown = {
   spark: sparkStub,
   localStorage: {
     getItem(key: string) {
@@ -287,8 +287,8 @@ if (typeof globalThis.window === 'undefined') {
 }
 
 // Provide atob for GitHub service compatibility if needed
-if (typeof (globalThis.window as any).atob !== 'function') {
-  (globalThis.window as any).atob = (input: string) => Buffer.from(input, 'base64').toString('binary')
+if (typeof (globalThis.window as unknown).atob !== 'function') {
+  (globalThis.window as unknown).atob = (input: string) => Buffer.from(input, 'base64').toString('binary')
 }
 
 process.env.NODE_ENV = process.env.NODE_ENV || 'development'

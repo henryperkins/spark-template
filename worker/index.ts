@@ -11,12 +11,20 @@
    cursor?: string
    limit?: number
  }
+
+// R2Object interface for type safety
+interface R2ObjectLike {
+  key: string
+  size: number
+  uploaded: string | Date | unknown
+}
+
  // Fallback CF types if Workers types aren't available in local tsserver
  // (Build uses official @cloudflare/workers-types via triple-slash reference)
- type KVNamespace = any
- type R2Bucket = any
- type Fetcher = any
- type ExecutionContext = any
+ type KVNamespace = unknown
+ type R2Bucket = unknown
+ type Fetcher = unknown
+ type ExecutionContext = unknown
 
 export interface Env {
   RAG_KV: KVNamespace
@@ -47,7 +55,13 @@ interface LogEntry {
   statusCode?: number
   duration?: number
   error?: string
-  metadata?: Record<string, any>
+  metadata?: Record<string, unknown>
+}
+
+// Helper function to safely get error message
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message
+  return String(error)
 }
 
 // Helper function to create structured logs
@@ -162,7 +176,7 @@ export default {
       }
 
       return response
-    } catch (error: any) {
+    } catch (error: unknown) {
       const duration = Date.now() - startTime
 
       logStructured({
@@ -170,7 +184,7 @@ export default {
         event: 'request_error',
         method: request.method,
         path: url.pathname,
-        error: error.message,
+        error: getErrorMessage(error),
         duration,
       })
 
@@ -324,16 +338,16 @@ async function handleKVRequest(request: Request, env: Env): Promise<Response> {
       default:
         return new Response('Method not allowed', { status: 405, headers: corsHeaders })
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     logStructured({
       level: 'error',
       event: 'kv_operation_error',
       method: request.method,
       key,
-      error: error.message,
+      error: getErrorMessage(error),
     })
 
-    return new Response(error.message || 'Internal server error', {
+    return new Response(getErrorMessage(error) || 'Internal server error', {
       status: 500,
       headers: corsHeaders,
     })
@@ -361,7 +375,7 @@ async function handleAzureSearchRequest(request: Request, env: Env): Promise<Res
   }
 
   // Optional bearer enforcement (reuse KV_API_KEY if configured)
-  const expectedBearer = (env as any).KV_API_KEY as string | undefined
+  const expectedBearer = (env as unknown).KV_API_KEY as string | undefined
   if (expectedBearer) {
     const authHeader = request.headers.get('Authorization') || ''
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : authHeader.trim()
@@ -373,11 +387,11 @@ async function handleAzureSearchRequest(request: Request, env: Env): Promise<Res
   // Resolve Azure Search endpoint and key (prefer server-side names, then VITE_ fallbacks)
   const rawEndpoint =
     env.AZURE_SEARCH_ENDPOINT ||
-    (env as any).VITE_AZURE_SEARCH_ENDPOINT
+    (env as unknown).VITE_AZURE_SEARCH_ENDPOINT
   const endpoint = (rawEndpoint || '').replace(/\/+$/, '')
   const apiKey =
     env.AZURE_SEARCH_KEY ||
-    (env as any).VITE_AZURE_SEARCH_KEY
+    (env as unknown).VITE_AZURE_SEARCH_KEY
 
   if (!endpoint || !apiKey) {
     return new Response('Azure Search not configured', { status: 503, headers: corsHeaders })
@@ -435,16 +449,23 @@ async function handleAzureSearchRequest(request: Request, env: Env): Promise<Res
     // POST /api/azure-search/create-index
     if (request.method === 'POST' && url.pathname === '/api/azure-search/create-index') {
       const body = (await request.json()) as {
+        indexName?: string
         apiVersion?: string
         schema: Record<string, unknown>
+        allowIndexDowntime?: boolean
       }
-      if (!body?.schema) {
-        return new Response('schema required', { status: 400, headers: corsHeaders })
+      if (!body?.schema || !body?.indexName) {
+        return new Response('indexName and schema required', { status: 400, headers: corsHeaders })
       }
       const apiVersion = body.apiVersion || '2025-08-01-preview'
-      const forwardUrl = `${endpoint}/indexes?api-version=${encodeURIComponent(apiVersion)}`
+      const allowIndexDowntime =
+        body.allowIndexDowntime === undefined ? true : Boolean(body.allowIndexDowntime)
+      const downtimeParam = allowIndexDowntime ? '&allowIndexDowntime=true' : ''
+      const forwardUrl = `${endpoint}/indexes/${encodeURIComponent(body.indexName)}?api-version=${encodeURIComponent(
+        apiVersion,
+      )}${downtimeParam}`
       const resp = await fetch(forwardUrl, {
-        method: 'POST',
+        method: 'PUT',
         headers: { 'api-key': apiKey, 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify(body.schema),
       })
@@ -512,7 +533,7 @@ async function handleLogsRequest(request: Request, env: Env): Promise<Response> 
     // Authorization: Bearer <LOGS_API_KEY>
     const authHeader = request.headers.get('Authorization') || ''
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
-    if (!token || token !== (env as any).LOGS_API_KEY) {
+    if (!token || token !== (env as unknown).LOGS_API_KEY) {
       return new Response('Unauthorized', { status: 401, headers: corsHeaders })
     }
 
@@ -532,13 +553,13 @@ async function handleLogsRequest(request: Request, env: Env): Promise<Response> 
 
         return Response.json(
           {
-            files: listed.objects.map((obj: any) => ({
+            files: listed.objects.map((obj: R2ObjectLike) => ({
               key: obj.key,
               size: obj.size,
               uploaded: (() => {
                 if (typeof obj.uploaded === 'string') return obj.uploaded
                 if (obj.uploaded instanceof Date) return obj.uploaded.toISOString()
-                const asDate = new Date(obj.uploaded as any)
+                const asDate = new Date(obj.uploaded as string | number)
                 return Number.isNaN(asDate.getTime()) ? String(obj.uploaded ?? '') : asDate.toISOString()
               })(),
             })),
@@ -652,7 +673,7 @@ async function handleMigrationRequest(request: Request, env: Env): Promise<Respo
   // Auth: Authorization: Bearer <MIGRATION_KEY>
   const authHeader = request.headers.get('Authorization') || ''
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
-  if (!token || token !== (env as any).MIGRATION_KEY) {
+  if (!token || token !== (env as unknown).MIGRATION_KEY) {
     return new Response('Unauthorized', { status: 401, headers: corsHeaders })
   }
 
@@ -700,9 +721,9 @@ async function handleMigrationRequest(request: Request, env: Env): Promise<Respo
             await env.RAG_KV.put(k.name, value)
           }
           copied += 1
-        } catch (e: any) {
+        } catch (e: unknown) {
           skipped += 1
-          errors.push({ key: k.name, error: e?.message ?? String(e) })
+          errors.push({ key: k.name, error: getErrorMessage(e) })
         }
       }
 
@@ -723,12 +744,12 @@ async function handleMigrationRequest(request: Request, env: Env): Promise<Respo
       { ok: true, prefix, scanned, copied, skipped, dryRun, errorCount: errors.length, errors },
       { headers: corsHeaders }
     )
-  } catch (error: any) {
+  } catch (error: unknown) {
     logStructured({
       level: 'error',
       event: 'kv_migration_error',
-      error: error?.message ?? String(error),
+      error: getErrorMessage(error),
     })
-    return new Response(error?.message || 'Migration failed', { status: 500, headers: corsHeaders })
+    return new Response(getErrorMessage(error) || 'Migration failed', { status: 500, headers: corsHeaders })
   }
 }

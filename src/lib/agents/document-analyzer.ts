@@ -67,7 +67,7 @@ Respond with JSON:
     let decision: ChunkingDecision | null = null
 
     try {
-      const prompt = (window as any).spark.llmPrompt`${systemPrompt}
+      const prompt = (window as unknown).spark.llmPrompt`${systemPrompt}
 
 File name: ${fileName}
 

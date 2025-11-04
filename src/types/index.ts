@@ -11,7 +11,7 @@ export interface Document {
   errorMessage?: string
   source?: 'upload' | 'github' | 'website' | 'dropbox' | 'onedrive'
   sourceUrl?: string
-  sourceMetadata?: Record<string, any>
+  sourceMetadata?: Record<string, unknown>
 }
 
 export interface DocumentChunk {
@@ -136,7 +136,7 @@ export interface AzureSearchDocument {
   documentId: string
   documentName: string
   chunkIndex: number
-  metadata?: Record<string, any>
+  metadata?: Record<string, unknown>
 }
 
 export interface AzureSearchResult {

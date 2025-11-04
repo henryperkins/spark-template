@@ -6,7 +6,8 @@ import { Badge } from '@/components/ui/badge'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
-import { MagnifyingGlass, Brain, FileText, Link, Sparkle } from '@phosphor-icons/react'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { MagnifyingGlass, Brain, FileText, Link, Sparkle, CloudSlash } from '@phosphor-icons/react'
 import { Document, ChatMessage, Source } from '@/types'
 import { findRelevantChunks, generateResponse } from '@/lib/rag'
 import { AgenticOrchestrator, AgenticRAGResult, AgentWorkflowStep } from '@/lib/agents'
@@ -19,6 +20,7 @@ interface QueryInterfaceProps {
 
 interface ExtendedChatMessage extends ChatMessage {
   agenticResult?: AgenticRAGResult
+  azureFallback?: boolean
 }
 
 export function QueryInterface({ documents }: QueryInterfaceProps) {
@@ -57,6 +59,7 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
       let sources: Source[]
       let response: string
       let agenticResult: AgenticRAGResult | undefined
+      let azureFallbackDetected = false
 
       if (agenticMode) {
         const runId = userMessage.id
@@ -68,8 +71,13 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
         })
         sources = agenticResult.sources
         response = agenticResult.response
+        azureFallbackDetected = agenticResult.azureFallback
       } else {
-        sources = await findRelevantChunks(queryText, documents)
+        sources = await findRelevantChunks(queryText, documents, 5, 'hybrid', {
+          onAzureFallback: () => {
+            azureFallbackDetected = true
+          }
+        })
         response = await generateResponse(queryText, sources)
       }
 
@@ -80,7 +88,8 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
         timestamp: new Date().toISOString(),
         sources: sources.length > 0 ? sources : undefined,
         azureUsed: sources.some(s => s.azureScore !== undefined),
-        agenticResult
+        agenticResult,
+        azureFallback: azureFallbackDetected
       }
 
       setMessages(prev => [...prev, assistantMessage])
@@ -193,6 +202,28 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
                     {formatTime(message.timestamp)}
                   </span>
                 </div>
+
+                {message.type === 'assistant' && message.azureFallback && (
+                  <Alert variant="warning" className="mb-3">
+                    <AlertTitle className="flex items-center gap-2 text-sm font-semibold">
+                      <CloudSlash size={16} />
+                      Using Local Search
+                    </AlertTitle>
+                    <AlertDescription className="space-y-2 text-xs">
+                      <p>
+                        Azure AI Search is temporarily unavailable. Results are from local vector search and may be less comprehensive.
+                      </p>
+                      <a
+                        href="https://status.azure.com/en-us/status"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-xs font-medium text-primary underline underline-offset-4"
+                      >
+                        Check Azure Status →
+                      </a>
+                    </AlertDescription>
+                  </Alert>
+                )}
                 
                 <div className="prose prose-sm max-w-none">
                   <p className="whitespace-pre-wrap leading-relaxed">

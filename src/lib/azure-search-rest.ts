@@ -46,10 +46,10 @@ export class SearchRestClient {
     return headers
   }
 
-  private async request<T = any>(path: string, init: RequestInit = {}): Promise<T> {
+  private async request<T = unknown>(path: string, init: RequestInit = {}): Promise<T> {
     const url = `${this.endpoint}${path}${path.includes('?') ? '&' : '?'}api-version=${this.apiVersion}`
     const headers = await this.authHeaders()
-    const res = await fetch(url, { ...init, headers: { ...headers, ...(init.headers as any) } })
+    const res = await fetch(url, { ...init, headers: { ...headers, ...(init.headers as HeadersInit) } })
     if (!res.ok) {
       const text = await res.text().catch(() => '')
       throw new Error(`${res.status} ${res.statusText}: ${text}`)
@@ -68,8 +68,8 @@ export class SearchRestClient {
     analyzer?: string
     compress?: 'scalar' | 'binary'
     includeSemanticConfig?: boolean
-    extraFields?: any[]
-  }): Promise<any> {
+    extraFields?: Record<string, unknown>[]
+  }): Promise<unknown> {
     const {
       indexName,
       dims,
@@ -82,7 +82,47 @@ export class SearchRestClient {
       extraFields = []
     } = params
 
-    const schema: any = {
+    const compressionName = 'vector-compression'
+    const compressionEnabled = !!compress
+
+    const vectorSearchConfig: Record<string, unknown> = {
+      algorithms: [
+        {
+          name: 'hnsw-default',
+          kind: 'hnsw',
+          hnswParameters: {
+            metric,
+            m: 8,
+            efConstruction: 400
+          }
+        },
+        {
+          name: 'exhaustive-default',
+          kind: 'exhaustiveKnn',
+          exhaustiveKnnParameters: { metric }
+        }
+      ],
+      profiles: [
+        {
+          name: 'vprofile',
+          algorithm: 'hnsw-default',
+          ...(compressionEnabled && { compression: compressionName })
+        },
+        { name: 'vprofile-exhaustive', algorithm: 'exhaustive-default' }
+      ]
+    }
+
+    if (compressionEnabled) {
+      vectorSearchConfig.compressions = [
+        {
+          name: compressionName,
+          kind: compress === 'scalar' ? 'scalarQuantization' : 'binaryQuantization',
+          ...(compress === 'scalar' && { scalarQuantizationParameters: { quantizedDataType: 'int8' } })
+        }
+      ]
+    }
+
+    const schema: Record<string, unknown> = {
       name: indexName,
       fields: [
         { name: 'id', type: 'Edm.String', key: true, searchable: false, filterable: true, retrievable: true },
@@ -103,23 +143,10 @@ export class SearchRestClient {
         { name: 'contentLength', type: 'Edm.Int32', searchable: false, filterable: true, sortable: true, retrievable: true },
         ...extraFields
       ],
-      vectorSearch: {
-        algorithms: [
-          { name: 'hnsw-default', kind: 'hnsw', parameters: { metric, m: 8, efConstruction: 400 } },
-          { name: 'exhaustive-default', kind: 'exhaustiveKnn', parameters: { metric } }
-        ],
-        profiles: [
-          {
-            name: 'vprofile',
-            algorithm: 'hnsw-default',
-            ...(compress && { compression: compress === 'scalar' ? 'scalarQuantization' : 'binaryQuantization' })
-          },
-          { name: 'vprofile-exhaustive', algorithm: 'exhaustive-default' }
-        ]
-      }
+      vectorSearch: vectorSearchConfig
     }
 
-    if (params.includeSemanticConfig) {
+    if (includeSemanticConfig) {
       schema.semantic = {
         configurations: [
           {
@@ -145,7 +172,7 @@ export class SearchRestClient {
   }
 
   // Documents
-  async indexDocuments(indexName: string, actions: Array<Record<string, any>>): Promise<any> {
+  async indexDocuments(indexName: string, actions: Array<Record<string, unknown>>): Promise<unknown> {
     const payload = { value: actions }
     return this.request(`/indexes/${encodeURIComponent(indexName)}/docs/index`, {
       method: 'POST',
@@ -165,8 +192,8 @@ export class SearchRestClient {
       vectorFilterMode?: 'preFilter' | 'postFilter' | 'strictPostFilter'
       threshold?: number | { kind: 'vectorSimilarity'; value: number }
     }
-  ): Promise<any> {
-    const body: any = {
+  ): Promise<unknown> {
+    const body: Record<string, unknown> = {
       count: true,
       ...(opts?.select && { select: opts.select }),
       ...(opts?.filter && { filter: opts.filter }),
@@ -205,8 +232,8 @@ export class SearchRestClient {
       semantic?: { enabled: boolean; configName?: string; captions?: 'extractive' | 'none'; answers?: string }
       threshold?: number | { kind: 'vectorSimilarity'; value: number }
     }
-  ): Promise<any> {
-    const body: any = {
+  ): Promise<unknown> {
+    const body: Record<string, unknown> = {
       search: query,
       top: opts?.top ?? 10,
       ...(opts?.select && { select: opts.select }),
@@ -243,7 +270,7 @@ export class SearchRestClient {
   }
 
   // Knowledge agents (2025-08-01-preview)
-  async createKnowledgeSource(name: string, indexes: Array<{ name: string }>): Promise<any> {
+  async createKnowledgeSource(name: string, indexes: Array<{ name: string }>): Promise<unknown> {
     return this.request('/knowledgesources', {
       method: 'POST',
       body: JSON.stringify({
@@ -257,10 +284,10 @@ export class SearchRestClient {
   async upsertAgent(agent: {
     name: string
     knowledgeSources: Array<{ name: string }>
-    model: { kind: 'azureOpenAI'; deployment: string } | Record<string, any>
+    model: { kind: 'azureOpenAI'; deployment: string } | Record<string, unknown>
     reranker?: { kind: 'semantic' | 'none' } | null
     description?: string
-  }): Promise<any> {
+  }): Promise<unknown> {
     const { name, ...rest } = agent
     return this.request(`/agents('${encodeURIComponent(name)}')`, {
       method: 'PUT',
@@ -274,10 +301,10 @@ export class SearchRestClient {
     options?: {
       top?: number
       user?: { id?: string }
-      context?: Record<string, any>
+      context?: Record<string, unknown>
     }
-  ): Promise<any> {
-    const body: any = { agentName, query }
+  ): Promise<unknown> {
+    const body: Record<string, unknown> = { agentName, query }
     if (options?.top !== undefined) body.top = options.top
     if (options?.user) body.user = options.user
     if (options?.context) body.context = options.context

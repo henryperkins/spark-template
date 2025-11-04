@@ -31,6 +31,7 @@ export interface AgenticRAGResult {
   expansion?: QueryExpansion
   workflow: AgentWorkflowStep[]
   totalDuration: number
+  azureFallback: boolean
 }
 
 export interface ProcessQueryOptions {
@@ -53,6 +54,7 @@ export class AgenticOrchestrator {
     options: ProcessQueryOptions = {}
   ): Promise<AgenticRAGResult> {
     const startTime = Date.now()
+    let azureFallback = false
     const workflow: AgentWorkflowStep[] = []
     const runId = options.runId ?? this.generateRunId()
     const emitWorkflowUpdate = () => {
@@ -103,7 +105,10 @@ export class AgenticOrchestrator {
         documents,
         workflow,
         emitWorkflowUpdate,
-        emitStepEvent
+        emitStepEvent,
+        () => {
+          azureFallback = true
+        }
       )
     } else {
       routing = await this.executeStep(
@@ -119,7 +124,9 @@ export class AgenticOrchestrator {
       workflow,
       'Retrieval',
       `Execute ${routing.strategy} search`,
-      () => this.executeRetrieval(query, documents, routing!.strategy),
+      () => this.executeRetrieval(query, documents, routing!.strategy, () => {
+        azureFallback = true
+      }),
       emitWorkflowUpdate,
       emitStepEvent
     )
@@ -191,7 +198,8 @@ export class AgenticOrchestrator {
       refinement,
       expansion,
       workflow,
-      totalDuration
+      totalDuration,
+      azureFallback
     }
   }
 
@@ -295,7 +303,8 @@ export class AgenticOrchestrator {
     emitWorkflowUpdate?: () => void,
     emitStepEvent?: (
       event: Omit<AgentStepEvent, 'type' | 'runId' | 'query' | 'timestamp'> & { timestamp?: string }
-    ) => void
+    ) => void,
+    onAzureFallback?: () => void
   ): Promise<Source[]> {
     const allSources: Source[] = []
     const sortedSubQueries = [...plan.subQueries].sort((a, b) => a.priority - b.priority)
@@ -317,7 +326,9 @@ export class AgenticOrchestrator {
                 emitStepEvent
               )
 
-              return findRelevantChunks(sq.query, documents, 3, routingDecision.strategy)
+              return findRelevantChunks(sq.query, documents, 3, routingDecision.strategy, {
+                onAzureFallback,
+              })
             },
             emitWorkflowUpdate,
             emitStepEvent
@@ -347,7 +358,9 @@ export class AgenticOrchestrator {
           workflow,
           'Retrieval',
           `Execute sub-query: ${sq.query.substring(0, 40)}...`,
-          () => findRelevantChunks(sq.query, documents, 3, routingDecision.strategy),
+          () => findRelevantChunks(sq.query, documents, 3, routingDecision.strategy, {
+            onAzureFallback,
+          }),
           emitWorkflowUpdate,
           emitStepEvent
         )
@@ -366,14 +379,17 @@ export class AgenticOrchestrator {
   private async executeRetrieval(
     query: string,
     documents: Document[],
-    strategy: RetrievalStrategy
+    strategy: RetrievalStrategy,
+    onAzureFallback?: () => void
   ): Promise<Source[]> {
     if (!azureServiceManager.isConfigured()) {
       return findRelevantChunks(query, documents, 5, strategy)
     }
 
     try {
-      return await findRelevantChunks(query, documents, 5, strategy)
+      return await findRelevantChunks(query, documents, 5, strategy, {
+        onAzureFallback,
+      })
     } catch (error) {
       console.warn('Primary retrieval path failed, using local fallback:', error)
 
@@ -384,6 +400,8 @@ export class AgenticOrchestrator {
           code: 'RETRIEVAL_FALLBACK'
         })
       }
+
+      onAzureFallback?.()
 
       return findRelevantChunksLocal(query, documents, 5)
     }

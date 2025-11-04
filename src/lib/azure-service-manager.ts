@@ -117,7 +117,7 @@ export class AzureServiceManager {
         // Primary: keyword search
         try {
           results = await this.searchService!.keywordSearch(query, 5)
-        } catch (e) {
+        } catch {
           // continue to vector fallback
         }
         // Fallback: vector if no hits
@@ -125,7 +125,7 @@ export class AzureServiceManager {
           const queryEmbedding = await this.openaiService!.generateEmbedding(query)
           try {
             results = await this.searchService!.vectorSearch(queryEmbedding, 5)
-          } catch (e) {
+          } catch {
             // final fallback: hybrid
             try {
               results = await this.searchService!.semanticHybridSearch(query, queryEmbedding, 5)
@@ -143,7 +143,7 @@ export class AzureServiceManager {
       if (strategy === 'vector') {
         try {
           results = await this.searchService!.vectorSearch(queryEmbedding, 5)
-        } catch (e) {
+        } catch {
           // continue to keyword fallback
         }
         if (results.length === 0) {
@@ -159,13 +159,13 @@ export class AzureServiceManager {
       // strategy === 'hybrid'
       try {
         results = await this.searchService!.semanticHybridSearch(query, queryEmbedding, 5)
-      } catch (e) {
+      } catch {
         // continue to keyword fallback
       }
       if (results.length === 0) {
         try {
           results = await this.searchService!.keywordSearch(query, 5)
-        } catch (e) {
+        } catch {
           // continue to vector fallback
         }
       }

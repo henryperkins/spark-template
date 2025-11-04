@@ -56,7 +56,7 @@ Respond with JSON:
 }`
 
     try {
-      const prompt = (window as any).spark.llmPrompt`${systemPrompt}
+      const prompt = (window as unknown).spark.llmPrompt`${systemPrompt}
 ${JSON_OUTPUT_REQUIREMENTS}
 
 User query: ${sanitizeQueryForPrompt(query)}

@@ -8,7 +8,7 @@ export interface NamespaceConfig {
   created: string
   documentCount: number
   compressionEnabled: boolean
-  metadata?: Record<string, any>
+  metadata?: Record<string, unknown>
 }
 
 export interface NamespaceMetrics {
@@ -30,23 +30,23 @@ export class NamespaceManager {
     }
 
     const key = this.buildNamespaceKey(namespace.id)
-    await (window as any).spark.kv.set(key, namespace)
+    await (window as unknown).spark.kv.set(key, namespace)
     
     return namespace
   }
 
   async getNamespace(namespaceId: string): Promise<NamespaceConfig | null> {
     const key = this.buildNamespaceKey(namespaceId)
-    return await (window as any).spark.kv.get(key) || null
+    return await (window as unknown).spark.kv.get(key) || null
   }
 
   async listNamespaces(): Promise<NamespaceConfig[]> {
-    const allKeys = await (window as any).spark.kv.keys()
+    const allKeys = await (window as unknown).spark.kv.keys()
     const namespaceKeys = allKeys.filter((key: string) => key.startsWith(this.NAMESPACE_PREFIX))
     
     const namespaces: NamespaceConfig[] = []
     for (const key of namespaceKeys) {
-      const namespace = await (window as any).spark.kv.get(key)
+      const namespace = await (window as unknown).spark.kv.get(key)
       if (namespace) {
         namespaces.push(namespace)
       }
@@ -60,13 +60,13 @@ export class NamespaceManager {
     if (namespace) {
       namespace.documentCount = Math.max(0, namespace.documentCount + delta)
       const key = this.buildNamespaceKey(namespaceId)
-      await (window as any).spark.kv.set(key, namespace)
+      await (window as unknown).spark.kv.set(key, namespace)
     }
   }
 
   async deleteNamespace(namespaceId: string): Promise<void> {
     const key = this.buildNamespaceKey(namespaceId)
-    await (window as any).spark.kv.delete(key)
+    await (window as unknown).spark.kv.delete(key)
   }
 
   buildMetadataFilter(
@@ -132,7 +132,7 @@ export class NamespaceManager {
     return namespace
   }
 
-  async ensureNamespaceIsolation(namespaceId: string, documentId: string): Promise<boolean> {
+  async ensureNamespaceIsolation(namespaceId: string, _documentId: string): Promise<boolean> {
     const namespace = await this.getNamespace(namespaceId)
     return namespace !== null
   }

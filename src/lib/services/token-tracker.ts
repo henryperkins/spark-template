@@ -10,12 +10,12 @@ class StorageManager {
   async get(key: string): Promise<string | null> {
     // Try Spark KV first
     try {
-      const spark = (window as any).spark
+      const spark = (window as unknown).spark
       if (spark?.kv) {
         const value = await spark.kv.get(key)
         return value ? String(value) : null
       }
-    } catch (error) {
+    } catch {
       // Spark KV not available, continue to fallback
     }
 
@@ -26,12 +26,12 @@ class StorageManager {
   async set(key: string, value: string): Promise<void> {
     // Try Spark KV first
     try {
-      const spark = (window as any).spark
+      const spark = (window as unknown).spark
       if (spark?.kv) {
         await spark.kv.set(key, value)
         return
       }
-    } catch (error) {
+    } catch {
       // Spark KV not available, continue to fallback
     }
 
@@ -42,12 +42,12 @@ class StorageManager {
   async delete(key: string): Promise<void> {
     // Try Spark KV first
     try {
-      const spark = (window as any).spark
+      const spark = (window as unknown).spark
       if (spark?.kv) {
         await spark.kv.delete(key)
         return
       }
-    } catch (error) {
+    } catch {
       // Spark KV not available, continue to fallback
     }
 

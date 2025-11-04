@@ -103,7 +103,7 @@ export class QueryExpansionAgent {
       .join('\n\n')
       .substring(0, 3000)
 
-    const prompt = (window as any).spark.llmPrompt`Analyze the following document excerpts and identify 5-7 main topics or themes.
+    const prompt = (window as unknown).spark.llmPrompt`Analyze the following document excerpts and identify 5-7 main topics or themes.
 
 Document excerpts:
 ${content}
@@ -146,7 +146,7 @@ Example: {"topics": ["machine learning", "data processing", "model training"]}`
     let prompt: string
 
     if (strategy === 'context-based' && contextContent) {
-      prompt = (window as any).spark.llmPrompt`Based on the user's question and the retrieved context, suggest 4 related questions the user might want to ask.
+      prompt = (window as unknown).spark.llmPrompt`Based on the user's question and the retrieved context, suggest 4 related questions the user might want to ask.
 ${JSON_OUTPUT_REQUIREMENTS}
 
 User's question: ${sanitizeQueryForPrompt(query)}
@@ -165,7 +165,7 @@ Return ONLY a JSON object with property "questions" containing an array of objec
 Example: {"questions": [{"question": "What are the prerequisites?", "reasoning": "Context mentions requirements", "category": "clarification", "relevanceScore": 0.9}]}`
 
     } else if (strategy === 'document-based' && topics.length > 0) {
-      prompt = (window as any).spark.llmPrompt`Based on the user's question and the available knowledge base topics, suggest 4 related questions the user might want to explore.
+      prompt = (window as unknown).spark.llmPrompt`Based on the user's question and the available knowledge base topics, suggest 4 related questions the user might want to explore.
 ${JSON_OUTPUT_REQUIREMENTS}
 
 User's question: ${sanitizeQueryForPrompt(query)}
@@ -183,7 +183,7 @@ Return ONLY a JSON object with property "questions" containing an array of objec
 Example: {"questions": [{"question": "What are the main components?", "reasoning": "Helps understand architecture", "category": "clarification", "relevanceScore": 0.85}]}`
 
     } else {
-      prompt = (window as any).spark.llmPrompt`Based on the user's question, suggest 4 related questions that would help them explore the topic more thoroughly.
+      prompt = (window as unknown).spark.llmPrompt`Based on the user's question, suggest 4 related questions that would help them explore the topic more thoroughly.
 ${JSON_OUTPUT_REQUIREMENTS}
 
 User's question: ${sanitizeQueryForPrompt(query)}

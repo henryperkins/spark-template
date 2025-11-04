@@ -86,7 +86,7 @@ export class AzureOpenAIService {
       }
 
       const data = await response.json()
-      return data.data.map((item: any) => item.embedding)
+      return data.data.map((item: unknown) => item.embedding)
     } catch (error) {
       console.error('Error generating batch embeddings:', error)
       throw error
@@ -109,10 +109,9 @@ export class AzureOpenAIService {
         ? [{ role: 'user', content: messages }]
         : messages
 
-      const requestBody: any = {
+      const requestBody: unknown = {
         messages: messageArray,
-        // 2025-04-01-preview requires 'max_completion_tokens' (not 'max_tokens')
-        max_completion_tokens: options?.maxTokens ?? 2000,
+        max_tokens: options?.maxTokens ?? 2000,
         temperature: options?.temperature ?? 0.7,
         top_p: options?.topP ?? 0.95,
         frequency_penalty: 0,

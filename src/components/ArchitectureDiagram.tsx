@@ -13,7 +13,6 @@ import {
   Database,
   CloudArrowUp,
   ChartBar,
-  Bug,
   ArrowsDownUp,
   Gear,
   TreeStructure,
@@ -28,13 +27,29 @@ import {
 } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 
+type ArchitectureLayerAccent =
+  | 'presentation'
+  | 'runtime'
+  | 'security'
+  | 'orchestration'
+  | 'agents'
+  | 'llm-services'
+  | 'retrieval'
+  | 'vector-store'
+  | 'embedding'
+  | 'document-processing'
+  | 'document-store'
+  | 'cache'
+  | 'observability'
+  | 'infrastructure'
+
 interface ArchitectureLayer {
   id: string
   name: string
   description: string
   components: string[]
   icon: React.ReactNode
-  color: string
+  accent: ArchitectureLayerAccent
   interactions: string[]
 }
 
@@ -44,6 +59,11 @@ interface ComponentDetail {
   technologies: string[]
   patterns: string[]
 }
+
+const getLayerAccentStyles = (accent: ArchitectureLayerAccent): React.CSSProperties => ({
+  backgroundColor: `var(--layer-${accent})`,
+  color: `var(--layer-${accent}-foreground)`
+})
 
 export function ArchitectureDiagram() {
   const [selectedLayer, setSelectedLayer] = useState<string | null>(null)
@@ -65,7 +85,7 @@ export function ArchitectureDiagram() {
         'ArchitectureDiagram'
       ],
       icon: <Users size={20} />,
-      color: 'bg-blue-500',
+      accent: 'presentation',
       interactions: ['Spark Runtime SDK', 'Agent Orchestration', 'Browser KV Store']
     },
     {
@@ -81,7 +101,7 @@ export function ArchitectureDiagram() {
         'Static asset delivery for Vite SPA'
       ],
       icon: <Globe size={20} />,
-      color: 'bg-cyan-500',
+      accent: 'runtime',
       interactions: ['Presentation Layer', 'Security Layer', 'Observability Layer', 'Document Store']
     },
     {
@@ -97,7 +117,7 @@ export function ArchitectureDiagram() {
         'Cross-Origin Security'
       ],
       icon: <ShieldCheck size={20} />,
-      color: 'bg-red-500',
+      accent: 'security',
       interactions: ['Azure Services', 'Integration APIs', 'Browser Storage']
     },
     {
@@ -113,7 +133,7 @@ export function ArchitectureDiagram() {
         'State Management'
       ],
       icon: <Brain size={20} />,
-      color: 'bg-purple-500',
+      accent: 'orchestration',
       interactions: ['Agent Layer', 'Retrieval Layer', 'LLM Services']
     },
     {
@@ -130,7 +150,7 @@ export function ArchitectureDiagram() {
         'QueryExpansionAgent (related questions)'
       ],
       icon: <GitBranch size={20} />,
-      color: 'bg-pink-500',
+      accent: 'agents',
       interactions: ['LLM Services', 'Retrieval Layer', 'Cache Layer']
     },
     {
@@ -146,7 +166,7 @@ export function ArchitectureDiagram() {
         'Token Management'
       ],
       icon: <Cube size={20} />,
-      color: 'bg-indigo-500',
+      accent: 'llm-services',
       interactions: ['Spark Runtime', 'Agent Layer', 'Azure OpenAI']
     },
     {
@@ -162,7 +182,7 @@ export function ArchitectureDiagram() {
         'Relevance Filtering'
       ],
       icon: <Database size={20} />,
-      color: 'bg-yellow-500',
+      accent: 'retrieval',
       interactions: ['Vector Store', 'Azure AI Search', 'Cache Layer']
     },
     {
@@ -178,7 +198,7 @@ export function ArchitectureDiagram() {
         'Namespace Isolation'
       ],
       icon: <CloudArrowUp size={20} />,
-      color: 'bg-green-500',
+      accent: 'vector-store',
       interactions: ['Embedding Service', 'Azure AI Search', 'Document Store']
     },
     {
@@ -194,7 +214,7 @@ export function ArchitectureDiagram() {
         'Version Control'
       ],
       icon: <Lightning size={20} />,
-      color: 'bg-amber-500',
+      accent: 'embedding',
       interactions: ['Azure OpenAI', 'Vector Store', 'Cache Layer']
     },
     {
@@ -212,7 +232,7 @@ export function ArchitectureDiagram() {
         'Deduplication'
       ],
       icon: <TreeStructure size={20} />,
-      color: 'bg-teal-500',
+      accent: 'document-processing',
       interactions: ['Document Store', 'Embedding Service', 'Integration APIs']
     },
     {
@@ -228,7 +248,7 @@ export function ArchitectureDiagram() {
         'Version Tracking'
       ],
       icon: <HardDrives size={20} />,
-      color: 'bg-emerald-500',
+      accent: 'document-store',
       interactions: ['Spark Runtime KV', 'Document Processing', 'Vector Store']
     },
     {
@@ -245,7 +265,7 @@ export function ArchitectureDiagram() {
         'Cache Metrics Tracking'
       ],
       icon: <ArrowsDownUp size={20} />,
-      color: 'bg-sky-500',
+      accent: 'cache',
       interactions: ['Spark KV Store', 'All Service Layers', 'Scaling Dashboard']
     },
     {
@@ -262,7 +282,7 @@ export function ArchitectureDiagram() {
         'Quality Metrics (faithfulness, relevance)'
       ],
       icon: <Eye size={20} />,
-      color: 'bg-violet-500',
+      accent: 'observability',
       interactions: ['Orchestration Layer', 'Cache Layer', 'UI Components']
     },
     {
@@ -279,7 +299,7 @@ export function ArchitectureDiagram() {
         'Browser APIs (File, Fetch, Storage)'
       ],
       icon: <Gear size={20} />,
-      color: 'bg-slate-500',
+      accent: 'infrastructure',
       interactions: ['All Layers - Foundation']
     }
   ]
@@ -453,11 +473,6 @@ export function ArchitectureDiagram() {
     ]
   }
 
-  const getLayerConnections = (layerId: string): string[] => {
-    const layer = layers.find(l => l.id === layerId)
-    return layer?.interactions || []
-  }
-
   return (
     <div className="space-y-6">
       <Card>
@@ -503,7 +518,10 @@ export function ArchitectureDiagram() {
                         >
                           <CardContent className="p-4">
                             <div className="flex items-start gap-4">
-                              <div className={cn("p-3 rounded-lg text-white", layer.color)}>
+                              <div
+                                className="p-3 rounded-lg"
+                                style={getLayerAccentStyles(layer.accent)}
+                              >
                                 {layer.icon}
                               </div>
 
@@ -612,7 +630,10 @@ export function ArchitectureDiagram() {
                     <Card key={layer.id}>
                       <CardHeader>
                         <div className="flex items-center gap-3">
-                          <div className={cn("p-2 rounded-lg text-white", layer.color)}>
+                          <div
+                            className="p-2 rounded-lg"
+                            style={getLayerAccentStyles(layer.accent)}
+                          >
                             {layer.icon}
                           </div>
                           <div className="flex-1">
@@ -669,7 +690,10 @@ export function ArchitectureDiagram() {
                     return (
                       <div key={layerId}>
                         <div className="flex items-center gap-2 mb-3">
-                          <div className={cn("p-2 rounded-lg text-white", layer.color)}>
+                          <div
+                            className="p-2 rounded-lg"
+                            style={getLayerAccentStyles(layer.accent)}
+                          >
                             {layer.icon}
                           </div>
                           <h3 className="font-semibold">{layer.name}</h3>

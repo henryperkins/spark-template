@@ -34,7 +34,7 @@ Respond with JSON:
 }`
 
     try {
-      const prompt = (window as any).spark.llmPrompt`${systemPrompt}
+      const prompt = (window as unknown).spark.llmPrompt`${systemPrompt}
 ${JSON_OUTPUT_REQUIREMENTS}
 ${kb?.totalDocuments !== undefined ? `Knowledge base: Total documents: ${kb.totalDocuments}` : ''}
 

@@ -3,6 +3,10 @@ import { cacheManager } from './cache-manager'
 import { azureServiceManager } from './azure-service-manager'
 import { DocumentAnalyzerAgent, ChunkingStrategy } from './agents/document-analyzer'
 
+export interface FindRelevantChunksOptions {
+  onAzureFallback?: () => void
+}
+
 export async function intelligentChunkDocument(
   content: string,
   documentId: string,
@@ -243,7 +247,8 @@ export async function findRelevantChunks(
   query: string,
   documents: Document[],
   maxResults: number = 5,
-  strategy: 'vector' | 'keyword' | 'hybrid' = 'hybrid'
+  strategy: 'vector' | 'keyword' | 'hybrid' = 'hybrid',
+  options?: FindRelevantChunksOptions
 ): Promise<Source[]> {
   const normalizedQuery = query.trim().toLowerCase()
   const documentFingerprint = documents
@@ -269,6 +274,7 @@ export async function findRelevantChunks(
       }
     } catch (error) {
       console.warn('Azure search failed, falling back to local search:', error)
+      options?.onAzureFallback?.()
     }
   }
 
@@ -336,7 +342,7 @@ export async function generateResponse(query: string, sources: Source[]): Promis
     .map((source, index) => `[${index + 1}] ${source.content}`)
     .join('\n\n')
 
-  const prompt = (window as any).spark.llmPrompt`You are a helpful research assistant. Answer the user's question based on the provided context from documents. Be accurate and cite your sources using the numbers in brackets.
+  const prompt = (window as WindowWithSpark).spark.llmPrompt`You are a helpful research assistant. Answer the user's question based on the provided context from documents. Be accurate and cite your sources using the numbers in brackets.
 
 Context from documents:
 ${context}
@@ -346,9 +352,9 @@ User question: ${query}
 Please provide a comprehensive answer based on the context above. If the context doesn't fully answer the question, acknowledge what information is missing. Always cite your sources using the numbers in brackets (e.g., [1], [2]).`
 
   try {
-    const response = await (window as any).spark.llm(prompt)
+    const response = await (window as WindowWithSpark).spark.llm(prompt)
     return response
-  } catch (error) {
+  } catch {
     return "I apologize, but I'm having trouble processing your request right now. Please try again in a moment."
   }
 }

@@ -7,6 +7,25 @@ const MODE_STORAGE_KEY = 'spark-kv-mode';
 type KvRecord = Record<string, unknown>;
 type KvMode = 'local' | 'remote' | 'cloudflare';
 
+interface SparkFallbackControls {
+  useLocal: () => void;
+  useRemote: () => void;
+  mode: () => KvMode;
+  clearStore: () => void;
+  originalFetch: typeof fetch;
+}
+
+export interface SparkGlobal {
+  kv?: CloudflareKVAdapter;
+  sparkFallback?: SparkFallbackControls;
+}
+
+declare global {
+  interface Window {
+    sparkFallback?: SparkFallbackControls;
+  }
+}
+
 let memoryStore: KvRecord | null = null;
 let mode: KvMode | null = null;
 let fetchPatched = false;
@@ -273,18 +292,18 @@ const handleLlmRequest = async (input: RequestInfo | URL, init?: RequestInit): P
   console.info(`${FALLBACK_LOG_PREFIX} 💡 Configure Azure OpenAI in the Azure tab for production LLM capabilities`);
 
   const requestBody = await readRequestBody(input, init);
-  let parsedBody: any = {};
+  let parsedBody: Record<string, unknown> = {};
 
   if (requestBody) {
     try {
-      parsedBody = JSON.parse(requestBody);
+      parsedBody = JSON.parse(requestBody) as Record<string, unknown>;
     } catch (e) {
       console.warn(`${FALLBACK_LOG_PREFIX} Failed to parse LLM request body:`, e);
     }
   }
 
   // Extract prompt from the body
-  const prompt = parsedBody.prompt || parsedBody.message || 'Hello, this is a mock response.';
+  const prompt = String(parsedBody.prompt || parsedBody.message || 'Hello, this is a mock response.');
 
   const mockResponse = {
     choices: [{
@@ -355,7 +374,7 @@ const installFetchInterceptor = () => {
         }
 
         return response;
-      } catch (error) {
+      } catch {
         // Network errors also trigger local fallback
         console.warn(`${FALLBACK_LOG_PREFIX} Spark backend unreachable, using local mode`);
         setMode('local');
@@ -369,7 +388,7 @@ const installFetchInterceptor = () => {
 
   fetchPatched = true;
 
-  const controls = {
+  const controls: SparkFallbackControls = {
     useLocal: () => {
       setMode('local');
       installFetchInterceptor();
@@ -389,10 +408,10 @@ const installFetchInterceptor = () => {
     originalFetch,
   };
 
-  (window as any).sparkFallback = controls;
+  window.sparkFallback = controls;
 };
 
-export interface SparkKv extends CloudflareKVAdapter {}
+export type SparkKv = CloudflareKVAdapter;
 
 export const fallbackKv: SparkKv = {
   keys: fallbackKeys,
@@ -421,15 +440,15 @@ let warned = false;
 
 export const shouldShowFallbackWarning = (): boolean => {
   if (warned) return false;
-  
+
   // Check if we're in local mode (using fallbacks)
-  const isUsingFallback = shouldUseLocal() || !((window as any).spark?.kv);
-  
+  const isUsingFallback = shouldUseLocal() || !(window.spark?.kv);
+
   if (isUsingFallback) {
     warned = true;
     return true;
   }
-  
+
   return false;
 };
 
@@ -438,7 +457,7 @@ export const installSparkFallbacks = () => {
     return;
   }
 
-  const globalSpark = ((window as any).spark ??= {});
+  const globalSpark: SparkGlobal = ((window as unknown).spark ??= {}) as SparkGlobal;
   const remoteKv: SparkKv | undefined = globalSpark.kv;
 
   const resolveActiveKv = (): { client: SparkKv; source: KvSource } => {
@@ -545,6 +564,6 @@ export const getActiveSparkKv = (): SparkKv => {
     return fallbackKv;
   }
 
-  const globalSpark = ((window as any).spark ??= {});
-  return (globalSpark.kv as SparkKv) ?? fallbackKv;
+  const globalSpark: SparkGlobal = ((window as unknown).spark ??= {}) as SparkGlobal;
+  return globalSpark.kv ?? fallbackKv;
 };

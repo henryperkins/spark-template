@@ -382,7 +382,7 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
                       <div className="space-y-2">
                         <h4 className="font-medium text-sm">Recent Invalidations</h4>
                         <div className="space-y-2">
-                          {cacheMetrics.recentInvalidations.slice(0, 5).map((event: any, idx: number) => (
+                          {cacheMetrics.recentInvalidations.slice(0, 5).map((event: unknown, idx: number) => (
                             <div key={idx} className="p-2 bg-muted rounded-md text-xs">
                               <div className="flex items-center justify-between mb-1">
                                 <Badge variant="outline" className="text-xs">
@@ -558,7 +558,7 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
                   <div className="space-y-2">
                     <h4 className="font-medium text-sm">Usage by Model</h4>
                     <div className="space-y-2">
-                      {Object.entries(tokenMetrics.byModel).map(([model, stats]: [string, any]) => (
+                      {Object.entries(tokenMetrics.byModel).map(([model, stats]: [string, unknown]) => (
                         <div key={model} className="p-3 bg-muted rounded-lg">
                           <div className="flex items-center justify-between mb-2">
                             <span className="font-medium text-sm">{model}</span>
@@ -661,7 +661,7 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
                       <div className="space-y-2">
                         <h4 className="font-medium text-sm">Recent Errors</h4>
                         <div className="space-y-2 max-h-60 overflow-y-auto">
-                          {errorMetrics.recentErrors.map((error: any) => (
+                          {errorMetrics.recentErrors.map((error: unknown) => (
                             <div key={error.errorId} className="p-3 bg-destructive/10 rounded-lg text-xs">
                               <div className="flex items-center justify-between mb-1">
                                 <div className="flex items-center gap-2">

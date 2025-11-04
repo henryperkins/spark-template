@@ -17,10 +17,16 @@ export class AzureSearchService {
     try {
       if (typeof window !== 'undefined') {
         const token = window.localStorage?.getItem('KV_API_KEY')
-        return token || undefined
+        if (token) {
+          return token
+        }
       }
-    } catch (e) {
+    } catch {
       // ignore storage access errors (Safari ITP, disabled storage, etc.)
+    }
+    // Fallback for build-time key (e.g., for demos, CI)
+    if (import.meta.env.VITE_KV_API_KEY) {
+      return import.meta.env.VITE_KV_API_KEY
     }
     return undefined
   }
@@ -138,7 +144,54 @@ export class AzureSearchService {
 
   async createSearchIndex(): Promise<{ success: boolean; error?: string }> {
     try {
-      const indexSchema: any = {
+      const compressionEnabled = this.config.vectorCompression?.enabled ?? false
+      const compressionMethod = this.config.vectorCompression?.method
+      const compressionName = 'vector-compression'
+
+      const vectorSearchConfig: Record<string, unknown> = {
+        algorithms: [
+          {
+            name: 'hnsw-algorithm',
+            kind: 'hnsw',
+            hnswParameters: {
+              metric: 'cosine',
+              m: 8,
+              efConstruction: 800,
+              efSearch: 800
+            }
+          },
+          {
+            name: 'exhaustive-algorithm',
+            kind: 'exhaustiveKnn',
+            exhaustiveKnnParameters: {
+              metric: 'cosine'
+            }
+          }
+        ],
+        profiles: [
+          {
+            name: 'vector-profile-hnsw',
+            algorithm: 'hnsw-algorithm',
+            ...(compressionEnabled && { compression: compressionName })
+          },
+          {
+            name: 'vector-profile-exhaustive',
+            algorithm: 'exhaustive-algorithm'
+          }
+        ]
+      }
+
+      if (compressionEnabled && compressionMethod) {
+        vectorSearchConfig.compressions = [
+          {
+            name: compressionName,
+            kind: compressionMethod === 'scalar' ? 'scalarQuantization' : 'binaryQuantization',
+            ...(compressionMethod === 'scalar' && { scalarQuantizationParameters: { quantizedDataType: 'int8' } })
+          }
+        ]
+      }
+
+      const indexSchema: unknown = {
         name: this.config.indexName,
         fields: [
           {
@@ -213,40 +266,7 @@ export class AzureSearchService {
             retrievable: true
           }
         ],
-        vectorSearch: {
-          algorithms: [
-            {
-              name: 'hnsw-algorithm',
-              kind: 'hnsw',
-              hnswParameters: {
-                metric: 'cosine',
-                m: 8,
-                efConstruction: 800,
-                efSearch: 800
-              }
-            },
-            {
-              name: 'exhaustive-algorithm',
-              kind: 'exhaustiveKnn',
-              exhaustiveKnnParameters: {
-                metric: 'cosine'
-              }
-            }
-          ],
-          profiles: [
-            {
-              name: 'vector-profile-hnsw',
-              algorithm: 'hnsw-algorithm',
-              ...(this.config.vectorCompression?.enabled && {
-                compression: this.config.vectorCompression.method === 'scalar' ? 'scalarQuantization' : 'binaryQuantization'
-              })
-            },
-            {
-              name: 'vector-profile-exhaustive',
-              algorithm: 'exhaustive-algorithm'
-            }
-          ]
-        }
+        vectorSearch: vectorSearchConfig
       }
 
       if (this.config.semanticConfiguration?.enabled) {
@@ -315,14 +335,16 @@ export class AzureSearchService {
             method: 'POST',
             headers: this.proxyHeaders(),
             body: JSON.stringify({
+              indexName: this.config.indexName,
               apiVersion: this.config.apiVersion,
-              schema: indexSchema
+              schema: indexSchema,
+              allowIndexDowntime: true
             })
           })
         : fetch(
-            `${this.config.endpoint}/indexes?api-version=${this.config.apiVersion}`,
+            `${this.config.endpoint}/indexes/${this.config.indexName}?api-version=${this.config.apiVersion}&allowIndexDowntime=true`,
             {
-              method: 'POST',
+              method: 'PUT',
               headers: {
                 'api-key': this.config.apiKey,
                 'Content-Type': 'application/json'
@@ -349,7 +371,11 @@ export class AzureSearchService {
     }
   }
 
-  async indexDocuments(documents: AzureSearchDocument[], namespace?: string): Promise<{ success: boolean; error?: string }> {
+  async indexDocuments(
+    documents: AzureSearchDocument[],
+    namespace?: string,
+    allowSchemaRefresh: boolean = true
+  ): Promise<{ success: boolean; error?: string }> {
     try {
       const effectiveNamespace = namespace || this.config.namespace || 'default'
 
@@ -397,11 +423,26 @@ export class AzureSearchService {
 
       if (!response.ok) {
         const errorText = await response.text()
-        return { success: false, error: `Indexing failed: ${response.status} ${errorText}` }
+        const missingFieldMessageMatch = /The property '(\w+)' does not exist on type 'search\.documentFields'/i.exec(errorText)
+        if (missingFieldMessageMatch && allowSchemaRefresh) {
+          const refreshResult = await this.createSearchIndex()
+          if (!refreshResult.success) {
+            return {
+              success: false,
+              error: `Indexing failed after attempting to refresh index schema: ${refreshResult.error || 'Unknown schema refresh error'}. Original error: ${errorText}`
+            }
+          }
+          // Retry once with schema refreshed
+          return this.indexDocuments(documents, namespace, false)
+        }
+        const guidanceSuffix = missingFieldMessageMatch
+          ? ` Hint: Ensure the Azure AI Search index '${this.config.indexName}' defines the '${missingFieldMessageMatch[1]}' field with the expected data type (for example, 'content' as Edm.String and 'contentVector' as Collection(Edm.Single)). You may need to recreate or update the index schema before indexing.`
+          : ''
+        return { success: false, error: `Indexing failed: ${response.status} ${errorText}${guidanceSuffix}` }
       }
 
       const result = await response.json()
-      const failedDocs = result.value?.filter((item: any) => !item.status || item.status >= 400)
+      const failedDocs = result.value?.filter((item: unknown) => !item.status || item.status >= 400)
 
       if (failedDocs && failedDocs.length > 0) {
         return { success: false, error: `Some documents failed to index: ${JSON.stringify(failedDocs)}` }
@@ -472,7 +513,7 @@ export class AzureSearchService {
 
   async keywordSearch(query: string, top: number = 5, namespace?: string): Promise<Source[]> {
     try {
-      const searchRequest: any = {
+      const searchRequest: unknown = {
         search: query,
         searchMode: 'all',
         queryType: 'simple',
@@ -512,9 +553,9 @@ export class AzureSearchService {
         throw new Error(`Keyword search failed: ${response.status} ${errorText}`)
       }
 
-      const result: any = await response.json()
+      const result: unknown = await response.json()
 
-      return result.value.map((doc: any) => ({
+      return result.value.map((doc: unknown) => ({
         documentId: doc.documentId,
         documentName: doc.documentName,
         chunkId: doc.id,
@@ -536,7 +577,7 @@ export class AzureSearchService {
       const effectiveNamespace = namespace || this.config.namespace
       const maxTextRecallSize = this.config.hybridSearch?.maxTextRecallSize ?? 2000
 
-      const searchRequest: any = {
+      const searchRequest: unknown = {
         search: query,
         count: true,
         select: 'id,content,documentId,documentName,chunkIndex,createdAt,contentLength,metadata',
@@ -608,9 +649,9 @@ export class AzureSearchService {
         throw new Error(`Semantic hybrid search failed: ${response.status} ${errorText}`)
       }
 
-      const result: any = await response.json()
+      const result: unknown = await response.json()
 
-      let sources = result.value.map((doc: any) => ({
+      let sources = result.value.map((doc: unknown) => ({
         documentId: doc.documentId,
         documentName: doc.documentName,
         chunkId: doc.id,
@@ -704,7 +745,7 @@ export class AzureSearchService {
       }
 
       const deleteBatch = {
-        value: searchResult.value.map((doc: any) => ({
+        value: searchResult.value.map((doc: unknown) => ({
           '@search.action': 'delete',
           id: doc.id
         }))

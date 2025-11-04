@@ -56,13 +56,13 @@ export interface AppConfig {
 
 function readEnv(key: string): string | undefined {
   try {
-    const val = (import.meta as any)?.env?.[key]
+    const val = (import.meta as unknown)?.env?.[key]
     if (val !== undefined) return String(val)
   } catch {
     // ignore
   }
   try {
-    const val = (globalThis as any)?.process?.env?.[key]
+    const val = (globalThis as unknown)?.process?.env?.[key]
     if (val !== undefined) return String(val)
   } catch {
     // ignore
