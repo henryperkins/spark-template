@@ -144,10 +144,126 @@ export class AzureSearchService {
 
   async createSearchIndex(vectorDimensions?: number): Promise<{ success: boolean; error?: string }> {
     try {
-      const compressionEnabled = this.config.vectorCompression?.enabled ?? false
-      const compressionMethod = this.config.vectorCompression?.method
-      const compressionName = 'vector-compression'
       const dimensions = vectorDimensions ?? this.getDefaultVectorDimensions()
+
+      // Fetch existing index metadata so we can preserve settings Azure won't let us remove (e.g., compression)
+      let existingIndex: Record<string, unknown> | null = null
+      try {
+        const existingIndexResponse = await (this.shouldProxy()
+          ? fetch(
+              `/api/azure-search/indexes/${encodeURIComponent(this.config.indexName)}?apiVersion=${encodeURIComponent(this.config.apiVersion)}`,
+              {
+                method: 'GET',
+                headers: this.proxyHeaders()
+              }
+            )
+          : fetch(
+              `${this.config.endpoint}/indexes/${this.config.indexName}?api-version=${this.config.apiVersion}`,
+              {
+                method: 'GET',
+                headers: {
+                  'api-key': this.config.apiKey,
+                  'Content-Type': 'application/json'
+                }
+              }
+            ))
+
+        if (existingIndexResponse.ok) {
+          existingIndex = (await existingIndexResponse.json()) as Record<string, unknown>
+        }
+      } catch {
+        // Ignore fetch errors when probing for existing index metadata
+      }
+
+      type VectorProfile = Record<string, unknown>
+      type VectorCompression = Record<string, unknown>
+
+      const existingProfiles: VectorProfile[] = Array.isArray(
+        (existingIndex as { vectorSearch?: { profiles?: VectorProfile[] } } | null)?.vectorSearch?.profiles
+      )
+        ? ((existingIndex as { vectorSearch?: { profiles?: VectorProfile[] } } | null)?.vectorSearch?.profiles as VectorProfile[])
+        : []
+
+      let existingCompressionName: string | undefined
+      for (const profile of existingProfiles) {
+        if (
+          profile &&
+          typeof profile === 'object' &&
+          'compression' in profile &&
+          typeof (profile as { compression?: unknown }).compression === 'string'
+        ) {
+          if ((profile as { name?: unknown }).name === 'vector-profile-hnsw') {
+            existingCompressionName = (profile as { compression: string }).compression
+            break
+          }
+          if (!existingCompressionName) {
+            existingCompressionName = (profile as { compression: string }).compression
+          }
+        }
+      }
+
+      const existingCompressions: VectorCompression[] = Array.isArray(
+        (existingIndex as { vectorSearch?: { compressions?: VectorCompression[] } } | null)?.vectorSearch?.compressions
+      )
+        ? ((existingIndex as { vectorSearch?: { compressions?: VectorCompression[] } } | null)
+            ?.vectorSearch?.compressions as VectorCompression[])
+        : []
+
+      const resolveCompressionMethod = (entry: VectorCompression | undefined): 'scalar' | 'binary' | undefined => {
+        if (!entry || typeof entry !== 'object') return undefined
+        const kind = (entry as { kind?: unknown }).kind
+        if (kind === 'scalarQuantization') return 'scalar'
+        if (kind === 'binaryQuantization') return 'binary'
+        return undefined
+      }
+
+      const findCompressionEntry = (name: string | undefined): VectorCompression | undefined => {
+        if (!name) return undefined
+        return existingCompressions.find(
+          compression =>
+            compression &&
+            typeof compression === 'object' &&
+            (compression as { name?: unknown }).name === name
+        )
+      }
+
+      const existingCompressionEntry = findCompressionEntry(existingCompressionName)
+      let existingCompressionMethod = resolveCompressionMethod(existingCompressionEntry)
+
+      if (!existingCompressionEntry && existingCompressions.length > 0) {
+        const fallbackEntry = existingCompressions[0]
+        if (!existingCompressionName && fallbackEntry && typeof fallbackEntry === 'object') {
+          const fallbackName = (fallbackEntry as { name?: unknown }).name
+          if (typeof fallbackName === 'string') {
+            existingCompressionName = fallbackName
+          }
+        }
+        existingCompressionMethod = resolveCompressionMethod(fallbackEntry)
+      }
+
+      const wantsCompression = this.config.vectorCompression?.enabled ?? false
+      let compressionEnabled = wantsCompression
+      let compressionMethod: 'scalar' | 'binary' | undefined = wantsCompression
+        ? this.config.vectorCompression?.method
+        : undefined
+      let compressionName = existingCompressionName ?? 'vector-compression'
+
+      if (existingCompressionMethod) {
+        // Azure does not allow dropping compression once applied; preserve the existing setting.
+        compressionEnabled = true
+        if (!compressionMethod) {
+          compressionMethod = existingCompressionMethod
+        }
+        if (existingCompressionName) {
+          compressionName = existingCompressionName
+        }
+      } else if (wantsCompression) {
+        compressionName = 'vector-compression'
+      }
+
+      if (compressionEnabled && !compressionMethod) {
+        compressionMethod = 'scalar'
+      }
 
       const vectorSearchConfig: Record<string, unknown> = {
         algorithms: [
@@ -173,7 +289,7 @@ export class AzureSearchService {
           {
             name: 'vector-profile-hnsw',
             algorithm: 'hnsw-algorithm',
-            ...(compressionEnabled && { compression: compressionName })
+            ...(compressionEnabled && compressionName ? { compression: compressionName } : {})
           },
           {
             name: 'vector-profile-exhaustive',
@@ -182,14 +298,26 @@ export class AzureSearchService {
         ]
       }
 
-      if (compressionEnabled && compressionMethod) {
-        vectorSearchConfig.compressions = [
-          {
-            name: compressionName,
-            kind: compressionMethod === 'scalar' ? 'scalarQuantization' : 'binaryQuantization',
-            ...(compressionMethod === 'scalar' && { scalarQuantizationParameters: { quantizedDataType: 'int8' } })
-          }
-        ]
+      if (compressionEnabled && compressionMethod && compressionName) {
+        const baseCompression =
+          existingCompressionEntry && (existingCompressionEntry as { name?: unknown }).name === compressionName
+            ? { ...existingCompressionEntry }
+            : {
+                name: compressionName
+              }
+
+        const compressionPayload: Record<string, unknown> = {
+          ...baseCompression,
+          kind: compressionMethod === 'scalar' ? 'scalarQuantization' : 'binaryQuantization'
+        }
+
+        if (compressionMethod === 'scalar') {
+          compressionPayload.scalarQuantizationParameters = { quantizedDataType: 'int8' }
+        } else {
+          delete (compressionPayload as { scalarQuantizationParameters?: unknown }).scalarQuantizationParameters
+        }
+
+        vectorSearchConfig.compressions = [compressionPayload]
       }
 
       const indexSchema: Record<string, unknown> = {
@@ -370,6 +498,92 @@ export class AzureSearchService {
       }
       return { success: false, error: `Index creation failed: ${error instanceof Error ? error.message : 'Unknown error'}` }
     }
+  }
+
+  async rebuildIndex(vectorDimensions?: number): Promise<{ success: boolean; error?: string }> {
+    try {
+      const deleteResponse = await (this.shouldProxy()
+        ? fetch(
+            `/api/azure-search/indexes/${encodeURIComponent(this.config.indexName)}?apiVersion=${encodeURIComponent(this.config.apiVersion)}`,
+            {
+              method: 'DELETE',
+              headers: this.proxyHeaders()
+            }
+          )
+        : fetch(
+            `${this.config.endpoint}/indexes/${this.config.indexName}?api-version=${this.config.apiVersion}`,
+            {
+              method: 'DELETE',
+              headers: {
+                'api-key': this.config.apiKey,
+                'Content-Type': 'application/json'
+              }
+            }
+          ))
+
+      if (!deleteResponse.ok && deleteResponse.status !== 404) {
+        const errorText = await deleteResponse.text()
+        return { success: false, error: `Index delete failed: ${deleteResponse.status} ${errorText}` }
+      }
+
+      if (deleteResponse.status !== 404) {
+        const deletionConfirmed = await this.waitForIndexRemoval()
+        if (!deletionConfirmed) {
+          return {
+            success: false,
+            error:
+              `Timed out waiting for index '${this.config.indexName}' to delete. Please wait a few seconds and try again.`
+          }
+        }
+      }
+
+      return this.createSearchIndex(vectorDimensions)
+    } catch (error) {
+      return { success: false, error: `Index rebuild failed: ${error instanceof Error ? error.message : 'Unknown error'}` }
+    }
+  }
+
+  private async waitForIndexRemoval(maxAttempts: number = 15, delayMs: number = 1000): Promise<boolean> {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const checkResponse = await (this.shouldProxy()
+        ? fetch(
+            `/api/azure-search/indexes/${encodeURIComponent(this.config.indexName)}?apiVersion=${encodeURIComponent(this.config.apiVersion)}`,
+            {
+              method: 'GET',
+              headers: this.proxyHeaders()
+            }
+          )
+        : fetch(
+            `${this.config.endpoint}/indexes/${this.config.indexName}?api-version=${this.config.apiVersion}`,
+            {
+              method: 'GET',
+              headers: {
+                'api-key': this.config.apiKey,
+                'Content-Type': 'application/json'
+              }
+            }
+          ))
+
+      if (checkResponse.status === 404) {
+        return true
+      }
+
+      // In-flight deletion returns 202/204, keep waiting
+      if (checkResponse.status === 202 || checkResponse.status === 204) {
+        await new Promise(resolve => setTimeout(resolve, delayMs))
+        continue
+      }
+
+      if (checkResponse.ok) {
+        // Index still exists
+        await new Promise(resolve => setTimeout(resolve, delayMs))
+        continue
+      }
+
+      // Unexpected error; break and propagate failure
+      return false
+    }
+    return false
   }
 
   private getDefaultVectorDimensions(): number {

@@ -234,6 +234,28 @@ export class AzureServiceManager {
     }
   }
 
+  async rebuildSearchIndex(config?: AzureConfig, vectorDimensions?: number): Promise<{ success: boolean; error?: string }> {
+    try {
+      if (config) {
+        this.config = config
+        this.searchService = new AzureSearchService(config.search)
+      } else if (!this.searchService && this.config) {
+        this.searchService = new AzureSearchService(this.config.search)
+      }
+
+      if (!this.searchService) {
+        return { success: false, error: 'Azure Search service not configured' }
+      }
+
+      return await this.searchService.rebuildIndex(vectorDimensions)
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      }
+    }
+  }
+
   getConnectionStatus(): AzureConnectionStatus | null {
     if (!this.isConfigured()) {
       return null

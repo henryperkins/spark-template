@@ -31,6 +31,7 @@ export function AzureConfiguration() {
       apiKey: '',
       indexName: 'documents',
       apiVersion: '2024-05-01-preview',
+      vectorDimensions: 1536,
       semanticConfiguration: {
         enabled: true,
         configName: 'semantic-config',
@@ -55,10 +56,27 @@ export function AzureConfiguration() {
   const [configName, setConfigName] = useState('')
   const [configDescription, setConfigDescription] = useState('')
   const [selectedConfigId, setSelectedConfigId] = useState<string>('')
+  const [rebuildingIndex, setRebuildingIndex] = useState(false)
+  const [rebuildResult, setRebuildResult] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
+
+  const inferDimensionsFromDeployment = (deploymentName: string | undefined): number => {
+    const normalized = deploymentName?.toLowerCase() ?? ''
+    if (normalized.includes('text-embedding-3-large')) {
+      return 3072
+    }
+    return 1536
+  }
 
   useEffect(() => {
     if (config) {
-      setFormData(config)
+      setFormData({
+        ...config,
+        search: {
+          ...config.search,
+          vectorDimensions:
+            config.search.vectorDimensions ?? inferDimensionsFromDeployment(config.openai.embeddingDeploymentName)
+        }
+      })
     }
   }, [config])
 
@@ -85,8 +103,17 @@ export function AzureConfiguration() {
   const handleLoadConfig = (configId: string) => {
     const savedConfig = savedConfigs?.find(c => c.id === configId)
     if (savedConfig) {
-      setFormData(savedConfig.config)
+      setFormData({
+        ...savedConfig.config,
+        search: {
+          ...savedConfig.config.search,
+          vectorDimensions:
+            savedConfig.config.search.vectorDimensions ??
+            inferDimensionsFromDeployment(savedConfig.config.openai.embeddingDeploymentName)
+        }
+      })
       setSelectedConfigId(configId)
+      setRebuildResult(null)
     }
   }
 
@@ -118,8 +145,36 @@ export function AzureConfiguration() {
     }))
   }
 
+  const handleVectorDimensionsChange = (value: string) => {
+    setFormData(prev => {
+      if (!value) {
+        const updatedSearch = { ...prev.search }
+        delete (updatedSearch as { vectorDimensions?: number }).vectorDimensions
+        return { ...prev, search: updatedSearch }
+      }
+
+      const parsed = Number(value)
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        return prev
+      }
+
+      return {
+        ...prev,
+        search: {
+          ...prev.search,
+          vectorDimensions: Math.floor(parsed)
+        }
+      }
+    })
+  }
+
+  const searchConfigReady = Boolean(formData.search.endpoint && formData.search.apiKey && formData.search.indexName)
+  const effectiveVectorDimensions =
+    formData.search.vectorDimensions ?? inferDimensionsFromDeployment(formData.openai.embeddingDeploymentName)
+
   const testConnection = async () => {
     setTesting(true)
+    setRebuildResult(null)
     try {
       const newStatus = await azureServiceManager.initialize(formData)
       setStatus(newStatus)
@@ -135,6 +190,44 @@ export function AzureConfiguration() {
       })
     } finally {
       setTesting(false)
+    }
+  }
+
+  const rebuildIndex = async () => {
+    if (!searchConfigReady) {
+      setRebuildResult({
+        type: 'error',
+        message: 'Provide your search endpoint, index name, and admin key before rebuilding.'
+      })
+      return
+    }
+
+    setRebuildingIndex(true)
+    setRebuildResult(null)
+    try {
+      const result = await azureServiceManager.rebuildSearchIndex(formData, effectiveVectorDimensions)
+      if (result.success) {
+        setRebuildResult({
+          type: 'success',
+          message: `Index '${formData.search.indexName}' rebuilt with ${effectiveVectorDimensions} vector dimensions.`
+        })
+      } else {
+        const errorMessage = result.error ?? 'Index rebuild failed for an unknown reason.'
+        const enhancedMessage = errorMessage.includes("Existing field 'contentVector' cannot be changed")
+          ? `${errorMessage} Azure may still be removing the previous index. Wait a few seconds and try again.`
+          : errorMessage
+        setRebuildResult({
+          type: 'error',
+          message: enhancedMessage
+        })
+      }
+    } catch (error) {
+      setRebuildResult({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'Index rebuild failed due to an unknown error.'
+      })
+    } finally {
+      setRebuildingIndex(false)
     }
   }
 
@@ -488,6 +581,20 @@ export function AzureConfiguration() {
                   </Button>
                 </div>
               </div>
+              <div className="space-y-2">
+                <Label htmlFor="vector-dimensions">Vector Dimensions</Label>
+                <Input
+                  id="vector-dimensions"
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={effectiveVectorDimensions}
+                  onChange={(e) => handleVectorDimensionsChange(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Use 3,072 for <code>text-embedding-3-large</code>, 1,536 for most other Azure OpenAI embedding models.
+                </p>
+              </div>
             </TabsContent>
 
             <TabsContent value="optimization" className="space-y-6">
@@ -797,6 +904,42 @@ export function AzureConfiguration() {
               <CloudCheck className="mr-2" size={16} />
               Save Configuration
             </Button>
+          </div>
+
+          <div className="mt-4 p-4 border rounded-lg bg-muted/40 space-y-3">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Sparkle size={16} className="text-primary" />
+                  <h4 className="font-medium">Index Maintenance</h4>
+                </div>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Drop and recreate the Azure AI Search index when switching embedding models or vector dimensions.
+                </p>
+              </div>
+              <Button
+                onClick={rebuildIndex}
+                disabled={!searchConfigReady || rebuildingIndex}
+                variant="outline"
+              >
+                {rebuildingIndex ? (
+                  <div className="animate-spin w-4 h-4 border-2 border-current border-t-transparent rounded-full mr-2" />
+                ) : (
+                  <Sparkle className="mr-2" size={16} />
+                )}
+                Rebuild Index
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Target vector dimensions: {effectiveVectorDimensions}. Update the value above before rebuilding if your embedding model changes.
+            </p>
+            {rebuildResult && (
+              <Alert variant={rebuildResult.type === 'success' ? 'default' : 'destructive'}>
+                <AlertDescription className="text-sm">
+                  {rebuildResult.message}
+                </AlertDescription>
+              </Alert>
+            )}
           </div>
 
           <Alert className="mt-4">
