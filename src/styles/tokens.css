@@ -142,8 +142,8 @@
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.97 0 0);
   --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
+  --accent: oklch(0.78 0.14 232);
+  --accent-foreground: oklch(0.22 0.06 232);
   --destructive: oklch(0.577 0.245 27.325);
   --destructive-foreground: oklch(0.985 0 0);
   --border: oklch(0.922 0 0);
@@ -207,6 +207,22 @@
   --color-accent-12: var(--blue-12);
   --color-accent-contrast: var(--blue-contrast);
 
+  /* Contrast helpers */
+  --slate-contrast: #111820;
+  --blue-contrast: #113264;
+  --cyan-contrast: #0d3c48;
+  --red-contrast: #641723;
+  --purple-contrast: #402060;
+  --pink-contrast: #651249;
+  --indigo-contrast: #1f2d5c;
+  --teal-contrast: #0d3d38;
+  --green-contrast: #193b2d;
+  --amber-contrast: #2f1b00;
+  --mint-contrast: #16433c;
+  --grass-contrast: #203c25;
+  --orange-contrast: #582d1d;
+  --violet-contrast: #2f265f;
+
   /* Secondary accent palette */
   --color-accent-secondary-1: var(--violet-1);
   --color-accent-secondary-2: var(--violet-2);
@@ -231,11 +247,16 @@
   --color-focus-ring: var(--color-accent-9);
 
   /* Status tokens */
-  --color-status-success: var(--green-9);
-  --color-status-warning: var(--amber-9);
-  --color-status-error: var(--red-9);
-  --color-status-info: var(--blue-9);
-  --color-status-processing: var(--violet-9);
+  --color-status-success: var(--green-9, #30a46c);
+  --color-status-success-foreground: var(--green-contrast, #193b2d);
+  --color-status-warning: var(--amber-9, #ffc53d);
+  --color-status-warning-foreground: var(--amber-contrast, #2f1b00);
+  --color-status-error: var(--red-9, #e5484d);
+  --color-status-error-foreground: var(--red-contrast, #641723);
+  --color-status-info: var(--blue-9, #0090ff);
+  --color-status-info-foreground: var(--blue-contrast, #113264);
+  --color-status-processing: var(--violet-9, #8e4ec6);
+  --color-status-processing-foreground: var(--violet-contrast, #2f265f);
 
   /* Architecture layer accents */
   --layer-presentation: var(--blue-9);
@@ -283,8 +304,8 @@
   --secondary-foreground: oklch(0.985 0 0);
   --muted: oklch(0.269 0 0);
   --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
+  --accent: oklch(0.48 0.17 232);
+  --accent-foreground: oklch(0.93 0.02 232);
   --destructive: oklch(0.704 0.191 22.216);
   --destructive-foreground: oklch(0.205 0 0);
   --border: oklch(1 0 0 / 10%);

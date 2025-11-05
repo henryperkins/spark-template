@@ -30,12 +30,15 @@ export function ResponsiveNavigation({
       onValueChange={setActiveTab}
       className={cn("hidden md:block", className)}
     >
-      <TabsList className="grid w-full" style={{ gridTemplateColumns: `repeat(${tabs.length}, 1fr)` }}>
+      <TabsList
+        className="grid h-auto w-full gap-2 rounded-xl bg-muted/60 p-1 shadow-sm ring-1 ring-border/40 backdrop-blur-sm"
+        style={{ gridTemplateColumns: `repeat(${tabs.length}, 1fr)` }}
+      >
         {tabs.map((tab) => (
           <TabsTrigger
             key={tab.value}
             value={tab.value}
-            className="flex items-center gap-2 transition-all duration-200"
+            className="flex items-center gap-1.5 px-2.5 py-2 text-xs font-medium transition-all duration-200 sm:gap-2 sm:px-3 sm:text-sm"
           >
             {tab.icon}
             <span className="hidden lg:inline">{tab.label}</span>
@@ -69,7 +72,7 @@ export function ResponsiveNavigation({
           <AccordionItem
             key={tab.value}
             value={tab.value}
-            className="bg-muted/50 rounded-lg border border-border overflow-hidden transition-all duration-200 hover:border-accent-9/50 data-[state=open]:border-accent-9 data-[state=open]:bg-accent-2/50"
+            className="group bg-muted/50 rounded-lg border border-border overflow-hidden transition-all duration-200 hover:border-accent-9/50 data-[state=open]:border-accent-9 data-[state=open]:bg-accent-2/50"
           >
             <AccordionTrigger className="px-4 hover:no-underline hover:bg-accent-3/30 transition-colors">
               <div className="flex items-center gap-3 font-semibold text-foreground">

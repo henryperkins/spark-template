@@ -15,6 +15,7 @@ import { AgentWorkflowVisualizer } from './AgentWorkflowVisualizer'
 import { SuggestedQuestions } from './SuggestedQuestions'
 import { queryHistoryService } from '@/lib/services/query-history'
 import { azureServiceManager } from '@/lib/azure-service-manager'
+import { cn } from '@/lib/utils'
 
 interface QueryInterfaceProps {
   documents: Document[]
@@ -154,13 +155,13 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle className="flex items-center gap-2">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <CardTitle className="flex items-center gap-2 text-lg sm:text-xl">
               <Brain size={20} />
               Ask Your Knowledge Base
             </CardTitle>
-            <div className="flex items-center gap-2">
-              <Label htmlFor="agentic-mode" className="text-sm cursor-pointer">
+            <div className="flex flex-wrap items-center gap-2">
+              <Label htmlFor="agentic-mode" className="cursor-pointer text-sm">
                 Agentic Mode
               </Label>
               <Switch
@@ -178,7 +179,7 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
           </div>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleSubmit} className="flex gap-2">
+          <form onSubmit={handleSubmit} className="flex flex-col gap-2 sm:flex-row">
             <Input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -189,6 +190,7 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
             <Button
               type="submit"
               disabled={loading || !query.trim() || documents.length === 0}
+              className="w-full sm:w-auto"
             >
               {loading ? (
                 <div className="animate-spin w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full" />
@@ -225,9 +227,15 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
           )}
           
           {messages.map((message) => (
-            <Card key={message.id} className={message.type === 'user' ? 'ml-8' : 'mr-8'}>
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between mb-3">
+            <Card
+              key={message.id}
+              className={cn(
+                "max-w-full",
+                message.type === 'user' ? 'sm:ml-10' : 'sm:mr-10'
+              )}
+            >
+              <CardContent className="space-y-4 p-4 sm:p-5">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <Badge variant={message.type === 'user' ? 'default' : 'secondary'}>
                     {message.type === 'user' ? 'You' : 'Assistant'}
                   </Badge>
@@ -238,22 +246,24 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
 
                 {message.type === 'assistant' && message.azureFallback && (
                   <Alert variant="warning" className="mb-3">
-                    <AlertTitle className="flex items-center gap-2 text-sm font-semibold">
+                    <AlertTitle className="flex flex-wrap items-center gap-2 text-sm font-semibold">
                       <CloudSlash size={16} />
                       Using Local Search
                     </AlertTitle>
-                    <AlertDescription className="space-y-2 text-xs">
+                    <AlertDescription className="space-y-3 text-sm sm:text-base">
                       <p>
                         Azure AI Search is temporarily unavailable. Results are from local vector search and may be less comprehensive.
                       </p>
-                      <a
-                        href="https://status.azure.com/en-us/status"
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-1 text-xs font-medium text-primary underline underline-offset-4"
-                      >
-                        Check Azure Status →
-                      </a>
+                      <span className="inline-flex">
+                        <a
+                          href="https://status.azure.com/en-us/status"
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 rounded px-0 text-sm font-medium text-primary underline underline-offset-4 sm:text-base"
+                        >
+                          Check Azure Status →
+                        </a>
+                      </span>
                     </AlertDescription>
                   </Alert>
                 )}

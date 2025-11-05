@@ -1,8 +1,9 @@
-@import "tailwindcss";
-@import "./styles/tokens.css";
-@import "tw-animate-css";
-
 @config "../tailwind.config.js";
+
+/* Load shared design tokens before Tailwind so utilities can resolve the variables. */
+@import "./styles/tokens.css";
+@import "tailwindcss";
+@import "tw-animate-css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -22,12 +23,12 @@
   }
 
   :root {
-    font-family: var(--font-sans);
+    font-family: var(--font-sans, "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
   }
 
   body {
     @apply bg-background text-foreground;
-    font-family: var(--font-sans);
+    font-family: var(--font-sans, "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
   }
@@ -36,5 +37,20 @@
 @layer utilities {
   .font-mono {
     font-family: var(--font-mono), monospace;
+  }
+
+  /* Error display utilities */
+  .error-message-truncate {
+    @apply line-clamp-2 text-xs text-status-error max-w-full overflow-hidden;
+  }
+
+  .error-details {
+    @apply max-h-32 max-w-full overflow-auto whitespace-pre-wrap break-words rounded-md border p-2.5 text-xs text-status-error font-mono leading-relaxed;
+    border-color: var(--red-6);
+    background-color: var(--red-1);
+  }
+
+  .error-summary {
+    @apply flex items-center gap-1.5 text-xs text-status-error hover:underline cursor-pointer font-medium;
   }
 }

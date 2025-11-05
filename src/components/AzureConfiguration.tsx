@@ -143,16 +143,18 @@ export function AzureConfiguration() {
     setConfig(formData)
   }
 
+  const STATUS_ICON_SIZE = 18
+
   const getStatusIcon = (serviceStatus: string) => {
     switch (serviceStatus) {
       case 'connected':
-        return <CloudCheck className="text-green-500" size={16} />
+        return <CloudCheck className="text-status-success" size={STATUS_ICON_SIZE} />
       case 'error':
-        return <CloudX className="text-red-500" size={16} />
+        return <CloudX className="text-status-error" size={STATUS_ICON_SIZE} />
       case 'testing':
-        return <TestTube className="text-blue-500 animate-pulse" size={16} />
+        return <TestTube className="text-status-info animate-pulse" size={STATUS_ICON_SIZE} />
       default:
-        return <CloudArrowUp className="text-muted-foreground" size={16} />
+        return <CloudArrowUp className="text-muted-foreground" size={STATUS_ICON_SIZE} />
     }
   }
 

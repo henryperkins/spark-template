@@ -235,11 +235,11 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="flex gap-3">
+              <div className="flex flex-col gap-2 sm:flex-row sm:gap-3">
                 <Button
                   onClick={handleIncrementalRefresh}
                   disabled={refreshing || documents.length === 0}
-                  className="flex-1"
+                  className="w-full sm:flex-1"
                 >
                   <ArrowsClockwise size={16} className="mr-2" />
                   Incremental Refresh
@@ -248,7 +248,7 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
                   onClick={handleFullRefresh}
                   disabled={refreshing || documents.length === 0}
                   variant="secondary"
-                  className="flex-1"
+                  className="w-full sm:flex-1"
                 >
                   <Database size={16} className="mr-2" />
                   Full Refresh

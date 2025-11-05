@@ -82,12 +82,13 @@ export function AlertPanel() {
             )}
           </CardTitle>
           {alertList.length > 0 && (
-            <div className="flex gap-2">
+            <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
               {unacknowledged.length > 0 && (
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={acknowledgeAll}
+                  className="w-full sm:w-auto"
                 >
                   <CheckCircle size={16} className="mr-2" />
                   Acknowledge All
@@ -97,6 +98,7 @@ export function AlertPanel() {
                 variant="ghost"
                 size="sm"
                 onClick={clearAll}
+                className="w-full sm:w-auto"
               >
                 Clear All
               </Button>

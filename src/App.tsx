@@ -47,29 +47,31 @@ function App() {
     setDocuments((prev = []) => prev.filter(doc => doc.id !== documentId))
   }
 
+  const NAV_ICON_SIZE = 18
+
   const navigationTabs = [
     {
       value: 'query',
       label: 'Query',
-      icon: <ChatCircle size={20} />,
+      icon: <ChatCircle size={NAV_ICON_SIZE} />,
       content: <QueryInterface documents={documents || []} />
     },
     {
       value: 'upload',
       label: 'Upload',
-      icon: <FileText size={20} />,
+      icon: <FileText size={NAV_ICON_SIZE} />,
       content: <DocumentUpload onDocumentUploaded={handleDocumentUploaded} />
     },
     {
       value: 'integrations',
       label: 'Integrations',
-      icon: <PlugsConnected size={20} />,
+      icon: <PlugsConnected size={NAV_ICON_SIZE} />,
       content: <Integrations onDocumentsIngested={handleDocumentsIngested} />
     },
     {
       value: 'knowledge',
       label: 'Knowledge',
-      icon: <Brain size={20} />,
+      icon: <Brain size={NAV_ICON_SIZE} />,
       content: (
         <DocumentList
           documents={documents || []}
@@ -80,32 +82,32 @@ function App() {
     {
       value: 'scaling',
       label: 'Scaling',
-      icon: <ChartBar size={20} />,
+      icon: <ChartBar size={NAV_ICON_SIZE} />,
       content: <ScalingDashboard documents={documents || []} />
     },
     {
       value: 'azure',
       label: 'Azure',
-      icon: <CloudArrowUp size={20} />,
+      icon: <CloudArrowUp size={NAV_ICON_SIZE} />,
       content: <AzureConfiguration />
     },
     {
       value: 'architecture',
       label: 'Architecture',
-      icon: <TreeStructure size={20} />,
+      icon: <TreeStructure size={NAV_ICON_SIZE} />,
       content: <ArchitectureDiagram />
     }
   ]
 
   return (
     <div className="min-h-screen bg-background">
-      <div className="container mx-auto py-8 px-4">
-        <div className="mb-8">
-          <div className="flex items-center gap-3 mb-4">
-            <Brain size={32} className="text-primary" />
+      <div className="mx-auto max-w-6xl px-3 py-8 sm:px-6 lg:px-12">
+        <div className="mb-10">
+          <div className="flex items-center gap-4">
+            <Brain size={28} className="text-primary" />
             <div>
-              <h1 className="text-3xl font-bold text-foreground">Agentic RAG</h1>
-              <p className="text-muted-foreground">Intelligent Knowledge Assistant</p>
+              <h1 className="text-3xl font-bold text-foreground sm:text-4xl">Agentic RAG</h1>
+              <p className="text-base text-muted-foreground sm:text-lg">Intelligent Knowledge Assistant</p>
             </div>
           </div>
         </div>
@@ -113,7 +115,7 @@ function App() {
         <ResponsiveNavigation
           tabs={navigationTabs}
           defaultValue="query"
-          className="space-y-6"
+          className="space-y-6 sm:space-y-8"
         />
       </div>
     </div>
