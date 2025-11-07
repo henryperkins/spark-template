@@ -12,6 +12,7 @@ dist
 dist-ssr
 *-dist
 *.local
+markdown-output
 
 # TypeScript
 *.tsbuildinfo
