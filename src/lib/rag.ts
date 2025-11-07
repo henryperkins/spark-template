@@ -3,13 +3,7 @@ import { cacheManager } from './cache-manager'
 import { azureServiceManager } from './azure-service-manager'
 import { DocumentAnalyzerAgent, ChunkingStrategy } from './agents/document-analyzer'
 
-type WindowWithSpark = Window & {
-  spark: {
-    llmPrompt: any
-    llm: (prompt: unknown) => Promise<string>
-    kv?: unknown
-  }
-}
+ // window.spark types are declared in global ambient declarations
 
 
 export interface FindRelevantChunksOptions {
@@ -460,7 +454,7 @@ export async function generateResponse(query: string, sources: Source[]): Promis
     .map((source, index) => `[${index + 1}] ${source.content}`)
     .join('\n\n')
 
-  const prompt = (window as WindowWithSpark).spark.llmPrompt`You are a helpful research assistant. Answer the user's question based on the provided context from documents. Be accurate and cite your sources using the numbers in brackets.
+  const prompt = window.spark!.llmPrompt`You are a helpful research assistant. Answer the user's question based on the provided context from documents. Be accurate and cite your sources using the numbers in brackets.
 
 Context from documents:
 ${context}
@@ -470,7 +464,7 @@ User question: ${query}
 Please provide a comprehensive answer based on the context above. If the context doesn't fully answer the question, acknowledge what information is missing. Always cite your sources using the numbers in brackets (e.g., [1], [2]).`
 
   try {
-    const response = await (window as WindowWithSpark).spark.llm(prompt)
+    const response = await window.spark!.llm(prompt)
     return response
   } catch {
     return "I apologize, but I'm having trouble processing your request right now. Please try again in a moment."

@@ -30,7 +30,7 @@ This is an **Agentic RAG (Retrieval-Augmented Generation)** application built wi
 - **Storage**: Cloudflare KV (production) with localStorage fallback
 - **LLM Provider**: Azure OpenAI (primary) with mock fallbacks
 - **UI Components**: Radix UI primitives with custom styling
-- **Icons**: Phosphor Icons (proxied through Vite plugin)
+- **Icons**: Phosphor Icons
 
 ### Platform Integration & Storage
 
@@ -50,11 +50,11 @@ The `runtime` utility (src/lib/config.ts) automatically detects:
 - Cloudflare KV configuration (environment variables)
 - Azure OpenAI configuration
 
-**Important**: The `createIconImportProxy()` and `sparkPlugin()` in vite.config.ts must NOT be removed - they're required for icon imports.
+Note: Icons are imported directly from '@phosphor-icons/react'; no additional Vite plugins are required. The current vite.config.ts uses @vitejs/plugin-react-swc, @tailwindcss/vite, vite-plugin-wasm, and vite-plugin-top-level-await.
 
 ### State Management Pattern
 
-The `useKV` hook (src/hooks/use-spark-kv.ts) is the primary state management mechanism:
+The `useKV` hook (src/hooks/use-kv.ts) is the primary persistent state mechanism. For backward compatibility, `useSparkKV` (src/hooks/use-spark-kv.ts) re-exports `useKV`:
 - Automatically syncs state to Cloudflare KV or localStorage fallback
 - Auto-detects runtime environment and selects appropriate storage
 - Returns `[value, setter, deleter]` tuple similar to useState
@@ -124,7 +124,7 @@ The CacheManager (src/lib/cache-manager.ts) provides:
 TypeScript and Vite are configured with `@/*` alias pointing to `src/*`:
 ```typescript
 import { Document } from '@/types'
-import { useKV } from '@/hooks/use-spark-kv'
+import { useKV } from '@/hooks/use-kv'
 ```
 
 ### Type Definitions

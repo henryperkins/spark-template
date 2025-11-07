@@ -1,6 +1,6 @@
 # Agentic RAG Knowledge Assistant
 
-An enterprise-grade intelligent knowledge assistant built on GitHub Spark with multi-agent orchestration for advanced document retrieval and question answering.
+An enterprise-grade intelligent knowledge assistant targeting Cloudflare Workers with multi-agent orchestration for advanced document retrieval and question answering.
 
 ## Features
 
@@ -100,6 +100,13 @@ When enabled (default), queries flow through a sophisticated agent pipeline:
 - **Website**: Web scraping with configurable depth
 - **Dropbox**: Cloud storage integration
 - **OneDrive**: Microsoft cloud storage integration
+
+## Implementation Status
+- Vite icon proxy/plugins: Not used in this repo. Icons are imported directly from '@phosphor-icons/react'; no custom Vite plugins are required.
+- Storage hook naming: useKV (src/hooks/use-kv.ts) is primary. useSparkKV (src/hooks/use-spark-kv.ts) re-exports useKV for backward compatibility.
+- Observability: Token tracking implemented with estimation-based tokenizer; see docs/OBSERVABILITY.md limitations.
+- Azure features: Azure OpenAI and Azure AI Search are optional. Some advanced features (semantic ranking config, compression, custom scoring) depend on azure-service-manager and may be partially implemented.
+- Forward-looking docs: Context manager and updated orchestrator mentioned in docs are roadmap items and not yet implemented.
 
 ## License
 

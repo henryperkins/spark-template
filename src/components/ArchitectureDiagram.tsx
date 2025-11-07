@@ -583,9 +583,9 @@ export function ArchitectureDiagram() {
       },
       {
         name: 'Vite Build System',
-        purpose: 'Fast builds with React SWC, Tailwind CSS 4, WASM support, and Spark plugin integration',
-        technologies: ['Vite 6', 'SWC', 'Tailwind CSS', 'WASM Plugin', 'Spark Plugin'],
-        patterns: ['Plugin Architecture', 'Phosphor Icon Proxy', 'Path Aliases (@/*)']
+        purpose: 'Fast builds with React SWC, Tailwind CSS 4, and WASM support',
+        technologies: ['Vite 6', 'SWC', 'Tailwind CSS', 'WASM Plugin'],
+        patterns: ['Plugin Architecture', 'Path Aliases (@/*)']
       },
       {
         name: 'Runtime Environment Detection',

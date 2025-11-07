@@ -79,7 +79,7 @@ export interface LLMUsageMetrics {
   estimatedCost: number
   modelUsed: string
   timestamp: string
-  provider: 'azure' | 'openai'
+  provider: 'azure' | 'spark' | 'openai'
 }
 
 interface ModelPricing {
@@ -107,24 +107,45 @@ class TokenTracker {
   private maxMetricsRetention = 1000
 
   private readonly modelPricing: Record<string, ModelPricing> = {
-    'gpt-4': {
-      promptCostPer1k: 0.03,
-      completionCostPer1k: 0.06
-    },
-    'gpt-4-turbo': {
-      promptCostPer1k: 0.01,
-      completionCostPer1k: 0.03
-    },
-    'gpt-3.5-turbo': {
-      promptCostPer1k: 0.0005,
-      completionCostPer1k: 0.0015
-    }
+    'gpt-4': { promptCostPer1k: 0.03, completionCostPer1k: 0.06 },
+    'gpt-4-turbo': { promptCostPer1k: 0.01, completionCostPer1k: 0.03 },
+    'gpt-3.5-turbo': { promptCostPer1k: 0.0005, completionCostPer1k: 0.0015 },
+    'default': { promptCostPer1k: 0.01, completionCostPer1k: 0.03 }
   }
 
-  async trackUsage(metrics: Omit<LLMUsageMetrics, 'timestamp'>): Promise<void> {
+  private getPricingForModel(model: string): ModelPricing {
+    const normalized = (model || '').toLowerCase()
+    if (normalized.includes('gpt-4-turbo')) return this.modelPricing['gpt-4-turbo']
+    if (normalized.includes('gpt-4')) return this.modelPricing['gpt-4']
+    if (normalized.includes('gpt-3.5')) return this.modelPricing['gpt-3.5-turbo']
+    return this.modelPricing['default']
+  }
+
+  private calculateCost(promptTokens: number, completionTokens: number, pricing: ModelPricing): number {
+    const promptCost = (promptTokens / 1000) * pricing.promptCostPer1k
+    const completionCost = (completionTokens / 1000) * pricing.completionCostPer1k
+    return promptCost + completionCost
+  }
+
+  async trackUsage(metrics: {
+    promptTokens: number
+    completionTokens: number
+    totalTokens: number
+    modelUsed: string
+    provider: 'azure' | 'spark' | 'openai'
+    timestamp?: string
+  }): Promise<void> {
+    const pricing = this.getPricingForModel(metrics.modelUsed)
+    const estimatedCost = this.calculateCost(metrics.promptTokens, metrics.completionTokens, pricing)
+
     const fullMetrics: LLMUsageMetrics = {
-      ...metrics,
-      timestamp: new Date().toISOString()
+      promptTokens: metrics.promptTokens,
+      completionTokens: metrics.completionTokens,
+      totalTokens: metrics.totalTokens,
+      estimatedCost,
+      modelUsed: metrics.modelUsed,
+      provider: metrics.provider,
+      timestamp: metrics.timestamp || new Date().toISOString()
     }
 
     this.usageMetrics.push(fullMetrics)
@@ -140,6 +161,17 @@ class TokenTracker {
     }
   }
 
+  recordUsage(metrics: {
+    promptTokens: number
+    completionTokens: number
+    totalTokens: number
+    modelUsed: string
+    provider: 'azure' | 'spark' | 'openai'
+    timestamp?: string
+  }): Promise<void> {
+    return this.trackUsage(metrics)
+  }
+
   async loadMetrics(): Promise<void> {
     try {
       const stored = await storage.get('llm-usage-metrics')
@@ -153,6 +185,20 @@ class TokenTracker {
 
   getMetrics(): LLMUsageMetrics[] {
     return [...this.usageMetrics]
+  }
+
+  getMetricsByModel(): Record<string, ModelStats> {
+    const byModel: Record<string, ModelStats> = {}
+    for (const m of this.usageMetrics) {
+      const key = m.modelUsed
+      if (!byModel[key]) {
+        byModel[key] = { count: 0, totalTokens: 0, totalCost: 0 }
+      }
+      byModel[key].count += 1
+      byModel[key].totalTokens += m.totalTokens
+      byModel[key].totalCost += m.estimatedCost
+    }
+    return byModel
   }
 
   getTotalUsage(): { tokens: number; cost: number } {
@@ -200,6 +246,33 @@ class TokenTracker {
     } catch (error) {
       console.warn('[token-tracker] Failed to load budget:', error)
       return null
+    }
+  }
+
+  async getBudgetStatus(): Promise<{
+    dailyLimit: number
+    currentUsage: number
+    percentageUsed: number
+    remainingTokens: number
+    isNearLimit: boolean
+    isOverLimit: boolean
+  }> {
+    const budget = await this.getBudget()
+    const daily = this.getDailyUsage()
+
+    const dailyLimit = budget?.dailyLimit ?? 1_000_000
+    const currentUsage = daily.totalTokens
+    const percentageUsed = dailyLimit > 0 ? (currentUsage / dailyLimit) * 100 : 0
+    const remainingTokens = Math.max(0, dailyLimit - currentUsage)
+    const alertThreshold = budget?.alertThreshold ?? 80
+
+    return {
+      dailyLimit,
+      currentUsage,
+      percentageUsed,
+      remainingTokens,
+      isNearLimit: percentageUsed >= alertThreshold,
+      isOverLimit: percentageUsed >= 100
     }
   }
 

@@ -470,13 +470,13 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
                     <div className="space-y-1">
                       <div className="text-sm text-muted-foreground">Today's Tokens</div>
                       <div className="text-2xl font-bold">
-                        {tokenMetrics.daily.tokens.toLocaleString()}
+                        {tokenMetrics.daily.totalTokens.toLocaleString()}
                       </div>
                     </div>
                     <div className="space-y-1">
                       <div className="text-sm text-muted-foreground">Today's Cost</div>
                       <div className="text-2xl font-bold text-green-11">
-                        ${tokenMetrics.daily.cost.toFixed(3)}
+                        ${tokenMetrics.daily.totalCost.toFixed(3)}
                       </div>
                     </div>
                     <div className="space-y-1">
