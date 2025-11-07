@@ -97,54 +97,95 @@ export class LLMService {
     return new Promise(res => setTimeout(res, ms))
   }
 
-  // Centralized recording of LLM usage: context + telemetry
+  // Centralized recording of LLM usage: context + telemetry.
+  // Prefers actual token counts returned by providers (Azure) and falls back to estimates only when necessary.
   private recordLLMOutcome(
     provider: 'azure' | 'worker',
     model: string | undefined,
-    promptTokens: number,
+    estimatedPromptTokens: number,
     resultText: string,
     options: CompletionOptions,
     startedAt: number,
     usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number }
   ): void {
     const resolvedModel = model || appConfig.model.defaultModel
-    const measuredPrompt = usage?.promptTokens
-    const measuredCompletion = usage?.completionTokens
-    const measuredTotal = usage?.totalTokens
-    const completionTokens = typeof measuredCompletion === 'number'
-      ? measuredCompletion
-      : estimateTokens(resultText, resolvedModel)
-    const effectivePrompt = typeof measuredPrompt === 'number' ? measuredPrompt : promptTokens
-    const effectiveTotal = typeof measuredTotal === 'number' ? measuredTotal : effectivePrompt + completionTokens
-    const cost = calculateCost(resolvedModel, effectivePrompt, effectiveTotal - effectivePrompt)
 
+    // Prefer authoritative metrics from provider when available.
+    const actualPrompt = typeof usage?.promptTokens === 'number' && Number.isFinite(usage.promptTokens)
+      ? usage.promptTokens
+      : undefined
+    const actualCompletion = typeof usage?.completionTokens === 'number' && Number.isFinite(usage.completionTokens)
+      ? usage.completionTokens
+      : undefined
+    const actualTotal = typeof usage?.totalTokens === 'number' && Number.isFinite(usage.totalTokens)
+      ? usage.totalTokens
+      : undefined
+
+    // Derive prompt tokens:
+    // - If provider gave us prompt tokens, trust them.
+    // - Else, if total and completion are known, derive prompt = total - completion.
+    // - Else, fall back to the estimated prompt tokens passed in.
+    const promptTokens =
+      actualPrompt ??
+      (actualTotal !== undefined && actualCompletion !== undefined
+        ? Math.max(actualTotal - actualCompletion, 0)
+        : estimatedPromptTokens)
+
+    // Derive completion tokens:
+    // - If provider gave us completion tokens, trust them.
+    // - Else, if total and prompt are known, derive completion = total - prompt.
+    // - Else, estimate from result text as last resort.
+    const completionTokens =
+      actualCompletion ??
+      (actualTotal !== undefined
+        ? Math.max(actualTotal - promptTokens, 0)
+        : estimateTokens(resultText, resolvedModel))
+
+    // Derive total tokens:
+    // - Prefer provider total.
+    // - Else compute from prompt + completion.
+    const totalTokens =
+      actualTotal ??
+      (promptTokens + completionTokens)
+
+    // Compute cost using the final (mostly-actual) numbers.
+    const cost = calculateCost(resolvedModel, promptTokens, completionTokens)
+
+    const duration = Date.now() - startedAt
+
+    // Push into active query context for budgeting/telemetry.
     const ctx = getActiveQueryContext()
     if (ctx) {
       try {
         recordLLMCall(ctx, {
           model: resolvedModel,
           provider,
-          promptTokens: effectivePrompt,
+          promptTokens,
           completionTokens,
-          totalTokens: effectiveTotal,
+          totalTokens,
           estimatedCost: cost,
           temperature: options.temperature,
           maxTokens: options.maxTokens,
-          duration: Date.now() - startedAt
+          duration
         })
-      } catch { /* non-fatal */ }
+      } catch {
+        // non-fatal
+      }
     }
 
+    // Persist via tokenTracker using the same authoritative-or-derived numbers.
     try {
       tokenTracker.recordUsage({
-        promptTokens: effectivePrompt,
+        promptTokens,
         completionTokens,
-        totalTokens: effectiveTotal,
+        totalTokens,
         modelUsed: resolvedModel,
         provider,
         timestamp: new Date().toISOString()
       })
-    } catch { /* best-effort */ }
+    } catch {
+      // best-effort only; never break calls on telemetry failure
+    }
   }
 
   private async acquireToken(): Promise<void> {

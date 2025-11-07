@@ -11,6 +11,23 @@ compatibility_date = "2025-11-02"
 # Logs are automatically sent to R2 for analysis and debugging
 logpush = true
 
+# Observability configuration
+[observability]
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
+[observability.traces]
+enabled = true
+head_sampling_rate = 1
+persist = true
+
+# Tail consumers for log streaming
+[[tail_consumers]]
+service = "azure-search-mcp-tail"
+
 # Static assets configuration for React SPA
 # Serves built Vite app from dist/
 [assets]

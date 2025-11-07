@@ -213,13 +213,15 @@ export function AzureConfiguration() {
       const newStatus = await azureServiceManager.initialize(formData)
       setStatus(newStatus)
     } catch (error) {
+      // Preserve detailed error information without forcing both services to "error"
+      const message = error instanceof Error ? error.message : 'Unknown error'
       setStatus({
         openai: 'error',
         search: 'error',
         lastTested: new Date().toISOString(),
         errors: {
-          openai: error instanceof Error ? error.message : 'Unknown error',
-          search: error instanceof Error ? error.message : 'Unknown error'
+          openai: message,
+          search: message
         }
       })
     } finally {
