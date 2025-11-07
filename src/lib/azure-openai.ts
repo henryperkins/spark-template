@@ -730,14 +730,14 @@ ${context}`
    */
   private toResponseMessages(
     messages: Array<{ role: string; content: string }> | string
-  ): Array<{ role: string; content: Array<{ type: string; text: string }> }> {
+  ): Array<{ role: 'system' | 'user' | 'assistant' | 'developer'; content: Array<{ type: string; text: string }> }> {
     const arr =
       typeof messages === 'string'
         ? [{ role: 'user', content: messages }]
         : messages
 
     return arr.map(m => ({
-      role: m.role || 'user',
+      role: (m.role || 'user') as 'system' | 'user' | 'assistant' | 'developer',
       content: [
         {
           type: 'input_text',

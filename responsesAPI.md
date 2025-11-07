@@ -2,7 +2,163 @@
 
 The Responses API is a new stateful API from Azure OpenAI. It brings together the best capabilities from the chat completions and assistants API in one unified experience. The Responses API also adds support for the new `computer-use-preview` model which powers the [Computer use](https://learn.microsoft.com/en-us/azure/ai-foundry/openai/how-to/computer-use) capability.
 
-## Responses API
+## Integration in This Application
+
+This application provides **first-class support** for the Responses API through a clean abstraction layer. All chat/RAG operations can be routed through the v1 Responses API by enabling it in the Azure configuration UI.
+
+### Architecture
+
+The Responses API integration follows a layered architecture:
+
+1. **UI Layer** (`AzureConfiguration.tsx`): Exposes Responses API configuration in the Azure OpenAI tab
+2. **Service Manager** (`AzureServiceManager`): Passes configuration to services
+3. **OpenAI Service** (`AzureOpenAIService`): Routes requests to Responses API when enabled
+4. **Responses Client** (`ResponsesClient`): Direct interaction with `/openai/v1/responses` endpoint
+
+### Usage Instructions
+
+**IMPORTANT**: Use the existing service abstraction layers. **DO NOT** make direct fetch calls to `/openai/v1/responses` from application code.
+
+#### Enabling Responses API
+
+1. Navigate to the **Azure** tab in the UI
+2. Expand the **Azure OpenAI** section
+3. Enable **"Use v1 Responses API for chat and RAG"** toggle
+4. Configure optional settings:
+   - **Responses Model**: Override default model (optional)
+   - **Store Responses**: Enable 30-day response storage for chaining
+   - **Background Mode**: Enable async processing for long tasks
+   - **Timeout**: Set request timeout in milliseconds
+5. Save the configuration
+
+#### Basic Usage (Chat/RAG)
+
+```typescript
+// Through AzureServiceManager (recommended)
+import { azureServiceManager } from '@/lib/azure-service-manager'
+
+// Chat completion
+const response = await azureServiceManager.generateCompletion(
+  [{ role: 'user', content: 'Hello' }],
+  { maxTokens: 1000 }
+)
+
+// RAG response
+const ragResponse = await azureServiceManager.generateResponseWithAzure(
+  query,
+  sources
+)
+
+// Streaming
+const stream = azureServiceManager.generateStream(
+  [{ role: 'user', content: 'Tell me a story' }]
+)
+for await (const chunk of stream) {
+  console.log(chunk)
+}
+```
+
+When `useResponsesApi=true`, these methods automatically route through `/openai/v1/responses`.
+
+#### Advanced Features (Responses API Only)
+
+```typescript
+import { azureServiceManager } from '@/lib/azure-service-manager'
+
+const openaiService = azureServiceManager['openaiService'] // Access internal service
+
+// Tool calling
+const toolResult = await openaiService.generateWithTools({
+  messages: [{ role: 'user', content: 'What\'s the weather?' }],
+  tools: [{
+    type: 'function',
+    name: 'get_weather',
+    parameters: { /* ... */ }
+  }]
+})
+
+// Code Interpreter
+const codeResult = await openaiService.generateWithCodeInterpreter({
+  messages: [{ role: 'user', content: 'Analyze this CSV' }],
+  fileIds: ['file-123']
+})
+
+// MCP Integration
+const mcpResult = await openaiService.generateWithMcp({
+  messages: [{ role: 'user', content: 'Query GitHub' }],
+  mcpServerUrl: 'https://mcp-server.com',
+  mcpServerLabel: 'github'
+})
+
+// Background Tasks
+const task = await openaiService.createBackgroundTask(
+  [{ role: 'user', content: 'Complex analysis' }],
+  { reasoning: { effort: 'high' } }
+)
+
+// Poll for completion
+const result = await openaiService.getBackgroundTask(task.id)
+
+// Response Chaining
+const chainedResponse = await openaiService.chainResponse({
+  previousResponseId: 'resp_123',
+  messages: [{ role: 'user', content: 'Follow-up question' }]
+})
+```
+
+#### RAG with Metadata
+
+```typescript
+// Get enhanced metadata from Responses API
+const result = await azureServiceManager.generateCompletionWithUsage(
+  [{ role: 'user', content: 'Query' }]
+)
+
+console.log(result.text)
+console.log(result.usage) // Token counts
+```
+
+### API Reference
+
+#### Responses API Configuration Options
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `useResponsesApi` | boolean | Enable v1 Responses API for chat/RAG |
+| `responsesModel` | string | Override model (defaults to `deploymentName`) |
+| `responsesStore` | boolean | Store responses for 30 days (enables chaining) |
+| `responsesBackground` | boolean | Run responses async by default |
+| `responsesTimeoutMs` | number | Request timeout in milliseconds |
+| `responsesApiVersion` | string | API version (default: "v1") |
+
+### Guardrails
+
+**✅ DO:**
+- Use `AzureServiceManager` and `AzureOpenAIService` for all LLM interactions
+- Enable Responses API via UI configuration
+- Use typed helper methods for advanced features
+- Test with both `useResponsesApi=true` and `false`
+
+**❌ DON'T:**
+- Make direct fetch calls to `/openai/v1/responses`
+- Bypass the service abstraction layers
+- Assume Responses API is always enabled
+- Use Responses API for embeddings (embeddings always use dedicated endpoint)
+
+### Testing
+
+Run the Responses API routing tests to ensure proper endpoint usage:
+
+```bash
+npm run test test/responses-api-routing.test.ts
+```
+
+These tests verify:
+- With `useResponsesApi=true`: ALL chat/RAG goes through `/openai/v1/responses`
+- With `useResponsesApi=false`: Uses `/chat/completions` fallback
+- Embeddings always use `/embeddings` endpoint
+
+## Official Azure Documentation
 
 ### API support
 
@@ -12,7 +168,7 @@ The Responses API is a new stateful API from Azure OpenAI. It brings together th
 
 - [Responses API reference documentation](https://learn.microsoft.com/en-us/azure/ai-foundry/openai/reference-preview-latest?#create-response)
 
-To access the responses API commands, you need to upgrade your version of the OpenAI library.
+For Python SDK usage:
 
 ```cmd
 pip install --upgrade openai

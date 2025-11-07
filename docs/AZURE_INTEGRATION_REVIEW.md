@@ -3,6 +3,92 @@
 **Review Date**: 2025-11-07
 **API Version Used**: 2024-05-01-preview / 2024-08-01-preview
 **Latest API Version**: 2025-08-01-preview
+**Responses API**: ✅ Fully Integrated (v1 Spec)
+
+---
+
+## 🎉 Responses API Migration (v1 Spec) - COMPLETE
+
+**Status**: ✅ 100% Complete - All chat/RAG operations support v1 Responses API
+
+### Migration Summary
+
+The application now provides **first-class support** for Azure OpenAI's v1 Responses API:
+
+✅ **UI Configuration**: Responses API settings exposed in Azure OpenAI tab
+✅ **Service Layer**: Automatic routing based on `useResponsesApi` flag
+✅ **Advanced Features**: Tools, MCP, code interpreter, background tasks, response chaining
+✅ **Testing**: 12 comprehensive vitest tests ensure correct endpoint routing
+✅ **Documentation**: Complete usage guide in `responsesAPI.md`
+
+### Architecture Flow
+
+```
+Application Code
+      ↓
+AzureServiceManager (config passthrough)
+      ↓
+AzureOpenAIService (Responses-first routing)
+      ↙           ↘
+ResponsesClient    /chat/completions
+(v1 API)          (fallback)
+```
+
+### Endpoint Routing
+
+| Operation | `useResponsesApi=true` | `useResponsesApi=false` |
+|-----------|------------------------|-------------------------|
+| Chat | `/openai/v1/responses` | `/chat/completions` |
+| Streaming | `/openai/v1/responses` | `/chat/completions` |
+| RAG | `/openai/v1/responses` | `/chat/completions` |
+| Tools | `/openai/v1/responses` | ❌ Not available |
+| MCP | `/openai/v1/responses` | ❌ Not available |
+| Background Tasks | `/openai/v1/responses` | ❌ Not available |
+| **Embeddings** | **`/embeddings`** | **`/embeddings`** |
+
+### Key Benefits
+
+- **Stateful Conversations**: Response chaining with `previous_response_id`
+- **30-Day Storage**: Persistent responses for conversation continuity
+- **Advanced Tools**: Code interpreter, MCP, function calling, image generation
+- **Background Tasks**: Async processing for long-running operations
+- **Better Metadata**: Enhanced token tracking and response IDs
+
+### Enabling in Production
+
+1. Navigate to **Azure** tab → **Azure OpenAI** section
+2. Toggle **"Use v1 Responses API for chat and RAG"**
+3. Configure:
+   - ✅ **Store Responses** for conversation chaining
+   - ✅ **Background Mode** for long tasks
+   - Set timeout (optional)
+4. Save configuration
+
+### Rollback Strategy
+
+If issues arise:
+1. Disable toggle in Azure UI
+2. Save configuration
+3. **Automatic fallback** to `/chat/completions` - no code changes required
+
+### Testing
+
+```bash
+npm run test test/responses-api-routing.test.ts
+```
+
+**Coverage**: 12 tests verifying correct endpoint routing for all scenarios.
+
+### Documentation
+
+See `responsesAPI.md` for complete usage guide including:
+- Basic chat/RAG usage
+- Advanced features (tools, MCP, code interpreter)
+- Response chaining
+- Background task management
+- Guardrails and best practices
+
+---
 
 ## Executive Summary
 
