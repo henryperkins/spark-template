@@ -105,6 +105,11 @@ export interface CreateResponseOptions {
 
   // Additional raw fields if needed (e.g. metadata, include, etc.)
   extraBody?: Record<string, unknown>
+
+  // Response format control (aligns with v1 `response_format`)
+  responseFormat?:
+    | { type: 'text' }
+    | { type: 'json_schema'; json_schema: Record<string, unknown> }
 }
 
 /**
@@ -421,6 +426,18 @@ export class ResponsesClient {
     }
     if (options.toolChoice !== undefined) {
       body.tool_choice = options.toolChoice
+    }
+
+    // Map high-level responseFormat helper into spec-aligned response_format
+    if (options.responseFormat) {
+      if (options.responseFormat.type === 'text') {
+        body.response_format = { type: 'text' }
+      } else if (options.responseFormat.type === 'json_schema') {
+        body.response_format = {
+          type: 'json_schema',
+          json_schema: options.responseFormat.json_schema
+        }
+      }
     }
 
     // Response chaining

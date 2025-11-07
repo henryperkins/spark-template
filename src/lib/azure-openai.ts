@@ -392,10 +392,10 @@ export class AzureOpenAIService {
           maxOutputTokens: options?.maxTokens,
           temperature: options?.temperature,
           topP: options?.topP,
-          extraBody:
+          responseFormat:
             options?.responseFormat === 'json_object'
-              ? { response_format: { type: 'json_object' } }
-              : undefined
+              ? { type: 'json_schema', json_schema: {} }
+              : { type: 'text' }
         })
         return result.outputText
       }
@@ -448,10 +448,10 @@ export class AzureOpenAIService {
         maxOutputTokens: options?.maxTokens,
         temperature: options?.temperature,
         topP: options?.topP,
-        extraBody:
+        responseFormat:
           options?.responseFormat === 'json_object'
-            ? { response_format: { type: 'json_object' } }
-            : undefined
+            ? { type: 'json_schema', json_schema: {} }
+            : { type: 'text' }
       })
 
       const usage = result.usage
