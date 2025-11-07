@@ -1,9 +1,12 @@
+import { useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { FileText, Trash, Clock, CloudArrowUp, XCircle, CircleNotch, GithubLogo, Globe, DropboxLogo, MicrosoftOutlookLogo, Upload } from '@phosphor-icons/react'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Textarea } from '@/components/ui/textarea'
+import { FileText, Trash, Clock, CloudArrowUp, XCircle, CircleNotch, GithubLogo, Globe, DropboxLogo, MicrosoftOutlookLogo, Upload, PencilSimple } from '@phosphor-icons/react'
 import { Document } from '@/types'
 import { formatFileSize, formatDate } from '@/lib/rag'
 import { azureServiceManager } from '@/lib/azure-service-manager'
@@ -11,9 +14,97 @@ import { azureServiceManager } from '@/lib/azure-service-manager'
 interface DocumentListProps {
   documents: Document[]
   onDeleteDocument: (documentId: string) => void
+  onEditDocument?: (documentId: string, newContent: string) => void
 }
 
-export function DocumentList({ documents, onDeleteDocument }: DocumentListProps) {
+export function DocumentList({ documents, onDeleteDocument, onEditDocument }: DocumentListProps) {
+  const [editingDocId, setEditingDocId] = useState<string | null>(null)
+  const [editContent, setEditContent] = useState('')
+  const [isUpdating, setIsUpdating] = useState(false)
+
+  const isEditableSource = (document: Document) => {
+    return !document.source || document.source === 'upload'
+  }
+
+  const handleOpenEdit = (document: Document) => {
+    if (!isEditableSource(document) || !onEditDocument) return
+
+    // IMPORTANT:
+    // We must not reconstruct the editable text by naively concatenating chunk.content.
+    // Chunking strategies in [`src/lib/rag.intelligentChunkDocument()`](src/lib/rag.ts:15)
+    // intentionally introduce overlaps between chunks, so joining them directly would:
+    // - Duplicate overlapping spans
+    // - Inflate content on every edit/reingest
+    // - Corrupt retrieval quality
+    //
+    // Instead, we derive an editable approximation that de-duplicates overlaps while
+    // preserving user-visible ordering. This keeps the edit flow safe without requiring
+    // storage of the original raw text.
+    const sortedChunks = (document.chunks || []).slice().sort((a, b) => a.chunkIndex - b.chunkIndex)
+
+    let reconstructed = ''
+    let lastTail = ''
+
+    for (const chunk of sortedChunks) {
+      const content = (chunk.content || '').trim()
+      if (!content) continue
+
+      if (!reconstructed) {
+        // First chunk: take as-is.
+        reconstructed = content
+      } else {
+        // Try to find the longest reasonable overlap between the previous tail
+        // and the current chunk start, and only append the non-overlapping suffix.
+        const maxOverlap = Math.min(lastTail.length, content.length, 300)
+        let overlapLength = 0
+
+        for (let len = maxOverlap; len > 20; len--) {
+          const tailSlice = lastTail.slice(-len)
+          const headSlice = content.slice(0, len)
+          if (tailSlice === headSlice) {
+            overlapLength = len
+            break
+          }
+        }
+
+        if (overlapLength > 0) {
+          reconstructed += content.slice(overlapLength)
+        } else {
+          // Fallback: join with a paragraph break if no clean overlap is detected.
+          reconstructed += (reconstructed.endsWith('\n') ? '\n' : '\n\n') + content
+        }
+      }
+
+      // Track tail window from the updated reconstructed text for subsequent overlap checks.
+      lastTail = reconstructed.slice(-300)
+    }
+
+    const safeText = reconstructed || (document as any).originalContent || ''
+
+    setEditContent(safeText)
+    setEditingDocId(document.id)
+  }
+
+  const handleSaveEdit = async () => {
+    if (!editingDocId || !onEditDocument) return
+
+    setIsUpdating(true)
+    try {
+      await onEditDocument(editingDocId, editContent)
+      setEditingDocId(null)
+      setEditContent('')
+    } catch (error) {
+      console.error('Failed to save edit:', error)
+    } finally {
+      setIsUpdating(false)
+    }
+  }
+
+  const handleCancelEdit = () => {
+    setEditingDocId(null)
+    setEditContent('')
+  }
+
   const getErrorSummary = (errorMessage: string) => {
     if (errorMessage.includes('400') || errorMessage.includes('request is invalid')) {
       return 'Azure Search API error - Invalid request format'
@@ -99,6 +190,8 @@ export function DocumentList({ documents, onDeleteDocument }: DocumentListProps)
     }
   }
 
+  const editingDocument = documents.find(d => d.id === editingDocId)
+
   if (documents.length === 0) {
     return (
       <Card className="border-dashed bg-muted/40">
@@ -121,132 +214,196 @@ export function DocumentList({ documents, onDeleteDocument }: DocumentListProps)
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-        <div className="space-y-1">
-          <h2 className="text-xl font-semibold">Knowledge base</h2>
-          <p className="text-xs text-muted-foreground">
-            Overview of all ingested documents, their source, processing status, and chunk coverage.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {azureServiceManager.isConfigured() && (
-            <Badge variant="outline" className="text-[10px] uppercase tracking-wide flex items-center gap-1">
-              <CloudArrowUp size={10} />
-              Azure indexed
+    <>
+      <div className="space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+          <div className="space-y-1">
+            <h2 className="text-xl font-semibold">Knowledge base</h2>
+            <p className="text-xs text-muted-foreground">
+              Overview of all ingested documents, their source, processing status, and chunk coverage.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {azureServiceManager.isConfigured() && (
+              <Badge variant="outline" className="text-[10px] uppercase tracking-wide flex items-center gap-1">
+                <CloudArrowUp size={10} />
+                Azure indexed
+              </Badge>
+            )}
+            <Badge variant="secondary" className="text-xs">
+              {documents.length} document{documents.length !== 1 ? 's' : ''}
             </Badge>
-          )}
-          <Badge variant="secondary" className="text-xs">
-            {documents.length} document{documents.length !== 1 ? 's' : ''}
-          </Badge>
+          </div>
         </div>
-      </div>
-      
-      {documents.map((document) => (
-        <Card key={document.id}>
-          <CardHeader className="pb-3">
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center">
-                  <FileText size={18} className="text-primary" />
-                </div>
-                <div>
-                  <CardTitle className="text-base">{document.name}</CardTitle>
-                  <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground mt-1.5">
-                    <span className="whitespace-nowrap">{formatFileSize(document.size)}</span>
-                    <span className="flex items-center gap-1 whitespace-nowrap">
-                      <Clock size={14} />
-                      {formatDate(document.uploadedAt)}
-                    </span>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge variant="outline" className="text-xs">
-                        {document.chunks.length} chunk{document.chunks.length !== 1 ? 's' : ''}
-                      </Badge>
-                      <Badge variant="secondary" className="text-xs flex items-center gap-1">
-                        {getSourceIcon(document.source)}
-                        {getSourceLabel(document.source)}
-                      </Badge>
-                      {getProcessingStatusBadge(document)}
-                    </div>
+
+        {documents.map((document) => (
+          <Card key={document.id}>
+            <CardHeader className="pb-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center">
+                    <FileText size={18} className="text-primary" />
                   </div>
-                  {document.sourceUrl && (
-                    <a 
-                      href={document.sourceUrl} 
-                      target="_blank" 
-                      rel="noopener noreferrer"
-                      className="text-xs text-primary hover:underline mt-1 block"
+                  <div>
+                    <CardTitle className="text-base">{document.name}</CardTitle>
+                    <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground mt-1.5">
+                      <span className="whitespace-nowrap">{formatFileSize(document.size)}</span>
+                      <span className="flex items-center gap-1 whitespace-nowrap">
+                        <Clock size={14} />
+                        {formatDate(document.uploadedAt)}
+                      </span>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant="outline" className="text-xs">
+                          {document.chunks.length} chunk{document.chunks.length !== 1 ? 's' : ''}
+                        </Badge>
+                        <Badge variant="secondary" className="text-xs flex items-center gap-1">
+                          {getSourceIcon(document.source)}
+                          {getSourceLabel(document.source)}
+                        </Badge>
+                        {getProcessingStatusBadge(document)}
+                      </div>
+                    </div>
+                    {document.sourceUrl && (
+                      <a
+                        href={document.sourceUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs text-primary hover:underline mt-1 block"
+                      >
+                        View source →
+                      </a>
+                    )}
+                    {!isEditableSource(document) && (
+                      <p className="text-[11px] text-muted-foreground mt-1.5 italic">
+                        This document is managed via {getSourceLabel(document.source)}. Edit at source or trigger a sync.
+                      </p>
+                    )}
+                    {document.errorMessage && (
+                       <Collapsible className="mt-2">
+                         <CollapsibleTrigger className="flex items-center gap-1.5 text-xs text-status-error hover:underline cursor-pointer">
+                           <XCircle size={14} weight="fill" />
+                           <span className="font-medium">
+                             {getErrorSummary(document.errorMessage)}
+                           </span>
+                         </CollapsibleTrigger>
+                         <CollapsibleContent className="mt-1.5">
+                           <pre className="text-[10px] leading-snug bg-destructive/5 border border-destructive/20 rounded-md p-2 overflow-x-auto">
+                             {document.errorMessage}
+                           </pre>
+                         </CollapsibleContent>
+                       </Collapsible>
+                     )}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {isEditableSource(document) && onEditDocument && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleOpenEdit(document)}
+                      className="text-muted-foreground hover:text-foreground"
                     >
-                      View source →
-                    </a>
+                      <PencilSimple size={16} />
+                    </Button>
                   )}
-                  {document.errorMessage && (
-                     <Collapsible className="mt-2">
-                       <CollapsibleTrigger className="flex items-center gap-1.5 text-xs text-status-error hover:underline cursor-pointer">
-                         <XCircle size={14} weight="fill" />
-                         <span className="font-medium">
-                           {getErrorSummary(document.errorMessage)}
-                         </span>
-                       </CollapsibleTrigger>
-                       <CollapsibleContent className="mt-1.5">
-                         <pre className="text-[10px] leading-snug bg-destructive/5 border border-destructive/20 rounded-md p-2 overflow-x-auto">
-                           {document.errorMessage}
-                         </pre>
-                       </CollapsibleContent>
-                     </Collapsible>
-                   )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => onDeleteDocument(document.id)}
+                    className="text-destructive hover:text-destructive"
+                  >
+                    <Trash size={16} />
+                  </Button>
                 </div>
               </div>
-              
+            </CardHeader>
+
+            <CardContent className="pt-0">
+              <Accordion type="single" collapsible>
+                <AccordionItem value="chunks" className="border-none">
+                  <AccordionTrigger className="text-sm text-muted-foreground hover:no-underline py-2">
+                    View document chunks
+                  </AccordionTrigger>
+                  <AccordionContent>
+                    <div className="space-y-3 mt-2">
+                      {document.chunks.map((chunk, index) => (
+                        <div key={chunk.id} className="p-3 bg-muted rounded-lg">
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                              <Badge variant="outline" className="text-xs">
+                                Chunk {index + 1}
+                              </Badge>
+                              {chunk.azureEmbedding && (
+                                <Badge variant="secondary" className="text-xs">
+                                  <CloudArrowUp size={10} className="mr-1" />
+                                  Embedded
+                                </Badge>
+                              )}
+                            </div>
+                            <span className="text-xs text-muted-foreground">
+                              {chunk.content.length} characters
+                            </span>
+                          </div>
+                          <p className="text-sm font-mono leading-relaxed">
+                            {chunk.content.substring(0, 200)}
+                            {chunk.content.length > 200 && '...'}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+              </Accordion>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      {/* Edit Dialog */}
+      <Dialog open={editingDocId !== null} onOpenChange={(open) => !open && handleCancelEdit()}>
+        <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle>Edit Document Content</DialogTitle>
+            <DialogDescription>
+              Editing "{editingDocument?.name}". Content will be re-chunked and
+              {azureServiceManager.isConfigured() ? ' reindexed to Azure AI Search' : ' processed locally'}.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex-1 min-h-0 py-4">
+            <Textarea
+              value={editContent}
+              onChange={(e) => setEditContent(e.target.value)}
+              disabled={isUpdating}
+              className="w-full h-full min-h-[300px] font-mono text-sm resize-none"
+              placeholder="Document content..."
+            />
+          </div>
+
+          <DialogFooter className="flex flex-col sm:flex-row gap-2">
+            <div className="flex-1 text-xs text-muted-foreground">
+              {editContent.length.toLocaleString()} characters • Changes will trigger immediate reingestion
+            </div>
+            <div className="flex gap-2">
               <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => onDeleteDocument(document.id)}
-                className="text-destructive hover:text-destructive"
+                variant="outline"
+                onClick={handleCancelEdit}
+                disabled={isUpdating}
               >
-                <Trash size={16} />
+                Cancel
+              </Button>
+              <Button
+                onClick={handleSaveEdit}
+                disabled={isUpdating || !editContent.trim()}
+              >
+                {isUpdating && <CircleNotch size={16} className="mr-2 animate-spin" />}
+                Save & Reingest
               </Button>
             </div>
-          </CardHeader>
-          
-          <CardContent className="pt-0">
-            <Accordion type="single" collapsible>
-              <AccordionItem value="chunks" className="border-none">
-                <AccordionTrigger className="text-sm text-muted-foreground hover:no-underline py-2">
-                  View document chunks
-                </AccordionTrigger>
-                <AccordionContent>
-                  <div className="space-y-3 mt-2">
-                    {document.chunks.map((chunk, index) => (
-                      <div key={chunk.id} className="p-3 bg-muted rounded-lg">
-                        <div className="flex items-center justify-between mb-2">
-                          <div className="flex items-center gap-2">
-                            <Badge variant="outline" className="text-xs">
-                              Chunk {index + 1}
-                            </Badge>
-                            {chunk.azureEmbedding && (
-                              <Badge variant="secondary" className="text-xs">
-                                <CloudArrowUp size={10} className="mr-1" />
-                                Embedded
-                              </Badge>
-                            )}
-                          </div>
-                          <span className="text-xs text-muted-foreground">
-                            {chunk.content.length} characters
-                          </span>
-                        </div>
-                        <p className="text-sm font-mono leading-relaxed">
-                          {chunk.content.substring(0, 200)}
-                          {chunk.content.length > 200 && '...'}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </AccordionContent>
-              </AccordionItem>
-            </Accordion>
-          </CardContent>
-        </Card>
-      ))}
-    </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }

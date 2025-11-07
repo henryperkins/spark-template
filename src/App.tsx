@@ -129,6 +129,7 @@ function App() {
         <DocumentList
           documents={documents || []}
           onDeleteDocument={handleDeleteDocument}
+          onEditDocument={handleEditDocumentContent}
         />
       )
     },
