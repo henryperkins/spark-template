@@ -88,6 +88,9 @@ export class AzureOpenAIService {
       defaultModel,
       apiVersion: this.config.responsesApiVersion || 'v1',
       timeoutMs: this.config.responsesTimeoutMs,
+      // Ensure non-empty generations by providing a sane default
+      // when callers do not specify maxOutputTokens.
+      defaultMaxOutputTokens: 1200,
       defaultStore: this.config.responsesStore,
       defaultBackground: this.config.responsesBackground
     }
@@ -376,6 +379,8 @@ export class AzureOpenAIService {
           maxOutputTokens: options.maxTokens,
           temperature: options.temperature,
           topP: options.topP,
+          // Ensure streaming is not treated as background
+          background: false,
           responseFormat:
             options.responseFormat === 'json_object'
               ? { type: 'json_object' }
@@ -393,6 +398,8 @@ export class AzureOpenAIService {
             maxOutputTokens: options?.maxTokens,
             temperature: options?.temperature,
             topP: options?.topP,
+            // Critical: keep sync calls out of background mode
+            background: false,
             responseFormat:
               options?.responseFormat === 'json_object'
                 ? { type: 'json_object' }
@@ -454,6 +461,8 @@ export class AzureOpenAIService {
           maxOutputTokens: options?.maxTokens,
           temperature: options?.temperature,
           topP: options?.topP,
+          // Critical: keep sync calls out of background mode
+          background: false,
           responseFormat:
             options?.responseFormat === 'json_object'
               ? { type: 'json_object' }
@@ -589,7 +598,9 @@ ${context}`
     if (this.responsesClient) {
       const result = await this.responsesClient.createResponse({
         messages: this.toResponseMessages(userMessages),
-        instructions: systemInstructions
+        instructions: systemInstructions,
+        // Critical: RAG sync path should never queue in background
+        background: false
       })
 
       return {
@@ -824,6 +835,8 @@ ${context}`
       toolChoice: options.toolChoice,
       maxOutputTokens: options.maxTokens,
       temperature: options.temperature,
+      // Sync tool calls should not be backgrounded by default
+      background: false,
       extraBody: options.extraBody
     })
   }
@@ -863,7 +876,8 @@ ${context}`
       instructions: systemInstructions,
       tools: [mcpTool],
       maxOutputTokens: options.maxTokens,
-      temperature: options.temperature
+      temperature: options.temperature,
+      background: false
     })
   }
 
@@ -899,7 +913,8 @@ ${context}`
       instructions: finalInstructions,
       tools: [codeInterpreterTool],
       maxOutputTokens: options.maxTokens,
-      temperature: options.temperature
+      temperature: options.temperature,
+      background: false
     })
   }
 
@@ -925,7 +940,8 @@ ${context}`
         }
       ],
       tools: [{ type: 'image_generation' }],
-      maxOutputTokens: options.maxTokens
+      maxOutputTokens: options.maxTokens,
+      background: false
     })
   }
 
@@ -1001,7 +1017,8 @@ ${context}`
       messages: this.toResponseMessages(userMessages),
       instructions: systemInstructions,
       maxOutputTokens: options.maxTokens,
-      temperature: options.temperature
+      temperature: options.temperature,
+      background: false
     })
   }
 }

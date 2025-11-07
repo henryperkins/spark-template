@@ -725,7 +725,7 @@ export function SearchDebugger({ documents }: SearchDebuggerProps) {
                       filteredChunks.map((chunk) => (
                         <div
                           key={chunk.id}
-                          className="p-3 border border-border rounded-lg cursor-pointer hover:border-accent-9"
+                          className="p-3 border border-border rounded-lg cursor-pointer hover:border-primary/40 hover:bg-primary/5"
                           onClick={() => setExpandedChunk(expandedChunk === chunk.id ? null : chunk.id)}
                         >
                           <div className="flex items-center justify-between mb-2">

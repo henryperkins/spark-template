@@ -32,8 +32,16 @@ class StorageManager {
     if (this.kv) {
       try {
         const value = await this.kv.get(key)
-        return value ? String(value) : null
-      } catch {
+        if (value === undefined || value === null) return null
+        if (typeof value === 'string') return value
+        // KV can return parsed objects; stringify them properly
+        if (typeof value === 'object') {
+          return JSON.stringify(value)
+        }
+        // Fallback for other primitive types
+        return String(value)
+      } catch (error) {
+        console.warn('[token-tracker] Failed to get value from KV:', error)
         // Fall through to in-memory
       }
     }

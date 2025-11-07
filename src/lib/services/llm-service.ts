@@ -328,8 +328,9 @@ export class LLMService {
 
     const call = async () => {
       const start = Date.now()
+
       if (azureServiceManager.hasOpenAI()) {
-        // Sanitize options for strict deployments and add JSON format
+        // Strict JSON mode via Responses/Chat API where available.
         const azureOptions = {
           ...this.sanitizeOptionsForDeployment(options),
           responseFormat: 'json_object' as const
@@ -337,32 +338,66 @@ export class LLMService {
 
         const response = await this.withTimeout(
           (async () => {
-            const r = await (azureServiceManager.generateCompletionWithUsage?.(prompt, azureOptions)
-              ?? azureServiceManager.generateCompletion(prompt, azureOptions).then(text => ({ text })))
+            const r =
+              await (azureServiceManager.generateCompletionWithUsage?.(prompt, azureOptions) ??
+                azureServiceManager
+                  .generateCompletion(prompt, azureOptions)
+                  .then(text => ({ text })))
             return r
           })(),
           timeoutMs
         )
-        const parsed = this.parseJson(response.text)
-        this.recordLLMOutcome('azure', options.model, promptTokens, JSON.stringify(parsed), options, start, response.usage)
-        return parsed
-      } else {
-        const startWorker = Date.now()
-        const responseText = await this.withTimeout(
-          this.callWorkerLLM(prompt, options.model, true),
-          timeoutMs
+
+        const rawText = (response as any).text ?? ''
+        if (!rawText || typeof rawText !== 'string') {
+          // Treat structurally empty responses as EPARSE for callers like classifier/router.
+          throw new LLMError(
+            'EPARSE',
+            'Azure LLM returned empty JSON response',
+            undefined,
+            ''
+          )
+        }
+
+        const parsed = this.parseJson(rawText)
+        this.recordLLMOutcome(
+          'azure',
+          options.model,
+          promptTokens,
+          JSON.stringify(parsed),
+          options,
+          start,
+          (response as any).usage
         )
-        const parsed = this.parseJson(responseText)
-        this.recordLLMOutcome('worker', options.model, promptTokens, JSON.stringify(parsed), options, startWorker)
         return parsed
       }
+
+      // Fallback: Worker proxy or stubbed responder
+      const startWorker = Date.now()
+      const responseText = await this.withTimeout(
+        this.callWorkerLLM(prompt, options.model, true),
+        timeoutMs
+      )
+
+      const parsed = this.parseJson(responseText)
+      this.recordLLMOutcome(
+        'worker',
+        options.model,
+        promptTokens,
+        JSON.stringify(parsed),
+        options,
+        startWorker
+      )
+      return parsed
     }
+
     try {
       const result = await this.retry(call)
       // Note: usage and context already recorded per-branch
       return result
     } catch (err) {
       if (err instanceof LLMError) throw err
+      // Normalize unexpected errors as EREMOTE with context
       throw new LLMError('EREMOTE', 'generateRawJson failed', err)
     }
   }
@@ -386,87 +421,171 @@ export class LLMService {
           body: JSON.stringify({
             prompt: resolvedPrompt,
             model: model ?? appConfig.model.defaultModel,
-            json: Boolean(forceJson),
-          }),
+            json: Boolean(forceJson)
+          })
         }
       )
+
       if (!resp.ok) {
-        // Graceful local fallback: if the route doesn't exist (e.g., Vite dev without Worker),
-        // return a deterministic stub instead of throwing.
+        // Graceful local/dev fallback when the Worker route is missing.
         if (resp.status === 404) {
           if (forceJson) {
+            // Deterministic JSON stub so callers never see "Empty LLM response when JSON expected"
             const stubDecision = {
               strategy: 'semantic',
               chunkSize: 1000,
               overlap: 100,
-              reasoning: 'Stubbed JSON decision for local/dev; Worker /api/llm not running.'
+              reasoning:
+                'Stubbed JSON decision for local/dev; Worker /api/llm not running.'
             }
             return JSON.stringify(stubDecision)
           }
-          const head = resolvedPrompt.length > 300 ? resolvedPrompt.slice(0, 300) + '…' : resolvedPrompt
-          return `Stubbed local response (model: ${model ?? appConfig.model.defaultModel}): ${head}`
+
+          const head =
+            resolvedPrompt.length > 300
+              ? resolvedPrompt.slice(0, 300) + '…'
+              : resolvedPrompt
+          return `Stubbed local response (model: ${
+            model ?? appConfig.model.defaultModel
+          }): ${head}`
         }
+
         const text = await resp.text().catch(() => String(resp.status))
-        throw new LLMError('EREMOTE', `Worker LLM proxy error (${resp.status}): ${text}`)
+        throw new LLMError(
+          'EREMOTE',
+          `Worker LLM proxy error (${resp.status}): ${text}`
+        )
       }
-      const data = (await resp.json()) as { text?: string }
-      if (!data?.text) {
-        throw new LLMError('EPARSE', 'Worker LLM proxy returned empty response')
+
+      // Expect JSON { text: string } from Worker; handle robustness explicitly.
+      const data = (await resp.json()) as { text?: string } | null
+      const text = typeof data?.text === 'string' ? data.text.trim() : ''
+
+      if (!text) {
+        // If JSON mode was requested, return a deterministic JSON stub to avoid EPARSE at call sites.
+        if (forceJson) {
+          const stubDecision = {
+            strategy: 'semantic',
+            chunkSize: 1000,
+            overlap: 100,
+            reasoning:
+              'Stubbed JSON decision; Worker LLM proxy returned empty response.'
+          }
+          return JSON.stringify(stubDecision)
+        }
+
+        throw new LLMError(
+          'EPARSE',
+          'Worker LLM proxy returned empty response',
+          undefined,
+          ''
+        )
       }
-      return data.text
+
+      return text
     } catch (error) {
-      // Network or other failures: in dev, provide a deterministic stub
+      // Network or other failures: in dev, provide deterministic stubs.
       if (forceJson) {
         const stubDecision = {
           strategy: 'semantic',
           chunkSize: 1000,
           overlap: 100,
-          reasoning: 'Stubbed JSON decision for local/dev; Worker /api/llm unreachable.'
+          reasoning:
+            'Stubbed JSON decision for local/dev; Worker /api/llm unreachable.'
         }
         return JSON.stringify(stubDecision)
       }
-      const head = resolvedPrompt.length > 300 ? resolvedPrompt.slice(0, 300) + '…' : resolvedPrompt
-      return `Stubbed local response (model: ${model ?? appConfig.model.defaultModel}): ${head}`
+
+      const head =
+        resolvedPrompt.length > 300
+          ? resolvedPrompt.slice(0, 300) + '…'
+          : resolvedPrompt
+      return `Stubbed local response (model: ${
+        model ?? appConfig.model.defaultModel
+      }): ${head}`
     }
   }
 
   private parseJson(response: string): unknown {
     const text = (response ?? '').trim()
 
+    // 0) Hard fail on truly empty after upstream stubs.
     if (!text) {
-      throw new LLMError('EPARSE', 'Empty LLM response when JSON expected', undefined, '')
+      throw new LLMError(
+        'EPARSE',
+        'Empty LLM response when JSON expected',
+        undefined,
+        ''
+      )
     }
 
-    // 1) Direct parse
+    // 1) Try strict direct parse first (fast path when model honors json_object).
     try {
       return JSON.parse(text)
     } catch {
       // continue
     }
 
-    // 2) ```json fenced block
-    const md = text.match(/```json?\s*\n([\s\S]*?)\n```/i)
+    // 2) Look for ```json fenced block.
+    const md = text.match(/```json?\s*[\r\n]+([\s\S]*?)```/i)
     if (md) {
-      try {
-        return JSON.parse(md[1])
-      } catch {
-        // continue
+      const fenced = md[1].trim()
+      if (fenced) {
+        try {
+          return JSON.parse(fenced)
+        } catch {
+          // continue
+        }
       }
     }
 
-    // 3) First '{' to last '}' slice
-    const firstBrace = text.indexOf('{')
-    const lastBrace = text.lastIndexOf('}')
-    if (firstBrace !== -1 && lastBrace > firstBrace) {
-      const candidate = text.slice(firstBrace, lastBrace + 1)
-      try {
-        return JSON.parse(candidate)
-      } catch {
-        // continue
+    // 3) Balanced brace scan: extract smallest valid top-level JSON object.
+    const start = text.indexOf('{')
+    if (start !== -1) {
+      let depth = 0
+      let inString = false
+      let escaped = false
+
+      for (let i = start; i < text.length; i++) {
+        const ch = text[i]
+
+        if (escaped) {
+          escaped = false
+          continue
+        }
+
+        if (ch === '\\') {
+          escaped = true
+          continue
+        }
+
+        if (ch === '"') {
+          inString = !inString
+          continue
+        }
+
+        if (!inString) {
+          if (ch === '{') depth++
+          if (ch === '}') depth--
+
+          if (depth === 0) {
+            const candidate = text.slice(start, i + 1)
+            try {
+              return JSON.parse(candidate)
+            } catch {
+              // continue and ultimately fall through
+            }
+            break
+          }
+        }
       }
     }
 
-    // 4) Give up; include rawText for repair
+    // 4) Give up; include rawText for downstream repair agents.
+    console.warn(
+      '[llm-service] Failed to parse JSON. Raw response (truncated):',
+      text.slice(0, 500)
+    )
     throw new LLMError(
       'EPARSE',
       'Could not parse JSON from LLM response',

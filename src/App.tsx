@@ -114,13 +114,16 @@ function App() {
             </div>
             <ThemeToggle />
           </div>
-          {/* Subtle step motif to connect the workflow visually */}
-          <div className="mt-4 flex items-center gap-2">
-            <div className="flex items-center gap-1.5 rounded-lg border border-border bg-muted/40 p-1.5">
-              <span className="rounded-md border border-border bg-background px-2 py-1 text-xs text-muted-foreground">Ingest</span>
-              <span className="rounded-md border border-border bg-background px-2 py-1 text-xs text-muted-foreground">Configure</span>
-              <span className="rounded-md border border-accent/30 bg-accent/10 px-2 py-1 text-xs text-foreground">Query</span>
-              <span className="rounded-md border border-border bg-background px-2 py-1 text-xs text-muted-foreground">Observe</span>
+          {/* Simplified workflow guidance */}
+          <div className="mt-4">
+            <div className="inline-flex items-center gap-1.5 rounded-lg bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
+              <span>1. Add content</span>
+              <span className="text-border">•</span>
+              <span>2. (Optional) Connect Azure</span>
+              <span className="text-border">•</span>
+              <span className="font-medium text-foreground">3. Ask questions</span>
+              <span className="text-border">•</span>
+              <span>4. Monitor & tune</span>
             </div>
           </div>
         </div>

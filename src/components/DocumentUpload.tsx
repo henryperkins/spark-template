@@ -233,11 +233,22 @@ export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
 
   return (
     <div className="space-y-6">
-      <Card className={cn(
-        "border-dashed border-2 transition-colors cursor-pointer",
-        dragActive ? "border-accent bg-accent/5" : "border-border hover:border-accent/50"
-      )}>
-        <CardContent className="p-5 sm:p-8">
+      <div className="flex flex-col gap-1">
+        <h2 className="text-xl sm:text-2xl font-semibold">Upload documents</h2>
+        <p className="text-xs sm:text-sm text-muted-foreground max-w-2xl">
+          Add source files to your knowledge base. Content is chunked intelligently and, when configured,
+          enriched and indexed by Azure for high-quality retrieval.
+        </p>
+      </div>
+      <Card
+        className={cn(
+          "border-dashed border-2 transition-colors cursor-pointer bg-muted/40",
+          dragActive
+            ? "border-accent bg-accent/5 shadow-sm"
+            : "border-border/70 hover:border-accent/60 hover:bg-muted/60"
+        )}
+      >
+        <CardContent className="p-5 sm:p-6 lg:p-7">
           <div
             className="text-center space-y-4"
             onDragEnter={handleDrag}

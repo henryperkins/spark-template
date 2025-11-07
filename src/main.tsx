@@ -1,7 +1,6 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { ErrorBoundary } from "react-error-boundary"
-import { ThemeProvider } from "next-themes"
 
 import App from './App.tsx'
 import { ErrorFallback } from './ErrorFallback.tsx'
@@ -16,9 +15,7 @@ if (!root) {
 createRoot(root).render(
   <StrictMode>
     <ErrorBoundary FallbackComponent={ErrorFallback}>
-      <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
-        <App />
-      </ThemeProvider>
+      <App />
     </ErrorBoundary>
   </StrictMode>
 )

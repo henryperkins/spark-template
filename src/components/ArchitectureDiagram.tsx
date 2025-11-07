@@ -518,9 +518,9 @@ export function ArchitectureDiagram() {
       },
       {
         name: 'Response Parsing',
-        purpose: 'Parses JSON from LLM responses with fallback extraction (markdown, substring)',
-        technologies: ['JSON.parse', 'Regex Extraction', 'Error Recovery'],
-        patterns: ['Lenient Parsing', 'Fallback Chain', 'Schema Validation (Zod)']
+        purpose: 'Parses JSON from LLM responses with robust extraction (direct parse, fenced code blocks, balanced braces) and exposes rawText on EPARSE for repair agents',
+        technologies: ['JSON.parse', 'Balanced Brace Scan', 'Markdown Fence Extraction', 'Error Recovery'],
+        patterns: ['Lenient Parsing', 'Fallback Chain', 'Schema Validation (Zod)', 'EPARSE with rawText for downstream repair']
       }
     ],
     'vector-store': [
@@ -685,10 +685,10 @@ export function ArchitectureDiagram() {
                                     <div>
                                       <div className="text-xs font-medium mb-2 flex items-center gap-2">
                                         <Cube size={14} />
-                                        Key Components
+                                        Key Components {layer.components.length > 4 && <span className="text-muted-foreground font-normal">(showing top 4 of {layer.components.length})</span>}
                                       </div>
                                       <div className="grid grid-cols-2 gap-2">
-                                        {layer.components.map((component, idx) => (
+                                        {layer.components.slice(0, 4).map((component, idx) => (
                                           <Badge
                                             key={idx}
                                             variant="secondary"
@@ -704,10 +704,10 @@ export function ArchitectureDiagram() {
                                     <div>
                                       <div className="text-xs font-medium mb-2 flex items-center gap-2">
                                         <ArrowRight size={14} />
-                                        Interactions
+                                        Interactions {layer.interactions.length > 4 && <span className="text-muted-foreground font-normal">(showing top 4 of {layer.interactions.length})</span>}
                                       </div>
                                       <div className="flex flex-wrap gap-2">
-                                        {layer.interactions.map((interaction, idx) => (
+                                        {layer.interactions.slice(0, 4).map((interaction, idx) => (
                                           <Badge
                                             key={idx}
                                             variant="outline"
@@ -795,7 +795,7 @@ export function ArchitectureDiagram() {
                             {layer.components.map((component, idx) => (
                               <div
                                 key={idx}
-                                className="flex items-start gap-2 p-2 bg-muted/50 rounded text-xs"
+                                className="flex items-start gap-2 p-2 bg-muted/20 rounded text-xs"
                               >
                                 <CheckCircle size={14} className="text-primary mt-0.5 flex-shrink-0" />
                                 {component}
@@ -845,7 +845,7 @@ export function ArchitectureDiagram() {
 
                         <div className="grid gap-3 ml-12">
                           {components.map((component, idx) => (
-                            <Card key={idx} className="bg-muted/30">
+                            <Card key={idx} className="bg-muted/20">
                               <CardContent className="p-4">
                                 <h4 className="font-semibold text-sm mb-2">{component.name}</h4>
                                 <p className="text-xs text-muted-foreground mb-3">

@@ -178,23 +178,23 @@ export function AgentWorkflowVisualizer({ steps, className, isLive = false }: Ag
   }
 
   const getAgentAccent = (agentName: string) => {
-    // Use brand accent scales instead of raw palettes for consistency
-    // Alternate between primary and secondary accent to retain some differentiation
+    // Use brand accent scales with valid token-based opacity classes
+    // Alternate between accent and primary for visual differentiation
     switch (agentName.toLowerCase()) {
       case 'classifier':
-        return 'bg-accent-3'
+        return 'bg-accent/10'
       case 'planner':
-        return 'bg-accent-secondary-3'
+        return 'bg-primary/10'
       case 'router':
-        return 'bg-accent-3'
+        return 'bg-accent/10'
       case 'retrieval':
-        return 'bg-accent-secondary-3'
+        return 'bg-primary/10'
       case 'generator':
-        return 'bg-accent-3'
+        return 'bg-accent/10'
       case 'critic':
-        return 'bg-accent-secondary-3'
+        return 'bg-primary/10'
       case 'react':
-        return 'bg-accent-3'
+        return 'bg-accent/10'
       default:
         return 'bg-muted'
     }
@@ -430,7 +430,16 @@ export function AgentWorkflowVisualizer({ steps, className, isLive = false }: Ag
         <div className="flex items-center gap-2 mb-4">
           <Brain size={18} className="text-primary" />
           <h4 className="font-semibold text-sm">Agent Workflow</h4>
-          <Badge variant="outline" className="ml-auto text-xs">
+          {isLive && (
+            <Badge
+              variant="outline"
+              className="ml-auto text-[10px] uppercase tracking-wide flex items-center gap-1 border-status-processing text-status-processing"
+            >
+              <span className="inline-flex h-2 w-2 rounded-full bg-status-processing animate-pulse" />
+              Live
+            </Badge>
+          )}
+          <Badge variant="outline" className={cn("text-xs", !isLive && "ml-auto")}>
             {steps.length} step{steps.length !== 1 ? 's' : ''}
           </Badge>
         </div>

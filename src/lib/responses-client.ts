@@ -436,12 +436,9 @@ export class ResponsesClient {
       body.max_output_tokens = maxOut
     }
 
-    if (typeof options.temperature === 'number') {
-      body.temperature = options.temperature
-    }
-    if (typeof options.topP === 'number') {
-      body.top_p = options.topP
-    }
+    // Do NOT re-add temperature/top_p here; safeOptions above already handled
+    // strict-model filtering. Re-adding would reintroduce unsupported params
+    // for models like gpt-5-mini and o1 variants.
 
     const store =
       typeof options.store === 'boolean'
@@ -687,24 +684,73 @@ export class ResponsesClient {
 
   private extractFirstOutputText(json: any): string | undefined {
     if (!json) return undefined
+
+    // 1) Simple top-level fields
     if (typeof json.text === 'string') {
       return json.text
     }
+    if (typeof json.output_text === 'string') {
+      return json.output_text
+    }
 
+    // 2) Nested under "response"
+    if (json.response && typeof json.response === 'object') {
+      const r = json.response
+      if (typeof r.output_text === 'string') return r.output_text
+      if (typeof r.text === 'string') return r.text
+    }
+
+    // 3) Walk output -> message -> content and assemble text
     if (Array.isArray(json.output)) {
+      const chunks: string[] = []
+
       for (const item of json.output) {
-        if (item?.type === 'message' && Array.isArray(item.content)) {
-          for (const c of item.content) {
-            if (
-              (c.type === 'output_text' || c.type === 'input_text') &&
-              typeof c.text === 'string'
-            ) {
-              return c.text
-            }
+        if (!item || item.type !== 'message' || !Array.isArray(item.content)) continue
+
+        for (const c of item.content || []) {
+          // Prefer known text-like types
+          if (
+            (c.type === 'output_text' || c.type === 'input_text' || c.type === 'text') &&
+            typeof c.text === 'string'
+          ) {
+            chunks.push(c.text)
+          }
+          // Structured JSON content: stringify as a last resort
+          else if (
+            (c.type === 'output_json' || c.type === 'json') &&
+            (typeof (c as any).json === 'string' || typeof (c as any).json === 'object')
+          ) {
+            const j = (c as any).json
+            chunks.push(typeof j === 'string' ? j : JSON.stringify(j))
+          }
+          // Fallback: if it exposes a text field at all, trust it
+          else if (typeof c?.text === 'string') {
+            chunks.push(c.text)
           }
         }
       }
+
+      if (chunks.length) {
+        return chunks.join('')
+      }
     }
+
+    // 4) Final fallback: some APIs put a human-readable message here
+    if (typeof (json as any).message === 'string') {
+      return (json as any).message
+    }
+
+    // Log when we can't extract text to help diagnose API response structure issues
+    console.warn('[ResponsesClient] Failed to extract output text. Response structure:', {
+      hasText: 'text' in json,
+      hasOutputText: 'output_text' in json,
+      hasResponse: 'response' in json,
+      hasOutput: Array.isArray(json.output),
+      outputLength: Array.isArray(json.output) ? json.output.length : 0,
+      firstOutputType: Array.isArray(json.output) && json.output[0] ? json.output[0].type : null,
+      status: json.status,
+      id: json.id
+    })
 
     return undefined
   }

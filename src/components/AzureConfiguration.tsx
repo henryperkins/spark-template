@@ -409,7 +409,7 @@ export function AzureConfiguration() {
 
             {/* Save Dialog */}
             {saveDialogOpen && (
-              <div className="mt-4 p-4 border rounded-lg bg-muted/50 space-y-3">
+              <div className="mt-4 p-4 rounded-lg bg-muted/30 space-y-3">
                 <h5 className="font-medium text-sm">Save Configuration</h5>
                 <div className="space-y-2">
                   <Label htmlFor={`${idPrefix}-config-name`}>Configuration Name *</Label>
@@ -494,8 +494,8 @@ export function AzureConfiguration() {
                       </AlertDescription>
                     </Alert>
                   )}
-                  {storageHealth.message && (
-                    <Alert variant={storageHealth.status === 'connected' ? 'default' : 'destructive'}>
+                  {storageHealth.message && storageHealth.status !== 'connected' && (
+                    <Alert variant="default">
                       <AlertDescription>
                         <strong>Storage:</strong> {storageHealth.message}
                       </AlertDescription>
@@ -584,9 +584,14 @@ export function AzureConfiguration() {
                   <h4 className="font-medium">Responses API (v1)</h4>
                   <Badge variant="outline" className="ml-auto">Advanced</Badge>
                 </div>
-                <p className="text-sm text-muted-foreground">
-                  Use the new stateful v1 Responses API for chat and RAG (recommended for production)
-                </p>
+                <div className="text-sm text-muted-foreground space-y-1">
+                  <p>
+                    Use the new stateful v1 Responses API for chat and RAG (recommended for production)
+                  </p>
+                  <p className="text-xs">
+                    <strong>Note:</strong> Safe default is to leave this off if you're unsure. The standard API works well for most use cases.
+                  </p>
+                </div>
 
                 <div className="space-y-4 pt-2">
                   <div className="flex items-center justify-between">

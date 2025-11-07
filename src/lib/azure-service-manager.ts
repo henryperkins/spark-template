@@ -24,10 +24,13 @@ export class AzureServiceManager {
         (process.env.VITE_AZURE_RESPONSES_STORE === 'true'
           ? true
           : undefined),
+      // IMPORTANT:
+      // - Do NOT enable background by default for synchronous Responses API calls.
+      // - Background runs must use the explicit background task helpers that poll/retrieve.
       responsesBackground:
         config.openai.responsesBackground ??
         (process.env.VITE_AZURE_RESPONSES_BACKGROUND_DEFAULT === 'true'
-          ? true
+          ? false
           : undefined),
       responsesTimeoutMs:
         config.openai.responsesTimeoutMs ??

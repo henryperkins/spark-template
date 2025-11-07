@@ -94,15 +94,17 @@ export class QueryExpansionAgent {
     const sourceIds = sources?.map(s => s.chunkId).sort().join(',') || 'none'
     const raw = `${query}::${docIds}::${sourceIds}`
 
-    // FNV-1a 64-bit hash (fast, deterministic, browser-compatible)
-    let hash = BigInt('0xcbf29ce484222325')
-    const prime = BigInt('0x100000001b3')
+    // FNV-1a 64-bit hash with 64-bit modular reduction at each step.
+    // Without masking, BigInt would grow unbounded and produce overlong keys.
+    const FNV_OFFSET = 0xcbf29ce484222325n
+    const FNV_PRIME = 0x100000001b3n
+    const MASK64 = 0xffffffffffffffffn
+    let hash = FNV_OFFSET
     for (let i = 0; i < raw.length; i++) {
       hash ^= BigInt(raw.charCodeAt(i))
-      hash *= prime
+      hash = (hash * FNV_PRIME) & MASK64
     }
-    const hex = hash.toString(16)
-
+    const hex = hash.toString(16).padStart(16, '0')
     return `query-expansion:${hex}`
   }
 

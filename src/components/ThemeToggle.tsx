@@ -1,17 +1,9 @@
-/* eslint react-hooks/set-state-in-effect: 0 */
-import { useEffect, useState } from 'react'
-import { useTheme } from 'next-themes'
 import { Button } from '@/components/ui/button'
 import { Moon, Sun } from '@phosphor-icons/react'
+import { useTheme } from '@/hooks/use-theme'
 
 export function ThemeToggle() {
-  const { theme, setTheme, systemTheme } = useTheme()
-  const [mounted, setMounted] = useState(false)
-
-  // Avoid hydration mismatch by only rendering after mount
-  useEffect(() => {
-    setMounted(true)
-  }, [])
+  const { resolvedTheme, setTheme, mounted } = useTheme()
 
   if (!mounted) {
     return (
@@ -21,8 +13,7 @@ export function ThemeToggle() {
     )
   }
 
-  const currentTheme = theme === 'system' ? systemTheme : theme
-  const isDark = currentTheme === 'dark'
+  const isDark = resolvedTheme === 'dark'
 
   return (
     <Button

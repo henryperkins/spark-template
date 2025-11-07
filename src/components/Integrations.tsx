@@ -14,27 +14,40 @@ export function Integrations({ onDocumentsIngested }: IntegrationsProps) {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-2xl font-semibold mb-2">Data Integrations</h2>
-        <p className="text-muted-foreground">
-          Connect external data sources to automatically ingest and index content
+        <h2 className="text-2xl font-semibold mb-1">Data integrations</h2>
+        <p className="text-xs sm:text-sm text-muted-foreground max-w-2xl">
+          Connect code, sites, and cloud storage so new content flows automatically into your knowledge base.
+          Each connector normalizes metadata and can optionally push to Azure for indexing.
         </p>
       </div>
 
       <Tabs defaultValue="github" className="space-y-6">
         <TabsList className="grid w-full grid-cols-4">
-          <TabsTrigger value="github" className="flex items-center gap-2">
+          <TabsTrigger
+            value="github"
+            className="flex items-center gap-2 text-xs sm:text-sm"
+          >
             <GithubLogo size={16} />
             GitHub
           </TabsTrigger>
-          <TabsTrigger value="website" className="flex items-center gap-2">
+          <TabsTrigger
+            value="website"
+            className="flex items-center gap-2 text-xs sm:text-sm"
+          >
             <Globe size={16} />
             Website
           </TabsTrigger>
-          <TabsTrigger value="dropbox" className="flex items-center gap-2">
+          <TabsTrigger
+            value="dropbox"
+            className="flex items-center gap-2 text-xs sm:text-sm"
+          >
             <DropboxLogo size={16} />
             Dropbox
           </TabsTrigger>
-          <TabsTrigger value="onedrive" className="flex items-center gap-2">
+          <TabsTrigger
+            value="onedrive"
+            className="flex items-center gap-2 text-xs sm:text-sm"
+          >
             <MicrosoftOutlookLogo size={16} />
             OneDrive
           </TabsTrigger>

@@ -101,12 +101,19 @@ export function DocumentList({ documents, onDeleteDocument }: DocumentListProps)
 
   if (documents.length === 0) {
     return (
-      <Card>
-        <CardContent className="p-8 text-center">
-          <FileText size={48} className="mx-auto mb-4 text-muted-foreground" />
-          <h3 className="text-lg font-semibold mb-2">No documents uploaded</h3>
-          <p className="text-muted-foreground">
-            Upload your first document to start building your knowledge base
+      <Card className="border-dashed bg-muted/40">
+        <CardContent className="p-8 text-center space-y-3">
+          <div className="inline-flex h-12 w-12 items-center justify-center rounded-full bg-muted mx-auto">
+            <FileText size={32} className="text-muted-foreground" />
+          </div>
+          <h3 className="text-lg font-semibold">Your knowledge base is empty</h3>
+          <p className="text-sm text-muted-foreground max-w-md mx-auto">
+            Ingest documents using the Upload and Integrations tabs. Once added, each document's
+            chunks, embeddings, and Azure indexing status will appear here for full transparency.
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Tip: Start with 3–10 high-signal documents (architecture, runbooks, FAQs) to see the agentic
+            workflow shine.
           </p>
         </CardContent>
       </Card>
@@ -116,15 +123,20 @@ export function DocumentList({ documents, onDeleteDocument }: DocumentListProps)
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-        <h2 className="text-xl font-semibold">Knowledge Base</h2>
+        <div className="space-y-1">
+          <h2 className="text-xl font-semibold">Knowledge base</h2>
+          <p className="text-xs text-muted-foreground">
+            Overview of all ingested documents, their source, processing status, and chunk coverage.
+          </p>
+        </div>
         <div className="flex flex-wrap items-center gap-2">
           {azureServiceManager.isConfigured() && (
-            <Badge variant="outline" className="text-xs">
-              <CloudArrowUp size={12} className="mr-1" />
-              Azure Enhanced
+            <Badge variant="outline" className="text-[10px] uppercase tracking-wide flex items-center gap-1">
+              <CloudArrowUp size={10} />
+              Azure indexed
             </Badge>
           )}
-          <Badge variant="secondary">
+          <Badge variant="secondary" className="text-xs">
             {documents.length} document{documents.length !== 1 ? 's' : ''}
           </Badge>
         </div>
@@ -133,9 +145,11 @@ export function DocumentList({ documents, onDeleteDocument }: DocumentListProps)
       {documents.map((document) => (
         <Card key={document.id}>
           <CardHeader className="pb-3">
-            <div className="flex items-start justify-between">
+            <div className="flex items-start justify-between gap-3">
               <div className="flex items-center gap-3">
-                <FileText size={20} className="text-primary mt-0.5" />
+                <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center">
+                  <FileText size={18} className="text-primary" />
+                </div>
                 <div>
                   <CardTitle className="text-base">{document.name}</CardTitle>
                   <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground mt-1.5">
@@ -166,18 +180,20 @@ export function DocumentList({ documents, onDeleteDocument }: DocumentListProps)
                     </a>
                   )}
                   {document.errorMessage && (
-                    <Collapsible className="mt-2">
-                      <CollapsibleTrigger className="flex items-center gap-1.5 text-xs text-status-error hover:underline cursor-pointer">
-                        <XCircle size={14} weight="fill" />
-                        <span className="font-medium">{getErrorSummary(document.errorMessage)}</span>
-                      </CollapsibleTrigger>
-                      <CollapsibleContent className="mt-1.5">
-                        <pre className="error-details">
-                          {document.errorMessage}
-                        </pre>
-                      </CollapsibleContent>
-                    </Collapsible>
-                  )}
+                     <Collapsible className="mt-2">
+                       <CollapsibleTrigger className="flex items-center gap-1.5 text-xs text-status-error hover:underline cursor-pointer">
+                         <XCircle size={14} weight="fill" />
+                         <span className="font-medium">
+                           {getErrorSummary(document.errorMessage)}
+                         </span>
+                       </CollapsibleTrigger>
+                       <CollapsibleContent className="mt-1.5">
+                         <pre className="text-[10px] leading-snug bg-destructive/5 border border-destructive/20 rounded-md p-2 overflow-x-auto">
+                           {document.errorMessage}
+                         </pre>
+                       </CollapsibleContent>
+                     </Collapsible>
+                   )}
                 </div>
               </div>
               

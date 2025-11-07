@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -33,7 +33,31 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
   const [agenticMode, setAgenticMode] = useState(true)
   const [orchestrator] = useState(() => new AgenticOrchestrator())
   const [activeWorkflow, setActiveWorkflow] = useState<AgentWorkflowStep[]>([])
+  const [recentQueries, setRecentQueries] = useState<string[]>([])
 
+  useEffect(() => {
+    let isMounted = true
+    ;(async () => {
+      try {
+        const history = await queryHistoryService.getAll()
+        if (!isMounted || !history || history.length === 0) return
+        const unique = Array.from(
+          new Map(
+            history
+              .slice(-10)
+              .reverse()
+              .map(entry => [entry.query.trim(), entry.query.trim()])
+          ).values()
+        ).filter(q => q.length > 0)
+        setRecentQueries(unique.slice(0, 3))
+      } catch (error) {
+        console.error('[recent-queries] failed to load history', error)
+      }
+    })()
+    return () => {
+      isMounted = false
+    }
+  }, [])
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!query.trim() || loading) return
@@ -127,14 +151,19 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
       }
 
       setMessages(prev => [...prev, assistantMessage])
-    } catch {
+    } catch (err) {
+      const errorId = `msg-${Date.now()}-error`
       const errorMessage: ExtendedChatMessage = {
-        id: `msg-${Date.now()}-error`,
+        id: errorId,
         type: 'assistant',
-        content: "I apologize, but I encountered an error while processing your question. Please try again.",
+        content:
+          'Something went wrong while processing your question. Please review the details below and try again.',
         timestamp: new Date().toISOString()
       }
       setMessages(prev => [...prev, errorMessage])
+
+      // Log to console for debugging without exposing internals to end users
+      console.error('[query-error]', err)
     } finally {
       setLoading(false)
       setTimeout(() => {
@@ -156,10 +185,15 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
       <Card>
         <CardHeader>
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <CardTitle className="flex items-center gap-2 text-lg sm:text-xl">
-              <Brain size={20} />
-              Ask Your Knowledge Base
-            </CardTitle>
+            <div className="space-y-1">
+              <CardTitle className="flex items-center gap-2 text-lg sm:text-xl">
+                <Brain size={20} />
+                Ask Your Knowledge Base
+              </CardTitle>
+              <p className="text-xs text-muted-foreground">
+                Ask questions against your ingested documents. Switch Agentic Mode on for routed, validated answers.
+              </p>
+            </div>
             <div className="flex flex-wrap items-center gap-2">
               <Label htmlFor="agentic-mode" className="cursor-pointer text-sm">
                 Agentic Mode
@@ -179,6 +213,27 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
           </div>
         </CardHeader>
         <CardContent>
+          {messages.length === 0 && recentQueries.length > 0 && (
+            <div className="mb-3 space-y-1">
+              <p className="text-xs font-medium text-muted-foreground">
+                Recent questions
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {recentQueries.map((q) => (
+                  <Button
+                    key={q}
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="text-xs"
+                    onClick={() => executeQuery(q)}
+                  >
+                    {q}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          )}
           <form onSubmit={handleSubmit} className="flex flex-col gap-2 sm:flex-row">
             <Input
               value={query}
@@ -201,9 +256,14 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
           </form>
           
           {documents.length === 0 && (
-            <p className="text-sm text-muted-foreground mt-3">
-              Upload documents first to start asking questions
-            </p>
+            <div className="mt-3 rounded-lg border border-border/50 bg-muted/20 p-3">
+              <p className="text-sm font-medium text-foreground mb-1">
+                Add content to unlock high-quality answers
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Use the <span className="font-medium">Upload</span> tab for single files or <span className="font-medium">Integrations</span> tab to connect GitHub, websites, Dropbox, or OneDrive.
+              </p>
+            </div>
           )}
 
           {agenticMode && (
@@ -227,14 +287,15 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
           )}
           
           {messages.map((message) => (
-            <Card
+            <div
               key={message.id}
               className={cn(
-                "max-w-full",
-                message.type === 'user' ? 'sm:ml-10' : 'sm:mr-10'
+                "max-w-full rounded-lg p-4 sm:p-5 space-y-4",
+                message.type === 'user'
+                  ? 'sm:ml-10 border border-border/60 bg-background'
+                  : 'sm:mr-10 bg-muted/40'
               )}
             >
-              <CardContent className="space-y-4 p-4 sm:p-5">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <Badge variant={message.type === 'user' ? 'default' : 'secondary'}>
                     {message.type === 'user' ? 'You' : 'Assistant'}
@@ -268,11 +329,50 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
                   </Alert>
                 )}
                 
-                <div className="prose prose-sm max-w-none dark:prose-invert">
-                  <p className="whitespace-pre-wrap leading-relaxed">
-                    {message.content}
-                  </p>
-                </div>
+                {message.id.includes('-error') ? (
+                  <Alert variant="destructive">
+                    <AlertTitle className="text-sm font-semibold">
+                      Query failed
+                    </AlertTitle>
+                    <AlertDescription className="text-xs sm:text-sm space-y-1">
+                      <p>{message.content}</p>
+                      <p>
+                        • Verify your{' '}
+                        <a
+                          href="#azure-configuration"
+                          className="text-primary underline underline-offset-4"
+                        >
+                          Azure configuration
+                        </a>{' '}
+                        is correct.
+                      </p>
+                      <p>
+                        • Ensure you've ingested content via the{' '}
+                        <span className="font-medium">Upload</span> or{' '}
+                        <span className="font-medium">Integrations</span> tabs.
+                      </p>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="mt-2 h-7 px-2 text-[10px]"
+                        onClick={() =>
+                          executeQuery(
+                            messages[messages.length - 2]?.content || query || ''
+                          )
+                        }
+                      >
+                        Try again
+                      </Button>
+                    </AlertDescription>
+                  </Alert>
+                ) : (
+                  <div className="prose prose-sm max-w-none dark:prose-invert">
+                    <p className="whitespace-pre-wrap leading-relaxed">
+                      {message.content}
+                    </p>
+                  </div>
+                )}
 
                 {message.agenticResult && (
                   <div className="mt-4">
@@ -335,7 +435,7 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
                         <AccordionContent>
                           <div className="space-y-3 mt-2">
                             {message.sources.map((source, index) => (
-                              <div key={source.chunkId} className="p-3 bg-muted rounded-lg">
+                              <div key={source.chunkId} className="p-3 bg-muted/30 rounded-lg">
                                 <div className="flex items-center justify-between mb-2">
                                   <div className="flex items-center gap-2">
                                     <Badge variant="outline" className="text-xs">
@@ -350,7 +450,7 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
                                     {Math.round(source.relevanceScore * 100)}% match
                                   </Badge>
                                 </div>
-                                <p className="text-sm font-mono leading-relaxed">
+                                <p className="text-sm leading-relaxed">
                                   {source.content}
                                 </p>
                               </div>
@@ -361,8 +461,7 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
                     </Accordion>
                   </div>
                 )}
-              </CardContent>
-            </Card>
+            </div>
           ))}
         </div>
       )}
