@@ -1,6 +1,7 @@
 import { AzureConfig } from '@/types'
 import { estimateTokens, truncateContext } from '@/lib/prompt-utils'
 import { ResponsesClient, ResponsesClientConfig } from './responses-client'
+import { errorTracking } from '@/lib/services/error-tracker'
 
 // Embedding model limits with safety margin
 const EMBEDDING_MODEL = 'text-embedding-3-large'
@@ -42,6 +43,7 @@ export class AzureOpenAIService {
     responsesBackground?: boolean
     responsesTimeoutMs?: number
     responsesApiVersion?: string
+    responsesFallbackEnabled?: boolean
   }
 
   private responsesClient: ResponsesClient | null = null
@@ -409,6 +411,26 @@ export class AzureOpenAIService {
           return result.outputText
         } catch (error) {
           this.logResponsesClient400(error, options?.responseFormat === 'json_object')
+          // Conditional fallback to /chat/completions for retriable failures
+          const status = (error as any)?.status as number | undefined
+          const retriable = status && [429, 500, 502, 503, 504].includes(status)
+          if (retriable && this.config.responsesFallbackEnabled) {
+            const url = `${this.config.endpoint}/openai/deployments/${this.config.deploymentName}/chat/completions?api-version=${this.config.apiVersion}`
+            const body = this.buildChatRequestBody(messages, { ...options, stream: false })
+            const res = await this.fetchWithRetry(url, {
+              method: 'POST',
+              headers: {
+                'api-key': this.config.apiKey!,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify(body)
+            })
+            if (!res.ok) {
+              throw await this.toAzureError(res, body)
+            }
+            const data = await res.json()
+            return data.choices?.[0]?.message?.content ?? ''
+          }
           throw error
         }
       }
@@ -481,6 +503,33 @@ export class AzureOpenAIService {
         return { text: result.outputText, usage }
       } catch (error) {
         this.logResponsesClient400(error, options?.responseFormat === 'json_object')
+        const status = (error as any)?.status as number | undefined
+        const retriable = status && [429, 500, 502, 503, 504].includes(status)
+        if (retriable && this.config.responsesFallbackEnabled) {
+          const url = `${this.config.endpoint}/openai/deployments/${this.config.deploymentName}/chat/completions?api-version=${this.config.apiVersion}`
+          const body = this.buildChatRequestBody(messages, { ...options, stream: false })
+          const res = await this.fetchWithRetry(url, {
+            method: 'POST',
+            headers: {
+              'api-key': this.config.apiKey!,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(body)
+          })
+          if (!res.ok) {
+            throw await this.toAzureError(res, body)
+          }
+          const data = await res.json()
+          const text: string = data?.choices?.[0]?.message?.content ?? ''
+          const usage = data?.usage
+            ? {
+                promptTokens: usageNumber(usageValue(data.usage.prompt_tokens)),
+                completionTokens: usageNumber(usageValue(data.usage.completion_tokens)),
+                totalTokens: usageNumber(usageValue(data.usage.total_tokens))
+              }
+            : undefined
+          return { text, usage }
+        }
         throw error
       }
     }
@@ -583,10 +632,23 @@ export class AzureOpenAIService {
     messages?: any[]
     raw?: any
   }> {
+    // Token-budgeted truncation for context to keep under safe limits
+    const CONTEXT_BUDGET_TOKENS = 4000
+    let safeContext = context
+    try {
+      const tokens = estimateTokens(context, this.config.deploymentName)
+      if (tokens > CONTEXT_BUDGET_TOKENS) {
+        safeContext = truncateContext(context, CONTEXT_BUDGET_TOKENS, { notice: ' [context truncated]' })
+        console.warn(`[azure-openai] RAG context truncated: ${tokens} → ${CONTEXT_BUDGET_TOKENS} tokens`)
+      }
+    } catch {
+      // best-effort; proceed if estimator unavailable
+    }
+
     const systemInstructions = `You are a helpful research assistant. Answer the user's question based on the provided context from documents. Be accurate and cite your sources using the numbers in brackets when applicable.
 
 Context from documents:
-${context}`
+${safeContext}`
 
     const userMessages = [
       {
@@ -669,6 +731,18 @@ ${context}`
     ) as Error & { azure?: AzureErrorDetail }
 
     err.azure = detail
+
+    try {
+      errorTracking.record(err, {
+        type: 'llm',
+        agent: 'AzureOpenAI',
+        code: detail.code,
+        status: detail.status,
+        requestId: detail.requestId
+      })
+    } catch {
+      // best-effort
+    }
     return err
   }
 
@@ -798,18 +872,82 @@ ${context}`
         Array.isArray((requestBody as { tools?: unknown[] }).tools) &&
         (requestBody as { tools?: unknown[] }).tools?.length
       )
+    const toolSummary = (() => {
+      try {
+        const tools = (requestBody as any)?.tools
+        if (!Array.isArray(tools)) return null
+        return tools.map((t: any) => ({ type: t?.type, name: t?.name || t?.server_label || undefined }))
+      } catch { return null }
+    })()
+
+    const messageCount = (() => {
+      try {
+        const input = (requestBody as any)?.input
+        if (!Array.isArray(input)) return undefined
+        return input.filter((i: any) => i?.type === 'message').length
+      } catch { return undefined }
+    })()
+
+    const hasInstructions = !!(requestBody && typeof (requestBody as any).instructions === 'string')
+    const responseFormatType = (() => {
+      try {
+        const fmt = (requestBody as any)?.text?.format
+        if (fmt && typeof fmt === 'object' && typeof fmt.type === 'string') return fmt.type
+        return undefined
+      } catch { return undefined }
+    })()
 
     console.error('[azure-openai][responses] 400 from v1 Responses API', {
       status: err.status,
       code: err.code ?? null,
       requestId: err.requestId ?? null,
       model: requestModel,
+      messageCount,
       hasTools,
-      hasResponseFormat
+      tools: toolSummary,
+      hasInstructions,
+      responseFormatType: responseFormatType ?? (hasResponseFormat ? 'json_object' : 'text')
     })
   }
 
   // ===== ADVANCED RESPONSES API METHODS =====
+
+  // Runtime tool validators to prevent malformed requests to Responses API
+  private validateTools(tools: any[]): void {
+    if (!Array.isArray(tools)) return
+    for (const t of tools) {
+      if (!t || typeof t !== 'object') {
+        throw new Error('Invalid tool: expected object')
+      }
+      const type = (t as any).type
+      if (type === 'function') {
+        const name = (t as any).name
+        if (typeof name !== 'string' || !name.trim()) {
+          throw new Error("Invalid function tool: 'name' is required")
+        }
+        // parameters optional; allow pass-through
+      } else if (type === 'mcp') {
+        if (typeof (t as any).server_url !== 'string' || !(t as any).server_url) {
+          throw new Error("Invalid MCP tool: 'server_url' is required")
+        }
+        if (typeof (t as any).server_label !== 'string' || !(t as any).server_label) {
+          throw new Error("Invalid MCP tool: 'server_label' is required")
+        }
+      }
+    }
+  }
+
+  private validateMcpOptions(opts: { mcpServerUrl: string; mcpServerLabel: string; requireApproval?: 'always' | 'never' }): void {
+    if (!opts || typeof opts.mcpServerUrl !== 'string' || !opts.mcpServerUrl) {
+      throw new Error("MCP: 'mcpServerUrl' is required")
+    }
+    if (typeof opts.mcpServerLabel !== 'string' || !opts.mcpServerLabel) {
+      throw new Error("MCP: 'mcpServerLabel' is required")
+    }
+    if (opts.requireApproval && !['always', 'never'].includes(opts.requireApproval)) {
+      throw new Error("MCP: 'requireApproval' must be 'always' or 'never'")
+    }
+  }
 
   /**
    * Generate with function/tool calling support.
@@ -828,6 +966,9 @@ ${context}`
     }
 
     const { systemInstructions, userMessages } = this.extractSystemInstructions(options.messages)
+
+    // Validate tools before sending to API
+    this.validateTools(options.tools)
 
     return this.responsesClient.createResponse({
       messages: this.toResponseMessages(userMessages),
@@ -860,6 +1001,13 @@ ${context}`
     }
 
     const { systemInstructions, userMessages } = this.extractSystemInstructions(options.messages)
+
+    // Validate MCP options early for clearer developer errors
+    this.validateMcpOptions({
+      mcpServerUrl: options.mcpServerUrl,
+      mcpServerLabel: options.mcpServerLabel,
+      requireApproval: options.requireApproval
+    })
 
     const mcpTool: any = {
       type: 'mcp',

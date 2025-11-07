@@ -10,6 +10,7 @@ import type { RoutingDecision } from './routing-agent'
 import type { ValidationResult } from './critic-agent'
 import type { ReActResult } from './react-agent'
 import type { QueryExpansion } from './query-expansion'
+import { classifyContentTypesForChunks } from './document-analyzer'
 
 /**
  * Knowledge base characteristics extracted from documents.
@@ -268,30 +269,6 @@ export function buildKBContext(documents: Document[]): KBContext {
       documents: [],
       fingerprint: 'empty',
       azureIndexed: false
-    }
-  }
-
-  // Lazy import to avoid heavy dependencies during module init.
-  // In non-CommonJS environments (e.g., Vitest ESM), fall back to a lightweight classifier.
-  let classifyContentTypesForChunks: (chunks: string[]) => { code: number; prose: number; technical: number }
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const mod = require('./document-analyzer') as typeof import('./document-analyzer')
-    classifyContentTypesForChunks = mod.classifyContentTypesForChunks
-  } catch {
-    // Minimal heuristic fallback to keep build/tests working without require()
-    classifyContentTypesForChunks = (chunks: string[]) => {
-      if (!chunks || chunks.length === 0) return { code: 0, prose: 0, technical: 0 }
-      const codeRe = /\b(function|class|import|export)\b|```/
-      const techTerms = ['api', 'http', 'parameter', 'config', 'endpoint', 'authentication', 'token', 'request', 'response', 'schema', 'json', 'yaml']
-      let code = 0, prose = 0, technical = 0
-      for (const c of chunks) {
-        const s = (c || '').toLowerCase()
-        if (codeRe.test(s)) { code++; continue }
-        if (techTerms.some(t => s.includes(t))) { technical++ } else { prose++ }
-      }
-      const total = Math.max(1, code + prose + technical)
-      return { code: code / total, prose: prose / total, technical: technical / total }
     }
   }
 

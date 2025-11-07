@@ -33,9 +33,14 @@ export function useTheme() {
   const [theme, setThemeState] = useState<Theme>(() => getStoredTheme())
   const [mounted, setMounted] = useState(false)
 
+  // Set mounted state on first render
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Intentional for SSR hydration tracking
     setMounted(true)
-    // Apply theme on mount
+  }, [])
+
+  // Apply theme and listen for changes
+  useEffect(() => {
     applyTheme(theme)
 
     // Listen for system theme changes

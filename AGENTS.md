@@ -19,6 +19,10 @@ Only non-obvious, project-specific rules are documented here.
   - When adding tools (function calling, MCP, code_interpreter, image_generation) or advanced fields:
     - Pass them via `CreateResponseOptions.tools`, `toolChoice`, or `extraBody` and let `ResponsesClient` forward them.
     - Do not reimplement raw fetches to `/responses` elsewhere.
+  - Resiliency behaviors:
+    - `ResponsesClient` applies retry/backoff for transient statuses (429/500/502/503/504) and refreshes RBAC tokens once on 401/403 when `tokenProvider` is used.
+    - Streaming gracefully degrades: on SSE failure events, `ResponsesClient.streamResponse` falls back to a non-stream `createResponse` and yields the final text.
+    - Optional transport fallback: when `useResponsesApi=true` and a retriable failure occurs, `AzureOpenAIService` can fall back to `/chat/completions` if `responsesFallbackEnabled` is set (or `VITE_AZURE_RESPONSES_FALLBACK_ENABLED=true`).
 
 - Embeddings:
   - Before embedding calls, text is truncated via `enforceEmbeddingTokenLimit` in `AzureOpenAIService` to avoid Azure 400/413s; reuse this service instead of rolling your own batching/limits.
@@ -30,18 +34,29 @@ Only non-obvious, project-specific rules are documented here.
     - Hybrid / vector / keyword fallback logic
     - Error handling and partial failure tolerance
   - `generateResponseWithAzure` must be used for RAG-style answers so that the shared prompt format and context wiring stay consistent.
+  - RAG context budgeting: `AzureOpenAIService.generateRAGResponseWithMetadata` truncates context to a safe token budget to avoid 400s and keep space for outputs.
 
 - Streaming:
   - All streaming to the UI must go through `AzureServiceManager.generateStream`, which:
     - Bridges callback-based streaming into an async iterable
     - Delegates to `AzureOpenAIService.generateCompletion` (which may use Responses streaming)
     - New streaming code should integrate with this queue pattern instead of creating independent streams.
+  - MCP/tool progress: the streaming bridge is text-first; for MCP approval flows, surface state in UI via service events rather than creating parallel streams.
 
 - Error handling:
   - Azure HTTP errors should be wrapped via:
     - `AzureOpenAIService.toAzureError` (includes request context and requestId)
     - `ResponsesClient.buildError` (normalizes v1 Responses API errors)
     - When adding new Azure calls, follow these patterns so telemetry and debugging remain consistent.
+  - 400 diagnostics: `AzureOpenAIService.logResponsesClient400` logs non-secret request diagnostics (message count, tool types, presence of instructions/responseFormat, requestId) for debuggability.
+  - Centralized error tracking: call `errorTracking.record(error, { type, agent, code, status, requestId })` in service-layer catch blocks so the Scaling & Performance tab reflects real-time failures.
+
+- UI and configuration guardrails:
+  - Vector dimensions: the configuration UI warns when dimensions don't match the selected embedding model and offers a one-click fix; runtime still auto-rebuilds on mismatch as a last resort.
+  - Responses timeout: warn when a very small timeout is set (can interrupt streaming).
+
+- Observability:
+  - `AzureServiceManager` logs simple latency metrics and usage metadata (when available) for completions and search queries.
 
 - Pathing and runtime:
   - All imports must use the `@/` alias (configured in tsconfig/vite) for src modules; relative deep paths make refactors fragile.

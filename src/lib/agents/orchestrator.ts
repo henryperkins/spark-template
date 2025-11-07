@@ -802,6 +802,4 @@ async function computeContentHashForAnalysis(content: string): Promise<string> {
   }
 }
 
-export interface ChunkingDecisionResult extends ChunkingDecision {}
-
 // (removed duplicate class definition here; method attached to primary class below)

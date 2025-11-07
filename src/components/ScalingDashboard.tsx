@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -19,7 +19,8 @@ import {
   Trash,
   CurrencyDollar,
   WarningCircle,
-  Bug
+  Bug,
+  CopySimple
 } from '@phosphor-icons/react'
 import { Document } from '@/types'
 import { embeddingManager, type RefreshResult } from '@/lib/embedding-manager'
@@ -725,6 +726,47 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
                               {error.code && (
                                 <p className="text-muted-foreground">Code: {error.code}</p>
                               )}
+                              {typeof error.status === 'number' && (
+                                <p className="text-muted-foreground">HTTP: {error.status}</p>
+                              )}
+                              {error.requestId && (
+                                <div className="flex items-center gap-2 text-muted-foreground">
+                                  <span>requestId:</span>
+                                  <Badge variant="outline" className="font-mono break-all">
+                                    {error.requestId}
+                                  </Badge>
+                                  <Button
+                                    type="button"
+                                    size="icon"
+                                    variant="ghost"
+                                    aria-label="Copy requestId"
+                                    className="h-6 w-6"
+                                    onClick={async () => {
+                                      try {
+                                        await navigator.clipboard?.writeText(error.requestId as string)
+                                        toast.success('requestId copied')
+                                      } catch {
+                                        // Ignore clipboard write failures
+                                      }
+                                    }}
+                                  >
+                                    <CopySimple size={14} />
+                                  </Button>
+                                </div>
+                              )}
+                              <div className="mt-1 flex flex-wrap items-center gap-3">
+                                <a
+                                  href="https://status.azure.com/en-us/status"
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-primary underline underline-offset-4"
+                                >
+                                  Check Azure Status →
+                                </a>
+                                <a href="#azure-configuration" className="text-primary underline underline-offset-4">
+                                  Open Azure configuration
+                                </a>
+                              </div>
                             </div>
                           ))}
                         </div>

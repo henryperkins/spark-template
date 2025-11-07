@@ -1,4 +1,5 @@
 import { AzureConfig } from '@/types'
+import { errorTracking } from '@/lib/services/error-tracker'
 
 /**
  * Lightweight client for Azure OpenAI v1 Responses API.
@@ -305,6 +306,11 @@ export class ResponsesClient {
 
     if (!res.ok || !res.body) {
       const err = await this.buildError(res, body).catch(e => e)
+      try {
+        errorTracking.record(err as Error, { type: 'llm', agent: 'ResponsesClient', status: (err as any)?.status, code: (err as any)?.code, requestId: (err as any)?.requestId })
+      } catch {
+        // Ignore error tracking failures
+      }
       yield { type: 'error', error: err }
       return
     }
@@ -313,6 +319,7 @@ export class ResponsesClient {
     const decoder = new TextDecoder()
     let fullText = ''
     let lastJson: any = null
+    let fellBack = false
 
     try {
       while (true) {
@@ -339,6 +346,27 @@ export class ResponsesClient {
             if (textDelta) {
               fullText += textDelta
               yield { type: 'text-delta', delta: textDelta }
+            }
+            // Graceful degradation: if an error/failure event appears, do one non-stream attempt
+            if (
+              !fellBack &&
+              parsed && typeof parsed.type === 'string' &&
+              (parsed.type === 'response.failed' || parsed.type === 'error' || /\.error$/.test(parsed.type))
+            ) {
+              fellBack = true
+              try {
+                const nonStream = await this.createResponse(options)
+                if (nonStream && typeof nonStream.outputText === 'string') {
+                  if (nonStream.outputText) {
+                    yield { type: 'text-delta', delta: nonStream.outputText }
+                  }
+                  yield { type: 'message-complete', result: nonStream }
+                  return
+                }
+              } catch (e) {
+                yield { type: 'error', error: e as Error }
+                return
+              }
             }
           } catch (e) {
             yield {
@@ -551,10 +579,13 @@ export class ResponsesClient {
       // Azure v1 spec uses 'api-key' or 'authorization' (case-insensitive) via securitySchemes
     }
 
-    if (this.config.apiKey) {
-      headers['api-key'] = this.config.apiKey
-    } else if (this.config.tokenProvider) {
-      const token = await this.config.tokenProvider()
+    const usingApiKey = !!this.config.apiKey
+    const usingTokenProvider = !!this.config.tokenProvider
+
+    if (usingApiKey) {
+      headers['api-key'] = this.config.apiKey as string
+    } else if (usingTokenProvider) {
+      const token = await (this.config.tokenProvider as () => Promise<string>)()
       headers['Authorization'] = `Bearer ${token}`
     }
 
@@ -572,17 +603,60 @@ export class ResponsesClient {
         ? setTimeout(() => controller.abort(), this.config.timeoutMs)
         : null
 
+    const doFetch = async (hdrs: Record<string, string>): Promise<Response> => {
+      // Add lightweight retry/backoff for transient errors
+      return await (this as any).fetchWithRetry?.(url, { ...init, headers: hdrs, signal: controller?.signal })
+        ?? fetch(url, { ...init, headers: hdrs, signal: controller?.signal })
+    }
+
     try {
-      return await fetch(url, {
-        ...init,
-        headers,
-        signal: controller?.signal
-      })
+      // First attempt
+      let res = await doFetch(headers)
+      // If RBAC token flow is used, refresh once on 401/403
+      if (usingTokenProvider && (res.status === 401 || res.status === 403)) {
+        try {
+          const fresh = await (this.config.tokenProvider as () => Promise<string>)()
+          const hdrs = { ...headers, Authorization: `Bearer ${fresh}` }
+          res = await doFetch(hdrs)
+        } catch {
+          // ignore refresh failures; return original
+        }
+      }
+      return res
     } finally {
       if (timeout) {
         clearTimeout(timeout)
       }
     }
+  }
+
+  // Retry/backoff helpers
+  private async fetchWithRetry(url: string, init: RequestInit, maxRetries = 3): Promise<Response> {
+    let attempt = 0
+    while (true) {
+      const res = await fetch(url, init)
+      if (!this.shouldRetry(res, attempt, maxRetries)) return res
+      attempt++
+      const delayMs = this.computeBackoff(res, attempt)
+      await new Promise(r => setTimeout(r, delayMs))
+    }
+  }
+
+  private shouldRetry(res: Response, attempt: number, maxRetries: number): boolean {
+    if (attempt >= maxRetries) return false
+    const status = res.status
+    return [429, 500, 502, 503, 504].includes(status)
+  }
+
+  private computeBackoff(res: Response, attempt: number): number {
+    const hdr = res.headers.get('Retry-After')
+    if (hdr) {
+      const sec = parseInt(hdr, 10)
+      if (!Number.isNaN(sec) && sec > 0) return sec * 1000
+    }
+    const base = 500 * Math.pow(2, attempt)
+    const jitter = Math.random() * 250
+    return Math.min(base + jitter, 8000)
   }
 
   private jsonHeaders(): Record<string, string> {
@@ -629,6 +703,17 @@ export class ResponsesClient {
       err.requestBody = body
     }
 
+    try {
+      errorTracking.record(err, {
+        type: 'llm',
+        agent: 'ResponsesClient',
+        code: err.code,
+        status: err.status,
+        requestId: err.requestId ?? undefined
+      })
+    } catch {
+      // ignore telemetry failures
+    }
     return err
   }
 

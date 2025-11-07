@@ -13,6 +13,8 @@ export interface ErrorEvent {
   agent?: string
   query?: string
   code?: string
+  status?: number
+  requestId?: string
   timestamp: string
 }
 
@@ -36,6 +38,8 @@ class ErrorTrackingService {
     agent?: string
     query?: string
     code?: string
+    status?: number
+    requestId?: string
   }): void {
     const errorEvent: ErrorEvent = {
       errorId: crypto.randomUUID(),
@@ -45,6 +49,8 @@ class ErrorTrackingService {
       agent: context?.agent,
       query: context?.query,
       code: context?.code,
+      status: context?.status,
+      requestId: context?.requestId,
       timestamp: new Date().toISOString()
     }
 

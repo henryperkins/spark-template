@@ -1,4 +1,5 @@
 import { AzureConfig, AzureSearchDocument, AzureSearchResult, Source } from '@/types'
+import { errorTracking } from '@/lib/services/error-tracker'
 
 export class AzureSearchService {
   private config: AzureConfig['search']
@@ -90,17 +91,25 @@ export class AzureSearchService {
         if (errorText.includes('Index') && errorText.includes('does not exist')) {
           return this.createSearchIndex()
         }
-        return { success: false, error: `HTTP 400: ${errorText}` }
+        const errMsg = `HTTP 400: ${errorText}`
+        try { errorTracking.record(new Error(errMsg), { type: 'retrieval', agent: 'AzureSearch', status: 400, code: 'search_validation' }) } catch {
+          // Ignore error tracking failures
+        }
+        return { success: false, error: errMsg }
       }
 
       if (searchPing.status === 401 || searchPing.status === 403) {
         const errorText = await searchPing.text()
-        return {
+        const err = {
           success: false,
           error:
             'Authentication failed for Azure AI Search. Ensure you are using an admin key for index management or switch to an existing index that is accessible with the provided key. ' +
             `Details: HTTP ${searchPing.status} ${errorText}`
         }
+        try { errorTracking.record(new Error(err.error), { type: 'retrieval', agent: 'AzureSearch', status: searchPing.status, code: 'search_auth' }) } catch {
+          // Ignore error tracking failures
+        }
+        return err
       }
 
       // Fall back to checking service metadata for other errors
@@ -122,7 +131,11 @@ export class AzureSearchService {
 
       if (!metadataResponse.ok) {
         const metadataError = await metadataResponse.text()
-        return { success: false, error: `HTTP ${metadataResponse.status}: ${metadataError}` }
+        const errMsg = `HTTP ${metadataResponse.status}: ${metadataError}`
+        try { errorTracking.record(new Error(errMsg), { type: 'retrieval', agent: 'AzureSearch', status: metadataResponse.status, code: 'search_metadata' }) } catch {
+          // Ignore error tracking failures
+        }
+        return { success: false, error: errMsg }
       }
 
       return { success: true }
@@ -130,15 +143,23 @@ export class AzureSearchService {
       console.error('Azure Search testConnection error:', error)
       // Check if it's a CORS error
       if (error instanceof TypeError && error.message.includes('Failed to fetch')) {
-        return {
+        const err = {
           success: false,
           error: 'CORS Error: Azure Search must be configured to allow requests from your origin. ' +
                  'In Azure Portal, go to your Search service → Settings → CORS, and add your origin ' +
                  '(e.g., http://localhost:5001 or your production URL). Note: Testing from localhost may ' +
                  'require enabling CORS for development. Alternatively, test the connection from a deployed environment.'
         }
+        try { errorTracking.record(new Error(err.error), { type: 'retrieval', agent: 'AzureSearch', code: 'search_cors' }) } catch {
+          // Ignore error tracking failures
+        }
+        return err
       }
-      return { success: false, error: `Connection failed: ${error instanceof Error ? error.message : 'Unknown error'}` }
+      const errMsg = `Connection failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+      try { errorTracking.record(new Error(errMsg), { type: 'retrieval', agent: 'AzureSearch', code: 'search_connection' }) } catch {
+        // Ignore error tracking failures
+      }
+      return { success: false, error: errMsg }
     }
   }
 
@@ -769,6 +790,9 @@ export class AzureSearchService {
       }))
     } catch (error) {
       console.error('Error performing vector search:', error)
+      try { errorTracking.record(error as Error, { type: 'retrieval', agent: 'AzureSearch', code: 'vector_search' }) } catch {
+        // Ignore error tracking failures
+      }
       throw error
     }
   }
@@ -827,6 +851,9 @@ export class AzureSearchService {
       }))
     } catch (error) {
       console.error('Error performing keyword search:', error)
+      try { errorTracking.record(error as Error, { type: 'retrieval', agent: 'AzureSearch', code: 'keyword_search' }) } catch {
+        // Ignore error tracking failures
+      }
       throw error
     }
   }
@@ -931,6 +958,9 @@ export class AzureSearchService {
       return sources
     } catch (error) {
       console.error('Error performing semantic hybrid search:', error)
+      try { errorTracking.record(error as Error, { type: 'retrieval', agent: 'AzureSearch', code: 'semantic_hybrid_search' }) } catch {
+        // Ignore error tracking failures
+      }
       throw error
     }
   }

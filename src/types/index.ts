@@ -89,6 +89,7 @@ export interface AzureConfig {
     responsesBackground?: boolean
     responsesTimeoutMs?: number
     responsesApiVersion?: string
+    responsesFallbackEnabled?: boolean
   }
   search: {
     endpoint: string

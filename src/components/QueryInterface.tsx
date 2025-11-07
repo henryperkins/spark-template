@@ -16,6 +16,7 @@ import { SuggestedQuestions } from './SuggestedQuestions'
 import { queryHistoryService } from '@/lib/services/query-history'
 import { azureServiceManager } from '@/lib/azure-service-manager'
 import { cn } from '@/lib/utils'
+import { errorTracking } from '@/lib/services/error-tracker'
 
 interface QueryInterfaceProps {
   documents: Document[]
@@ -34,6 +35,7 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
   const [orchestrator] = useState(() => new AgenticOrchestrator())
   const [activeWorkflow, setActiveWorkflow] = useState<AgentWorkflowStep[]>([])
   const [recentQueries, setRecentQueries] = useState<string[]>([])
+  const [lastErrorHint, setLastErrorHint] = useState<string | null>(null)
 
   useEffect(() => {
     let isMounted = true
@@ -152,6 +154,28 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
 
       setMessages(prev => [...prev, assistantMessage])
     } catch (err) {
+      // Map typical error classes to concise, actionable hints
+      let hint: string | null = null
+      if (err && typeof err === 'object') {
+        const anyErr = err as any
+        const status = anyErr?.status || anyErr?.azure?.status
+        const message = (anyErr?.message as string | undefined) || ''
+        if (status === 401 || status === 403) {
+          hint = 'Azure authentication failed (401/403). Check keys or RBAC token.'
+        } else if (status === 429) {
+          hint = 'Rate limited by Azure (429). Please wait and retry.'
+        } else if (typeof message === 'string' && message.toLowerCase().includes('cors')) {
+          hint = 'CORS blocked the request. Use the built-in proxy or enable CORS in Azure.'
+        } else if (typeof message === 'string' && /index(.+)?does not exist/i.test(message)) {
+          hint = 'Azure Search index missing. Rebuild the index from Configuration.'
+        }
+      }
+      setLastErrorHint(hint)
+      try {
+        errorTracking.record(err as Error, { type: 'llm', agent: 'QueryInterface', code: hint || 'query_error', status: (err as any)?.status || (err as any)?.azure?.status })
+      } catch {
+        // Ignore error tracking failures
+      }
       const errorId = `msg-${Date.now()}-error`
       const errorMessage: ExtendedChatMessage = {
         id: errorId,
@@ -336,6 +360,9 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
                     </AlertTitle>
                     <AlertDescription className="text-xs sm:text-sm space-y-1">
                       <p>{message.content}</p>
+                      {lastErrorHint && (
+                        <p className="text-[11px] opacity-90">Hint: {lastErrorHint}</p>
+                      )}
                       <p>
                         • Verify your{' '}
                         <a

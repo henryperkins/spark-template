@@ -10,10 +10,11 @@ import { Separator } from '@/components/ui/separator'
 import { MagnifyingGlass, Flask, Database, Sparkle, ClockCounterClockwise, Trash, CaretDown, CaretRight, FileMagnifyingGlass, CloudArrowUp } from '@phosphor-icons/react'
 import { azureServiceManager } from '@/lib/azure-service-manager'
 import { RoutingAgent } from '@/lib/agents/routing-agent'
-import { AzureConfig, Document } from '@/types'
+import { Document } from '@/types'
 import { findRelevantChunksWithMeta } from '@/lib/rag'
 import { queryHistoryService, QueryHistoryEntry } from '@/lib/services/query-history'
 import { toast } from 'sonner'
+import { errorTracking } from '@/lib/services/error-tracker'
 
 interface SearchDebuggerProps {
   documents: Document[]
@@ -88,6 +89,9 @@ export function SearchDebugger({ documents }: SearchDebuggerProps) {
 
       if (result.error) {
         toast.error('Analyzer test failed', { description: result.error })
+        try { errorTracking.record(new Error(result.error), { type: 'retrieval', agent: 'SearchDebugger', code: 'analyzer_test' }) } catch {
+          // Ignore error tracking failures
+        }
         setAnalyzerResult(null)
       } else {
         setAnalyzerResult(result.tokens.map(t => ({ token: t.token, position: t.position })))
@@ -97,6 +101,9 @@ export function SearchDebugger({ documents }: SearchDebuggerProps) {
       toast.error('Analyzer test failed', {
         description: error instanceof Error ? error.message : 'Unknown error'
       })
+      try { errorTracking.record(error as Error, { type: 'retrieval', agent: 'SearchDebugger', code: 'analyzer_test' }) } catch {
+        // Ignore error tracking failures
+      }
       setAnalyzerResult(null)
     } finally {
       setAnalyzerLoading(false)
@@ -172,6 +179,9 @@ export function SearchDebugger({ documents }: SearchDebuggerProps) {
 
       if (result.error) {
         toast.error('Failed to load index stats', { description: result.error })
+        try { errorTracking.record(new Error(result.error), { type: 'retrieval', agent: 'SearchDebugger', code: 'index_stats' }) } catch {
+          // Ignore error tracking failures
+        }
         setIndexStats(null)
       } else {
         setIndexStats({
@@ -184,6 +194,9 @@ export function SearchDebugger({ documents }: SearchDebuggerProps) {
       toast.error('Failed to load index stats', {
         description: error instanceof Error ? error.message : 'Unknown error'
       })
+      try { errorTracking.record(error as Error, { type: 'retrieval', agent: 'SearchDebugger', code: 'index_stats' }) } catch {
+        // Ignore error tracking failures
+      }
       setIndexStats(null)
     } finally {
       setStatsLoading(false)

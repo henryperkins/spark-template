@@ -166,7 +166,9 @@ class AgentAnalytics {
         if (typeof window !== 'undefined' && window.localStorage) {
           window.localStorage.setItem(STORAGE_KEY, JSON.stringify(alerts))
         }
-      } catch {}
+      } catch {
+        // Ignore localStorage write failures
+      }
     }
 
     try {
@@ -229,7 +231,9 @@ class AgentAnalytics {
           parsed.push(systemAlert)
           writeToLocal(parsed.slice(-100))
         }
-      } catch {}
+      } catch {
+        // Ignore fallback localStorage errors
+      }
 
       if (import.meta.env?.MODE !== 'production') {
         console.warn('[agent-analytics] KV persist error; used localStorage fallback', error)

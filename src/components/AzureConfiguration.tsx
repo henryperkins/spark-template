@@ -205,6 +205,10 @@ export function AzureConfiguration() {
   const searchConfigReady = Boolean(formData.search.endpoint && formData.search.apiKey && formData.search.indexName)
   const effectiveVectorDimensions =
     formData.search.vectorDimensions ?? inferDimensionsFromDeployment(formData.openai.embeddingDeploymentName)
+  const expectedVectorDimensions = inferDimensionsFromDeployment(formData.openai.embeddingDeploymentName)
+  const vectorDimensionMismatch =
+    typeof formData.search.vectorDimensions === 'number' && formData.search.vectorDimensions !== expectedVectorDimensions
+  const timeoutTooSmall = typeof formData.openai.responsesTimeoutMs === 'number' && formData.openai.responsesTimeoutMs > 0 && formData.openai.responsesTimeoutMs < 1000
 
   const testConnection = async () => {
     setTesting(true)
@@ -697,6 +701,11 @@ export function AzureConfiguration() {
                         <p className="text-xs text-muted-foreground">
                           Request timeout in milliseconds (leave empty for no timeout)
                         </p>
+                        {timeoutTooSmall && (
+                          <p className="text-xs text-amber-600">
+                            Very low timeouts may interrupt streaming or long responses. Consider ≥ 1000 ms.
+                          </p>
+                        )}
                       </div>
 
                       <div className="space-y-2">
@@ -786,6 +795,24 @@ export function AzureConfiguration() {
                 <p className="text-xs text-muted-foreground">
                   Use 3,072 for <code>text-embedding-3-large</code>, 1,536 for most other Azure OpenAI embedding models.
                 </p>
+                {vectorDimensionMismatch && (
+                  <div className="mt-2 flex items-center justify-between rounded border border-amber-300 bg-amber-50 px-3 py-2">
+                    <span className="text-xs text-amber-700">
+                      Configured dimensions do not match the selected embedding model. Expected {expectedVectorDimensions}.
+                    </span>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setFormData(prev => ({
+                        ...prev,
+                        search: { ...prev.search, vectorDimensions: expectedVectorDimensions }
+                      }))}
+                    >
+                      Use expected dimensions
+                    </Button>
+                  </div>
+                )}
               </div>
             </TabsContent>
 

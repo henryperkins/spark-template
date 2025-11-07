@@ -44,8 +44,60 @@ function App() {
 
     await cacheManager.invalidateDocument(documentId)
     await cacheManager.invalidateByPrefix('query-expansion')
+    await cacheManager.invalidateByPrefix('rag-query')
 
     setDocuments((prev = []) => prev.filter(doc => doc.id !== documentId))
+  }
+
+  const handleEditDocumentContent = async (
+    documentId: string,
+    newContent: string
+  ): Promise<void> => {
+    const target = (documents || []).find(d => d.id === documentId)
+    if (!target) return
+
+    try {
+      let updated: Document
+
+      if (azureServiceManager.isConfigured()) {
+        updated = await azureServiceManager.updateDocumentWithAzure(target, newContent, {
+          preserveMetadata: true
+        })
+      } else {
+        const { intelligentChunkDocument } = await import('@/lib/rag')
+        const { chunks } = await intelligentChunkDocument(newContent, target.id, target.name)
+        updated = {
+          ...target,
+          chunks,
+          processed: true,
+          azureIndexed: false,
+          processingStatus: 'completed',
+          errorMessage: undefined
+        }
+      }
+
+      setDocuments((prev = []) =>
+        (prev || []).map(doc => (doc.id === documentId ? updated : doc))
+      )
+
+      await cacheManager.invalidateDocument(documentId)
+      await cacheManager.invalidateByPrefix('query-expansion')
+      await cacheManager.invalidateByPrefix('rag-query')
+    } catch (error) {
+      console.error('Failed to update document:', error)
+      setDocuments((prev = []) =>
+        (prev || []).map(doc =>
+          doc.id === documentId
+            ? {
+                ...doc,
+                processingStatus: 'error',
+                errorMessage:
+                  error instanceof Error ? error.message : 'Update failed'
+              }
+            : doc
+        )
+      )
+    }
   }
 
   const NAV_ICON_SIZE = 18

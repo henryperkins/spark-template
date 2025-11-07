@@ -1,6 +1,8 @@
 import { AzureConfig, AzureConnectionStatus, Document, DocumentChunk, Source, AzureSearchDocument } from '@/types'
 import { AzureOpenAIService } from './azure-openai'
+import { errorTracking } from '@/lib/services/error-tracker'
 import { AzureSearchService } from './azure-search'
+import { intelligentChunkDocument } from './rag'
 
 export class AzureServiceManager {
   private openaiService: AzureOpenAIService | null = null
@@ -39,7 +41,10 @@ export class AzureServiceManager {
           : undefined),
       responsesApiVersion:
         config.openai.responsesApiVersion ??
-        process.env.VITE_AZURE_RESPONSES_API_VERSION
+        process.env.VITE_AZURE_RESPONSES_API_VERSION,
+      responsesFallbackEnabled:
+        (config.openai as any).responsesFallbackEnabled ??
+        (process.env.VITE_AZURE_RESPONSES_FALLBACK_ENABLED === 'true' ? true : undefined)
     }
 
     this.openaiService = new AzureOpenAIService(openaiConfig as any)
@@ -113,7 +118,6 @@ export class AzureServiceManager {
       throw new Error('Azure OpenAI service not configured')
     }
 
-    const self = this
     // Simple async queue to bridge callback -> async iterable
     const queue: string[] = []
     let done = false
@@ -130,9 +134,10 @@ export class AzureServiceManager {
     }
 
     // Kick off the streaming request (fire and forget; completion sets done flag)
+    const startedAt = Date.now()
     ;(async () => {
       try {
-        await self.openaiService!.generateCompletion(messages, {
+        await this.openaiService!.generateCompletion(messages, {
           maxTokens: options?.maxTokens,
           temperature: options?.temperature,
           topP: options?.topP,
@@ -144,8 +149,17 @@ export class AzureServiceManager {
         // Capture error to propagate through the async iterator
         errState = err
         console.error('Azure streaming error:', err)
+        try {
+          errorTracking.record(err as Error, { type: 'llm', agent: 'AzureOpenAI', code: 'openai_stream_error' })
+        } catch {
+          // Ignore error tracking failures
+        }
       } finally {
         done = true
+        const duration = Date.now() - startedAt
+        if (typeof console !== 'undefined') {
+          console.debug('[azure-service-manager] stream completed', { durationMs: duration })
+        }
         const fn = notify as unknown as (() => void) | null
         if (typeof fn === 'function') fn()
         notify = null
@@ -206,18 +220,15 @@ export class AzureServiceManager {
     try {
       const updatedDocument = { ...document, processingStatus: 'processing' as const }
 
-      // Generate embeddings for all chunks
       const texts = document.chunks.map(chunk => chunk.content)
       const embeddings = await this.openaiService!.generateBatchEmbeddings(texts, onEmbeddingProgress)
 
-      // Update chunks with embeddings
       const updatedChunks: DocumentChunk[] = document.chunks.map((chunk, index) => ({
         ...chunk,
         azureEmbedding: embeddings[index],
         vectorId: `${chunk.id}-vector`
       }))
 
-      // Prepare documents for Azure Search indexing
       const searchDocuments: AzureSearchDocument[] = updatedChunks.map(chunk => ({
         id: chunk.vectorId!,
         content: chunk.content,
@@ -227,7 +238,6 @@ export class AzureServiceManager {
         chunkIndex: chunk.chunkIndex
       }))
 
-      // Index in Azure Search
       const indexResult = await this.searchService!.indexDocuments(searchDocuments)
 
       if (!indexResult.success) {
@@ -250,6 +260,135 @@ export class AzureServiceManager {
     }
   }
 
+  /**
+   * Update an existing document with new content:
+   * - Re-chunks using the intelligent chunker
+   * - In local mode: returns updated chunks only
+   * - In Azure-configured mode: deletes old chunks, re-embeds, reindexes
+   */
+  async updateDocumentWithAzure(
+    document: Document,
+    newContent: string,
+    options?: {
+      onEmbeddingProgress?: (done: number, total: number) => void
+      preserveMetadata?: boolean
+    }
+  ): Promise<Document> {
+    const preserveMetadata = options?.preserveMetadata !== false
+
+    try {
+      const { chunks: baseChunks } = await intelligentChunkDocument(
+        newContent,
+        document.id,
+        document.name
+      )
+
+      const newChunks: DocumentChunk[] = baseChunks.map(chunk => {
+        const existing = document.chunks.find(c => c.chunkIndex === chunk.chunkIndex)
+        const metadata =
+          preserveMetadata && existing?.metadata
+            ? { ...existing.metadata }
+            : chunk.metadata
+
+        return {
+          ...chunk,
+          metadata
+        }
+      })
+
+      if (!this.isConfigured()) {
+        return {
+          ...document,
+          chunks: newChunks,
+          processed: true,
+          azureIndexed: false,
+          processingStatus: 'completed',
+          errorMessage: undefined
+        }
+      }
+
+      const deleteResult = await this.searchService!.deleteDocumentChunks(document.id)
+      if (!deleteResult.success) {
+        console.error(
+          '[azure-service-manager] Failed to delete existing Azure Search chunks:',
+          deleteResult.error
+        )
+        return {
+          ...document,
+          chunks: newChunks,
+          processingStatus: 'error',
+          errorMessage:
+            deleteResult.error ?? 'Failed to delete existing Azure Search chunks'
+        }
+      }
+
+      const texts = newChunks.map(c => c.content)
+      const embeddings = await this.openaiService!.generateBatchEmbeddings(
+        texts,
+        options?.onEmbeddingProgress
+      )
+
+      const updatedChunks: DocumentChunk[] = newChunks.map((chunk, index) => ({
+        ...chunk,
+        azureEmbedding: embeddings[index],
+        vectorId: `${chunk.id}-vector`
+      }))
+
+      const searchDocuments: AzureSearchDocument[] = updatedChunks.map(chunk => ({
+        id: chunk.vectorId!,
+        content: chunk.content,
+        contentVector: chunk.azureEmbedding!,
+        documentId: document.id,
+        documentName: document.name,
+        chunkIndex: chunk.chunkIndex
+      }))
+
+      const indexResult = await this.searchService!.indexDocuments(searchDocuments)
+      if (!indexResult.success) {
+        console.error(
+          '[azure-service-manager] Failed to index updated document:',
+          indexResult.error
+        )
+        return {
+          ...document,
+          chunks: updatedChunks,
+          azureIndexed: false,
+          processed: true,
+          processingStatus: 'error',
+          errorMessage: indexResult.error || 'Indexing failed'
+        }
+      }
+
+      return {
+        ...document,
+        chunks: updatedChunks,
+        processed: true,
+        azureIndexed: true,
+        processingStatus: 'completed',
+        errorMessage: undefined
+      }
+    } catch (error) {
+      console.error('Error updating document with Azure:', error)
+      try {
+        errorTracking.record(error as Error, {
+          type: 'retrieval',
+          agent: 'AzureUpdate',
+          code: 'update_failed'
+        })
+      } catch {
+        // ignore error-tracking failures
+      }
+      return {
+        ...document,
+        processingStatus: 'error',
+        errorMessage:
+          error instanceof Error
+            ? error.message
+            : 'Unknown error during Azure document update'
+      }
+    }
+  }
+
   async searchWithAzure(
     query: string,
     strategy: 'vector' | 'keyword' | 'hybrid' = 'hybrid'
@@ -259,13 +398,19 @@ export class AzureServiceManager {
     }
 
     try {
+      const start = Date.now()
       let results: Source[] = []
+      let failures = 0
+
+      const shortQuery = query.trim().split(/\s+/).filter(Boolean).length <= 2 && query.length <= 24
+      const skipSemantic = shortQuery
 
       if (strategy === 'keyword') {
         // Primary: keyword search
         try {
           results = await this.searchService!.keywordSearch(query, 5)
         } catch {
+          failures++
           // continue to vector fallback
         }
         // Fallback: vector if no hits
@@ -274,9 +419,12 @@ export class AzureServiceManager {
           try {
             results = await this.searchService!.vectorSearch(queryEmbedding, 5)
           } catch {
+            failures++
             // final fallback: hybrid
             try {
-              results = await this.searchService!.semanticHybridSearch(query, queryEmbedding, 5)
+              if (!skipSemantic) {
+                results = await this.searchService!.semanticHybridSearch(query, queryEmbedding, 5)
+              }
             } catch {
               // swallow; handled below
             }
@@ -292,12 +440,14 @@ export class AzureServiceManager {
         try {
           results = await this.searchService!.vectorSearch(queryEmbedding, 5)
         } catch {
+          failures++
           // continue to keyword fallback
         }
         if (results.length === 0) {
           try {
             results = await this.searchService!.keywordSearch(query, 5)
           } catch {
+            failures++
             // swallow
           }
         }
@@ -306,14 +456,18 @@ export class AzureServiceManager {
 
       // strategy === 'hybrid'
       try {
-        results = await this.searchService!.semanticHybridSearch(query, queryEmbedding, 5)
+        if (!skipSemantic) {
+          results = await this.searchService!.semanticHybridSearch(query, queryEmbedding, 5)
+        }
       } catch {
+        failures++
         // continue to keyword fallback
       }
       if (results.length === 0) {
         try {
           results = await this.searchService!.keywordSearch(query, 5)
         } catch {
+          failures++
           // continue to vector fallback
         }
       }
@@ -321,8 +475,17 @@ export class AzureServiceManager {
         try {
           results = await this.searchService!.vectorSearch(queryEmbedding, 5)
         } catch {
+          failures++
           // swallow
         }
+      }
+      // simple circuit breaker: if repeated failures, short-circuit subsequent attempts in the same request
+      if (failures >= 3 && results.length === 0) {
+        console.warn('[azure-service-manager] search attempts exceeded failure threshold; short-circuiting')
+      }
+      const duration = Date.now() - start
+      if (typeof console !== 'undefined') {
+        console.debug('[azure-service-manager] search duration(ms)', duration, { strategy, skipSemantic, failures, resultCount: results.length })
       }
       return results
     } catch (error) {
@@ -430,15 +593,27 @@ export class AzureServiceManager {
     if (!this.openaiService) {
       throw new Error('Azure OpenAI service not configured')
     }
+    const startedAt = Date.now()
     if (options && (options as any).stream) {
       // streaming path does not yield usage reliably; delegate to standard method
       const text = await this.openaiService.generateCompletion(messages, options)
+      const duration = Date.now() - startedAt
+      console.debug('[azure-service-manager] completion (stream=true) duration(ms)', duration)
       return { text }
     }
     if (typeof (this.openaiService as any).generateCompletionWithUsage === 'function') {
-      return (this.openaiService as any).generateCompletionWithUsage(messages, options)
+      const result = await (this.openaiService as any).generateCompletionWithUsage(messages, options)
+      const duration = Date.now() - startedAt
+      if (result?.usage) {
+        console.debug('[azure-service-manager] completion usage', { ...result.usage, durationMs: duration })
+      } else {
+        console.debug('[azure-service-manager] completion duration(ms)', duration)
+      }
+      return result
     }
     const text = await this.openaiService.generateCompletion(messages, options)
+    const duration = Date.now() - startedAt
+    console.debug('[azure-service-manager] completion duration(ms)', duration)
     return { text }
   }
 }

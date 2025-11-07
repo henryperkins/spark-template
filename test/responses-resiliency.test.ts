@@ -1,0 +1,120 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { AzureOpenAIService } from '../src/lib/azure-openai'
+import type { AzureConfig } from '../src/types'
+import { ResponsesClient } from '../src/lib/responses-client'
+
+describe('Responses resiliency and fallbacks', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    fetchSpy = vi.spyOn(global, 'fetch')
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('falls back to /chat/completions on retriable Responses failure when enabled', async () => {
+    const config: AzureConfig['openai'] = {
+      endpoint: 'https://test.openai.azure.com',
+      apiKey: 'test-key',
+      deploymentName: 'gpt-4o',
+      embeddingDeploymentName: 'text-embedding-3-large',
+      apiVersion: '2025-08-01-preview',
+      useResponsesApi: true,
+      responsesModel: 'gpt-4o',
+      responsesApiVersion: 'v1',
+      responsesFallbackEnabled: true,
+    }
+    const service = new AzureOpenAIService(config)
+
+    // First: Responses API returns a retriable 503
+    // Then: Chat completions returns a normal reply
+    fetchSpy.mockImplementation((input: any, init?: any) => {
+      const url = String(input)
+      if (url.includes('/openai/v1/responses')) {
+        return Promise.resolve(new Response(JSON.stringify({ error: { message: 'Service Unavailable' } }), { status: 503, headers: { 'content-type': 'application/json' } }))
+      }
+      if (url.includes('/chat/completions')) {
+        return Promise.resolve(new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'Fallback OK' } }] }), { status: 200, headers: { 'content-type': 'application/json' } }))
+      }
+      return Promise.reject(new Error('Unexpected URL'))
+    })
+
+    const text = await service.generateCompletion('Hello')
+    expect(text).toBe('Fallback OK')
+    // Ensure both endpoints were called
+    const calls = fetchSpy.mock.calls.map(c => String(c[0]))
+    expect(calls.some(u => u.includes('/openai/v1/responses'))).toBe(true)
+    expect(calls.some(u => u.includes('/chat/completions'))).toBe(true)
+  }, 15000)
+
+  it('ResponsesClient refreshes token on 401/403 once', async () => {
+    const client = new ResponsesClient({
+      endpoint: 'https://test.openai.azure.com',
+      defaultModel: 'gpt-4o',
+      tokenProvider: vi
+        .fn()
+        // first call -> stale token
+        .mockResolvedValueOnce('stale-token')
+        // second call -> refreshed token
+        .mockResolvedValueOnce('fresh-token'),
+    })
+
+    // First attempt 401, second attempt 200
+    const encoder = new TextEncoder()
+    fetchSpy.mockImplementationOnce(() => Promise.resolve(new Response(encoder.encode('unauthorized'), { status: 401 })))
+    fetchSpy.mockImplementationOnce(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({ id: 'ok', status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Hello!' }] }] }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        )
+      )
+    )
+
+    const res = await client.createResponse({
+      messages: [{ role: 'user', content: [{ type: 'input_text', text: 'Hi' }] }],
+    })
+    expect(res.outputText).toBe('Hello!')
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+  })
+
+  it('streaming falls back to non-stream createResponse on SSE failure', async () => {
+    const config: AzureConfig['openai'] = {
+      endpoint: 'https://test.openai.azure.com',
+      apiKey: 'test-key',
+      deploymentName: 'gpt-4o',
+      embeddingDeploymentName: 'text-embedding-3-large',
+      apiVersion: '2025-08-01-preview',
+      useResponsesApi: true,
+      responsesModel: 'gpt-4o',
+      responsesApiVersion: 'v1',
+    }
+    const service = new AzureOpenAIService(config)
+
+    // Mock SSE that emits a failure event
+    const encoder = new TextEncoder()
+    const sse = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"type":"response.failed","message":"bad"}\n\n'))
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+        controller.close()
+      },
+    })
+    // First call: stream
+    fetchSpy.mockResolvedValueOnce(new Response(sse as any, { status: 200, headers: { 'content-type': 'text/event-stream' } }))
+    // Second call: non-stream recovery
+    fetchSpy.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ id: 'ok', status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Recovered text' }] }] }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    )
+
+    const chunks: string[] = []
+    await service.generateCompletion('Test', { stream: true, onChunk: c => chunks.push(c) })
+    expect(chunks.join('')).toBe('Recovered text')
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+  })
+})
