@@ -88,9 +88,22 @@ export class QueryExpansionAgent {
   }
 
   private buildCacheKey(query: string, documents: Document[], sources?: Source[]): string {
+    // Cloudflare KV keys are limited to 512 bytes; long queries + many IDs can exceed this.
+    // To stay safe and deterministic, hash the inputs into a compact suffix.
     const docIds = documents.map(d => d.id).sort().join(',')
     const sourceIds = sources?.map(s => s.chunkId).sort().join(',') || 'none'
-    return `query-expansion:${query}:${docIds}:${sourceIds}`
+    const raw = `${query}::${docIds}::${sourceIds}`
+
+    // FNV-1a 64-bit hash (fast, deterministic, browser-compatible)
+    let hash = BigInt('0xcbf29ce484222325')
+    const prime = BigInt('0x100000001b3')
+    for (let i = 0; i < raw.length; i++) {
+      hash ^= BigInt(raw.charCodeAt(i))
+      hash *= prime
+    }
+    const hex = hash.toString(16)
+
+    return `query-expansion:${hex}`
   }
 
   private async extractDocumentTopics(documents: Document[]): Promise<string[]> {

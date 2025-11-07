@@ -401,6 +401,34 @@ export class ResponsesClient {
       stream: flags.stream
     }
 
+    // Some Azure-hosted models (e.g. gpt-5-mini / strict variants) reject unsupported params
+    // like `temperature`/`top_p`. Respect that by only sending these when non-strict.
+    const isStrictModel =
+      typeof model === 'string' &&
+      /gpt-5-mini(-strict)?|^o1(\b|-)|instruct-strict/i.test(model)
+
+    const safeOptions = isStrictModel
+      ? {
+          // For strict models: let Azure defaults apply, do not send sampling params.
+        }
+      : {
+          temperature:
+            typeof options.temperature === 'number'
+              ? options.temperature
+              : undefined,
+          topP:
+            typeof options.topP === 'number'
+              ? options.topP
+              : undefined
+        }
+
+    if (safeOptions.temperature !== undefined) {
+      body.temperature = safeOptions.temperature
+    }
+    if (safeOptions.topP !== undefined) {
+      body.top_p = safeOptions.topP
+    }
+
     const maxOut =
       options.maxOutputTokens ??
       this.config.defaultMaxOutputTokens
