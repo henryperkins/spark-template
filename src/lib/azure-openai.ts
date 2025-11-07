@@ -63,34 +63,73 @@ export class AzureOpenAIService {
     }
   }
 
-  async generateBatchEmbeddings(texts: string[]): Promise<number[][]> {
-    try {
-      const response = await fetch(
-        `${this.config.endpoint}/openai/deployments/${this.config.embeddingDeploymentName}/embeddings?api-version=${this.config.apiVersion}`,
-        {
-          method: 'POST',
-          headers: {
-            'api-key': this.config.apiKey,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            input: texts,
-            encoding_format: 'float'
-          })
+  async generateBatchEmbeddings(
+    texts: string[],
+    onProgress?: (done: number, total: number) => void
+  ): Promise<number[][]> {
+    // Automatically batch large inputs to avoid request size/token limits.
+    const maxBatchSize = 64
+    const results: number[][] = []
+    const total = texts.length
+    let done = 0
+
+    // Helper to POST a single batch; reduces batch size on 413/400 if needed.
+    const postBatch = async (batch: string[], attemptSize: number): Promise<number[][]> => {
+      try {
+        const response = await fetch(
+          `${this.config.endpoint}/openai/deployments/${this.config.embeddingDeploymentName}/embeddings?api-version=${this.config.apiVersion}`,
+          {
+            method: 'POST',
+            headers: {
+              'api-key': this.config.apiKey,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              input: batch,
+              encoding_format: 'float'
+            })
+          }
+        )
+
+        if (!response.ok) {
+          const errorText = await response.text()
+          // Reduce batch size on payload/limit errors and retry
+          if ((response.status === 400 || response.status === 413) && attemptSize > 1) {
+            const nextSize = Math.max(1, Math.floor(attemptSize / 2))
+            const out: number[][] = []
+            for (let i = 0; i < batch.length; i += nextSize) {
+              const sub = batch.slice(i, i + nextSize)
+              const subRes = await postBatch(sub, nextSize)
+              out.push(...subRes)
+            }
+            return out
+          }
+          throw new Error(`Batch embedding generation failed: ${response.status} ${errorText}`)
         }
-      )
 
-      if (!response.ok) {
-        const errorText = await response.text()
-        throw new Error(`Batch embedding generation failed: ${response.status} ${errorText}`)
+        const data = await response.json()
+        return data.data.map((item: { embedding: number[] }) => item.embedding)
+      } catch (error) {
+        console.error('Error generating batch embeddings:', error)
+        throw error
       }
-
-      const data = await response.json()
-      return data.data.map((item: { embedding: number[] }) => item.embedding)
-    } catch (error) {
-      console.error('Error generating batch embeddings:', error)
-      throw error
     }
+
+    for (let i = 0; i < texts.length; i += maxBatchSize) {
+      const batch = texts.slice(i, i + maxBatchSize)
+      const embeddings = await postBatch(batch, Math.min(batch.length, maxBatchSize))
+      results.push(...embeddings)
+      done += batch.length
+      if (onProgress) {
+        try {
+          onProgress(Math.min(done, total), total)
+        } catch {
+          // ignore callback errors
+        }
+      }
+    }
+
+    return results
   }
 
   async generateCompletion(

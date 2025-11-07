@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { CloudArrowUp, CloudCheck, CloudX, Eye, EyeSlash, TestTube, Sparkle, Lightning, FloppyDisk, Trash, FolderOpen } from '@phosphor-icons/react'
 import { AzureConfig, AzureConnectionStatus, SavedAzureConfig } from '@/types'
 import { azureServiceManager } from '@/lib/azure-service-manager'
+import { isCloudflareKVConfigured, testCloudflareKV } from '@/lib/cloudflare-kv'
 
 export function AzureConfiguration() {
   const [config, setConfig] = useSparkKV<AzureConfig | null>('azure-config', null)
@@ -58,6 +59,7 @@ export function AzureConfiguration() {
   const [selectedConfigId, setSelectedConfigId] = useState<string>('')
   const [rebuildingIndex, setRebuildingIndex] = useState(false)
   const [rebuildResult, setRebuildResult] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
+  const [storageHealth, setStorageHealth] = useState<{ status: 'connected' | 'disconnected' | 'error' | 'testing', message?: string }>({ status: 'testing' })
 
   const inferDimensionsFromDeployment = (deploymentName: string | undefined): number => {
     const normalized = deploymentName?.toLowerCase() ?? ''
@@ -79,6 +81,33 @@ export function AzureConfiguration() {
       })
     }
   }, [config])
+
+  // Evaluate Storage Health (Cloudflare KV or Local)
+  useEffect(() => {
+    let mounted = true
+    const run = async () => {
+      setStorageHealth({ status: 'testing' })
+      try {
+        if (isCloudflareKVConfigured()) {
+          const ok = await testCloudflareKV()
+          if (!mounted) return
+          setStorageHealth(ok ? { status: 'connected' } : { status: 'error', message: 'Cloudflare KV test failed' })
+        } else {
+          setStorageHealth({
+            status: 'disconnected',
+            message: 'Cloudflare KV not configured — falling back to localStorage (≈5 MB limit)'
+          })
+        }
+      } catch (e) {
+        if (!mounted) return
+        setStorageHealth({ status: 'error', message: e instanceof Error ? e.message : String(e) })
+      }
+    }
+    run()
+    return () => {
+      mounted = false
+    }
+  }, [])
 
   // Save current configuration
   const handleSaveConfig = () => {
@@ -214,7 +243,7 @@ export function AzureConfiguration() {
       } else {
         const errorMessage = result.error ?? 'Index rebuild failed for an unknown reason.'
         const enhancedMessage = errorMessage.includes("Existing field 'contentVector' cannot be changed")
-          ? `${errorMessage} Azure may still be removing the previous index. Wait a few seconds and try again.`
+          ? `${errorMessage} Azure may still be removing the previous index. Wait 30–120 seconds and try again.`
           : errorMessage
         setRebuildResult({
           type: 'error',
@@ -425,7 +454,7 @@ export function AzureConfiguration() {
                   Last tested: {new Date(status.lastTested!).toLocaleString()}
                 </p>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="flex items-center gap-2">
                   {getStatusIcon(status.openai)}
                   <span className="text-sm">Azure OpenAI</span>
@@ -435,6 +464,11 @@ export function AzureConfiguration() {
                   {getStatusIcon(status.search)}
                   <span className="text-sm">Azure AI Search</span>
                   {getStatusBadge(status.search)}
+                </div>
+                <div className="flex items-center gap-2">
+                  {getStatusIcon(storageHealth.status)}
+                  <span className="text-sm">Storage (Cloudflare KV)</span>
+                  {getStatusBadge(storageHealth.status)}
                 </div>
               </div>
               {status.errors && (
@@ -450,6 +484,13 @@ export function AzureConfiguration() {
                     <Alert variant="destructive">
                       <AlertDescription>
                         <strong>Azure AI Search:</strong> {status.errors.search}
+                      </AlertDescription>
+                    </Alert>
+                  )}
+                  {storageHealth.message && (
+                    <Alert variant={storageHealth.status === 'connected' ? 'default' : 'destructive'}>
+                      <AlertDescription>
+                        <strong>Storage:</strong> {storageHealth.message}
                       </AlertDescription>
                     </Alert>
                   )}

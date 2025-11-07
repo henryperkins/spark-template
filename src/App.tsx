@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react'
 import { useSparkKV } from '@/hooks/use-spark-kv'
 import { ResponsiveNavigation } from '@/components/ResponsiveNavigation'
+import { ThemeToggle } from '@/components/ThemeToggle'
 import { DocumentUpload } from '@/components/DocumentUpload'
 import { DocumentList } from '@/components/DocumentList'
 import { QueryInterface } from '@/components/QueryInterface'
@@ -103,12 +104,15 @@ function App() {
     <div className="min-h-screen bg-background">
       <div className="mx-auto max-w-6xl px-3 py-8 sm:px-6 lg:px-12">
         <div className="mb-10">
-          <div className="flex items-center gap-4">
-            <Brain size={28} className="text-primary" />
-            <div>
-              <h1 className="text-3xl font-bold text-foreground sm:text-4xl">Agentic RAG</h1>
-              <p className="text-base text-muted-foreground sm:text-lg">Intelligent Knowledge Assistant</p>
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-4">
+              <Brain size={28} className="text-primary" />
+              <div>
+                <h1 className="text-3xl font-bold text-foreground sm:text-4xl">Agentic RAG</h1>
+                <p className="text-base text-muted-foreground sm:text-lg">Intelligent Knowledge Assistant</p>
+              </div>
             </div>
+            <ThemeToggle />
           </div>
         </div>
 

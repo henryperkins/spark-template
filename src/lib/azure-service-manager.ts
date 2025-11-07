@@ -69,7 +69,10 @@ export class AzureServiceManager {
     }
   }
 
-  async processDocumentWithAzure(document: Document): Promise<Document> {
+  async processDocumentWithAzure(
+    document: Document,
+    onEmbeddingProgress?: (done: number, total: number) => void
+  ): Promise<Document> {
     if (!this.isConfigured()) {
       throw new Error('Azure services not configured')
     }
@@ -79,7 +82,7 @@ export class AzureServiceManager {
 
       // Generate embeddings for all chunks
       const texts = document.chunks.map(chunk => chunk.content)
-      const embeddings = await this.openaiService!.generateBatchEmbeddings(texts)
+      const embeddings = await this.openaiService!.generateBatchEmbeddings(texts, onEmbeddingProgress)
 
       // Update chunks with embeddings
       const updatedChunks: DocumentChunk[] = document.chunks.map((chunk, index) => ({

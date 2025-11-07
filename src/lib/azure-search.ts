@@ -142,9 +142,13 @@ export class AzureSearchService {
     }
   }
 
-  async createSearchIndex(vectorDimensions?: number): Promise<{ success: boolean; error?: string }> {
+  async createSearchIndex(
+    vectorDimensions?: number,
+    options?: { allowRebuildOnImmutableFieldError?: boolean }
+  ): Promise<{ success: boolean; error?: string }> {
     try {
       const dimensions = vectorDimensions ?? this.getDefaultVectorDimensions()
+      const allowRebuildOnImmutableFieldError = options?.allowRebuildOnImmutableFieldError ?? true
 
       // Fetch existing index metadata so we can preserve settings Azure won't let us remove (e.g., compression)
       let existingIndex: Record<string, unknown> | null = null
@@ -459,7 +463,8 @@ export class AzureSearchService {
         ]
       }
 
-      const response = await (this.shouldProxy()
+      const doCreateRequest = () =>
+        this.shouldProxy()
         ? fetch('/api/azure-search/create-index', {
             method: 'POST',
             headers: this.proxyHeaders(),
@@ -480,10 +485,27 @@ export class AzureSearchService {
               },
               body: JSON.stringify(indexSchema)
             }
-          ))
+          )
+
+      let response = await doCreateRequest()
 
       if (!response.ok) {
         const errorText = await response.text()
+        const cannotChangeField = /CannotChangeExistingField|Existing field 'contentVector' cannot be changed/i.test(errorText)
+        if (cannotChangeField) {
+          // 1) Wait in case prior deletion is still in progress, then retry once.
+          const waited = await this.waitForIndexRemoval(60, 2000)
+          if (waited) {
+            response = await doCreateRequest()
+            if (response.ok) return { success: true }
+          }
+          // 2) If still failing and allowed, do a full rebuild (DELETE -> wait -> PUT)
+          if (allowRebuildOnImmutableFieldError) {
+            const rebuild = await this.rebuildIndex(dimensions)
+            if (rebuild.success) return { success: true }
+            return { success: false, error: `Index creation failed after rebuild attempt: ${rebuild.error ?? 'Unknown error'}` }
+          }
+        }
         return { success: false, error: `Index creation failed: ${response.status} ${errorText}` }
       }
 
@@ -532,18 +554,18 @@ export class AzureSearchService {
           return {
             success: false,
             error:
-              `Timed out waiting for index '${this.config.indexName}' to delete. Please wait a few seconds and try again.`
+              `Timed out waiting for index '${this.config.indexName}' to delete. Please wait 30–120 seconds and try again.`
           }
         }
       }
 
-      return this.createSearchIndex(vectorDimensions)
+      return this.createSearchIndex(vectorDimensions, { allowRebuildOnImmutableFieldError: false })
     } catch (error) {
       return { success: false, error: `Index rebuild failed: ${error instanceof Error ? error.message : 'Unknown error'}` }
     }
   }
 
-  private async waitForIndexRemoval(maxAttempts: number = 15, delayMs: number = 1000): Promise<boolean> {
+  private async waitForIndexRemoval(maxAttempts: number = 90, delayMs: number = 2000): Promise<boolean> {
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const checkResponse = await (this.shouldProxy()
         ? fetch(
@@ -652,11 +674,12 @@ export class AzureSearchService {
           const providedDimensions = providedMatch
             ? Number.parseInt(providedMatch[1], 10)
             : (documents[0]?.contentVector?.length ?? this.getDefaultVectorDimensions())
-          const refreshResult = await this.createSearchIndex(providedDimensions)
-          if (!refreshResult.success) {
+          // Perform a full rebuild to safely change vector dimensions.
+          const rebuildResult = await this.rebuildIndex(providedDimensions)
+          if (!rebuildResult.success) {
             return {
               success: false,
-              error: `Indexing failed due to vector dimension mismatch and automatic schema update failed: ${refreshResult.error || 'Unknown schema update error'}. Original error: ${errorText}`
+              error: `Indexing failed due to vector dimension mismatch and automatic index rebuild failed: ${rebuildResult.error || 'Unknown rebuild error'}. Original error: ${errorText}`
             }
           }
           return this.indexDocuments(documents, namespace, false)

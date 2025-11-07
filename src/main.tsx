@@ -1,5 +1,6 @@
 import { createRoot } from 'react-dom/client'
 import { ErrorBoundary } from "react-error-boundary";
+import { ThemeProvider } from "next-themes"
 import "@github/spark/spark"
 import { installSparkFallbacks } from './lib/spark-fallback'
 
@@ -12,6 +13,8 @@ installSparkFallbacks()
 
 createRoot(document.getElementById('root')!).render(
   <ErrorBoundary FallbackComponent={ErrorFallback}>
-    <App />
+    <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+      <App />
+    </ThemeProvider>
    </ErrorBoundary>
 )

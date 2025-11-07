@@ -10,6 +10,8 @@ import { intelligentChunkDocument } from '@/lib/rag'
 import { azureServiceManager } from '@/lib/azure-service-manager'
 import { cacheManager } from '@/lib/cache-manager'
 import { embeddingManager } from '@/lib/embedding-manager'
+import { extractTextFromPdf } from '@/lib/pdf'
+import { isCloudflareKVConfigured } from '@/lib/cloudflare-kv'
 
 interface DocumentUploadProps {
   onDocumentUploaded: (document: Document) => void
@@ -26,6 +28,9 @@ export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
   const [dragActive, setDragActive] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState<UploadProgress[]>([])
+
+  // 20 MB limit by default to avoid browser memory spikes and timeouts
+  const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024
 
   const processFile = async (file: File): Promise<Document> => {
     const documentId = `doc-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
@@ -44,7 +49,16 @@ export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
     updateProgress(10, 'processing')
 
     try {
-      const content = await file.text()
+      // Read content with PDF-aware extraction
+      const content =
+        file.type === 'application/pdf'
+          ? await extractTextFromPdf(file)
+          : await file.text()
+      if (!content || content.trim().length === 0) {
+        throw new Error(file.type === 'application/pdf'
+          ? 'Could not extract text from PDF'
+          : 'Empty file content')
+      }
       updateProgress(25, 'processing')
 
       const { chunks } = await intelligentChunkDocument(content, documentId, file.name)
@@ -65,16 +79,22 @@ export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
 
       if (azureServiceManager.isConfigured()) {
         updateProgress(50, 'embedding')
-        finalDocument = await azureServiceManager.processDocumentWithAzure(document)
+        finalDocument = await azureServiceManager.processDocumentWithAzure(document, (done, total) => {
+          // Map embedding progress (50% → 80%)
+          const frac = total > 0 ? done / total : 0
+          const pct = Math.min(80, 50 + Math.floor(frac * 30))
+          updateProgress(pct, 'embedding')
+        })
         
         if (finalDocument.processingStatus === 'completed') {
-          updateProgress(90, 'indexing')
+          updateProgress(80, 'indexing')
           await new Promise(resolve => setTimeout(resolve, 500))
           updateProgress(100, 'completed')
         } else {
           updateProgress(100, 'error', finalDocument.errorMessage)
         }
       } else {
+        // Local mode; warn on potentially large persistence limits
         updateProgress(100, 'completed')
       }
 
@@ -114,6 +134,22 @@ export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
 
     for (const file of Array.from(files)) {
       if (file.type === 'text/plain' || file.type === 'application/pdf' || file.name.endsWith('.md')) {
+        // File size guard
+        if (file.size > MAX_FILE_SIZE_BYTES) {
+          setUploadProgress(prev =>
+            prev.map(p =>
+              p.fileName === file.name
+                ? {
+                    ...p,
+                    progress: 100,
+                    status: 'error',
+                    error: `File exceeds ${Math.round(MAX_FILE_SIZE_BYTES / (1024 * 1024))} MB limit`
+                  }
+                : p
+            )
+          )
+          continue
+        }
         try {
           const document = await processFile(file)
           processedDocuments.push(document)
@@ -228,6 +264,11 @@ export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
                 </Badge>
               )}
             </p>
+            {!isCloudflareKVConfigured() && (
+              <p className="text-xs text-muted-foreground">
+                Tip: Enable Cloudflare KV in .env to persist large knowledge bases (local storage has ~5MB limit).
+              </p>
+            )}
             
             <input
               type="file"
