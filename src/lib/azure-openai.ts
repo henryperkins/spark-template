@@ -90,7 +90,8 @@ export class AzureOpenAIService {
       timeoutMs: this.config.responsesTimeoutMs,
       // Ensure non-empty generations by providing a sane default
       // when callers do not specify maxOutputTokens.
-      defaultMaxOutputTokens: 1200,
+      // Bump to 2048 to reduce 'incomplete' JSON truncation on reasoning-capable models.
+      defaultMaxOutputTokens: 2048,
       defaultStore: this.config.responsesStore,
       defaultBackground: this.config.responsesBackground
     }
