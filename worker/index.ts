@@ -46,6 +46,10 @@ export interface Env {
   LOGS_API_KEY?: string
   KV_API_KEY?: string
   AZURE_API_KEY?: string
+  OPENAI_API_KEY?: string
+  OPENAI_BASE_URL?: string
+  OPENAI_DEFAULT_MODEL?: string
+  ALLOW_CLIENT_MODEL?: string
   // Optional legacy KV for one-shot migration
   LEGACY_KV?: KVNamespace
   // Secret key to authorize migration
@@ -86,8 +90,13 @@ function logStructured(entry: Omit<LogEntry, 'timestamp'>): void {
 
 // CORS configuration
 const ALLOWED_ORIGINS = [
+  // Production
   'https://paradigmfind.com',
   'https://www.paradigmfind.com',
+  // Local dev (Vite + Wrangler)
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'http://localhost:8787',
 ]
 
 function isOriginAllowed(request: Request): boolean {
@@ -122,6 +131,16 @@ export default {
     const startTime = Date.now()
 
     try {
+      // Edge LLM proxy endpoint
+      if (url.pathname.startsWith('/api/llm')) {
+        return handleLLMRequest(request, env)
+      }
+
+      // Telemetry endpoint
+      if (url.pathname.startsWith('/api/telemetry')) {
+        return handleTelemetryRequest(request, env)
+      }
+
       // API endpoint for KV operations
       if (url.pathname.startsWith('/api/kv')) {
         const response = await handleKVRequest(request, env)
@@ -186,6 +205,151 @@ export default {
       return new Response('Internal Server Error', { status: 500 })
     }
   },
+}
+
+/**
+ * Edge LLM proxy
+ * In absence of a configured upstream, returns a deterministic stub response.
+ */
+async function handleLLMRequest(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = corsHeadersFor(request, { methods: ['POST', 'OPTIONS'] })
+
+  // Preflight
+  if (request.method === 'OPTIONS') {
+    if (!isOriginAllowed(request)) {
+      return new Response('CORS origin not allowed', { status: 403, headers: corsHeaders })
+    }
+    return new Response(null, { headers: corsHeaders })
+  }
+
+  if (request.method !== 'POST') {
+    return new Response('Method not allowed', { status: 405, headers: corsHeaders })
+  }
+
+  // CORS enforcement for browser requests
+  if (request.headers.get('Origin') && !isOriginAllowed(request)) {
+    return new Response('CORS origin not allowed', { status: 403, headers: corsHeaders })
+  }
+
+  try {
+    const body = (await request.json()) as {
+      prompt: string | Array<{ role: string; content: string }>
+      model?: string
+      json?: boolean
+    }
+    let promptText: string
+    if (typeof body.prompt === 'string') {
+      promptText = body.prompt
+    } else if (Array.isArray(body.prompt)) {
+      promptText = body.prompt.map((m) => m.content).join('\n')
+    } else {
+      return new Response('Invalid prompt', { status: 400, headers: corsHeaders })
+    }
+
+    // If OPENAI_API_KEY is configured, forward to OpenAI Chat Completions
+    const openaiKey = env.OPENAI_API_KEY
+
+    if (openaiKey) {
+      const baseUrl = (env.OPENAI_BASE_URL && env.OPENAI_BASE_URL.trim()) || 'https://api.openai.com/v1'
+      const allowClientModel = (env.ALLOW_CLIENT_MODEL || '').toLowerCase() === 'true'
+      const model =
+        (allowClientModel && body.model) ||
+        env.OPENAI_DEFAULT_MODEL ||
+        'gpt-4o-mini'
+
+      const messages =
+        typeof body.prompt === 'string'
+          ? [{ role: 'user', content: body.prompt }]
+          : body.prompt
+
+      const payload: Record<string, unknown> = {
+        model,
+        messages,
+        temperature: 0.2,
+      }
+      if (body.json) {
+        payload.response_format = { type: 'json_object' }
+      }
+
+      const resp = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${openaiKey}`,
+        },
+        body: JSON.stringify(payload),
+      })
+      if (!resp.ok) {
+        const text = await resp.text().catch(() => resp.statusText)
+        return new Response(`Upstream OpenAI error (${resp.status}): ${text}`, {
+          status: 502,
+          headers: corsHeaders,
+        })
+      }
+      const data = (await resp.json()) as {
+        choices?: Array<{ message?: { content?: string } }>
+      }
+      const text = data?.choices?.[0]?.message?.content || ''
+      return Response.json({ text }, { headers: corsHeaders })
+    }
+
+    // Deterministic stub to ensure local/dev behavior without upstream config.
+    if (body.json) {
+      const answer = {
+        summary: promptText.slice(0, 120),
+        note: 'Stubbed worker JSON response (configure upstream to disable stub).',
+        model: body.model ?? 'worker-stub',
+      }
+      return Response.json({ text: JSON.stringify(answer) }, { headers: corsHeaders })
+    }
+    const text =
+      `Stubbed worker response (model: ${body.model ?? 'worker-stub'}): ` +
+      (promptText.length > 300 ? promptText.slice(0, 300) + '…' : promptText)
+    return Response.json({ text }, { headers: corsHeaders })
+  } catch (error) {
+    return new Response((error as Error)?.message || 'Bad Request', { status: 400, headers: corsHeaders })
+  }
+}
+
+/**
+ * Telemetry ingestion endpoint
+ */
+async function handleTelemetryRequest(request: Request, _env: Env): Promise<Response> {
+  const corsHeaders = corsHeadersFor(request, { methods: ['POST', 'OPTIONS'] })
+
+  if (request.method === 'OPTIONS') {
+    if (!isOriginAllowed(request)) {
+      return new Response('CORS origin not allowed', { status: 403, headers: corsHeaders })
+    }
+    return new Response(null, { headers: corsHeaders })
+  }
+
+  if (request.method !== 'POST') {
+    return new Response('Method not allowed', { status: 405, headers: corsHeaders })
+  }
+
+  if (request.headers.get('Origin') && !isOriginAllowed(request)) {
+    return new Response('CORS origin not allowed', { status: 403, headers: corsHeaders })
+  }
+
+  try {
+    const { event, data, timestamp } = (await request.json().catch(() => ({}))) as {
+      event?: string
+      data?: unknown
+      timestamp?: string
+    }
+    if (!event) {
+      return new Response('Missing event', { status: 400, headers: corsHeaders })
+    }
+    logStructured({
+      level: 'info',
+      event: 'client_telemetry',
+      metadata: { event, payload: data, t: timestamp ?? new Date().toISOString() },
+    })
+    return new Response(null, { status: 204, headers: corsHeaders })
+  } catch (error) {
+    return new Response((error as Error)?.message || 'Bad Request', { status: 400, headers: corsHeaders })
+  }
 }
 
 /**

@@ -63,3 +63,4 @@ VITE_AZURE_SEARCH_INDEX = "documents"
 # npx wrangler secret put KV_API_KEY         # used to authorize /api/kv (Bearer token) → must match Authorization: Bearer sent by the client
 # npx wrangler secret put AZURE_API_KEY      # used to authorize /api/azure-search (Bearer token)
 # npx wrangler secret put MIGRATION_KEY      # used to authorize /api/migrate (Bearer token)
+# npx wrangler secret put OPENAI_API_KEY     # enables /api/llm forwarding to OpenAI

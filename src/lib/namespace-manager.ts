@@ -1,4 +1,6 @@
 import { ChunkMetadata } from '@/types'
+import type { CloudflareKVAdapter } from '@/lib/cloudflare-kv'
+import { createCloudflareKV } from '@/lib/cloudflare-kv'
 
 export interface NamespaceConfig {
   id: string
@@ -21,6 +23,12 @@ export interface NamespaceMetrics {
 
 export class NamespaceManager {
   private readonly NAMESPACE_PREFIX = 'namespace-config:'
+  private kv: CloudflareKVAdapter | null
+  private memory = new Map<string, unknown>()
+
+  constructor(kv?: CloudflareKVAdapter | null) {
+    this.kv = kv ?? createCloudflareKV()
+  }
 
   async createNamespace(config: Omit<NamespaceConfig, 'created' | 'documentCount'>): Promise<NamespaceConfig> {
     const namespace: NamespaceConfig = {
@@ -30,24 +38,33 @@ export class NamespaceManager {
     }
 
     const key = this.buildNamespaceKey(namespace.id)
-    await (window.spark!.kv)!.set(key, namespace)
+    if (this.kv) {
+      await this.kv.set(key, namespace)
+    } else {
+      this.memory.set(key, namespace)
+    }
     
     return namespace
   }
 
   async getNamespace(namespaceId: string): Promise<NamespaceConfig | null> {
     const key = this.buildNamespaceKey(namespaceId)
-    const result = await (window.spark!.kv)!.get(key)
-    return (result as NamespaceConfig | undefined) || null
+    if (this.kv) {
+      const result = await this.kv.get(key)
+      return (result as NamespaceConfig | undefined) || null
+    }
+    return ((this.memory.get(key) as NamespaceConfig | undefined) ?? null)
   }
 
   async listNamespaces(): Promise<NamespaceConfig[]> {
-    const allKeys = await (window.spark!.kv)!.keys()
+    const allKeys = this.kv ? await this.kv.keys() : Array.from(this.memory.keys())
     const namespaceKeys = allKeys.filter((key: string) => key.startsWith(this.NAMESPACE_PREFIX))
     
     const namespaces: NamespaceConfig[] = []
     for (const key of namespaceKeys) {
-      const namespace = await (window.spark!.kv)!.get(key) as NamespaceConfig | null
+      const namespace = this.kv
+        ? (await this.kv.get(key) as NamespaceConfig | null)
+        : ((this.memory.get(key) as NamespaceConfig | undefined) ?? null)
       if (namespace) {
         namespaces.push(namespace)
       }
@@ -61,13 +78,21 @@ export class NamespaceManager {
     if (namespace) {
       namespace.documentCount = Math.max(0, namespace.documentCount + delta)
       const key = this.buildNamespaceKey(namespaceId)
-      await (window.spark!.kv)!.set(key, namespace)
+      if (this.kv) {
+        await this.kv.set(key, namespace)
+      } else {
+        this.memory.set(key, namespace)
+      }
     }
   }
 
   async deleteNamespace(namespaceId: string): Promise<void> {
     const key = this.buildNamespaceKey(namespaceId)
-    await (window.spark!.kv)!.delete(key)
+    if (this.kv) {
+      await this.kv.delete(key)
+    } else {
+      this.memory.delete(key)
+    }
   }
 
   buildMetadataFilter(
@@ -143,4 +168,4 @@ export class NamespaceManager {
   }
 }
 
-export const namespaceManager = new NamespaceManager()
+export const namespaceManager = new NamespaceManager(createCloudflareKV())

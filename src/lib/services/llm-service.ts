@@ -122,8 +122,8 @@ export class LLMService {
         return this.withTimeout(p, timeoutMs)
       }
 
-      // Priority 2: Fallback LLM (returns mock responses in development)
-      const p = this.callSparkLLM(prompt, options.model, false)
+      // Priority 2: Fallback to Worker proxy (or stubbed responder)
+      const p = this.callWorkerLLM(prompt, options.model, false)
       return this.withTimeout(p, timeoutMs)
     }
     try {
@@ -135,7 +135,7 @@ export class LLMService {
         promptTokens,
         completionTokens,
         options.model || appConfig.model.defaultModel,
-        azureServiceManager.isConfigured() ? 'azure' : 'spark'
+        azureServiceManager.isConfigured() ? 'azure' : 'worker'
       )
 
       return result
@@ -162,7 +162,7 @@ export class LLMService {
     promptTokens: number,
     completionTokens: number,
     model: string,
-    provider: 'azure' | 'spark'
+    provider: 'azure' | 'worker'
   ): void {
     tokenTracker.recordUsage({
       promptTokens,
@@ -197,7 +197,7 @@ export class LLMService {
         return this.parseJson(response)
       } else {
         const response = await this.withTimeout(
-          this.callSparkLLM(prompt, options.model, true),
+          this.callWorkerLLM(prompt, options.model, true),
           timeoutMs
         )
         return this.parseJson(response)
@@ -213,7 +213,7 @@ export class LLMService {
         promptTokens,
         completionTokens,
         options.model || appConfig.model.defaultModel,
-        azureServiceManager.isConfigured() ? 'azure' : 'spark'
+        azureServiceManager.isConfigured() ? 'azure' : 'worker'
       )
 
       return result
@@ -223,7 +223,7 @@ export class LLMService {
     }
   }
 
-  private async callSparkLLM(
+  private async callWorkerLLM(
     prompt: CompletionPayload,
     model?: string,
     forceJson?: boolean
@@ -233,18 +233,55 @@ export class LLMService {
         ? prompt
         : prompt.map(message => message.content).join('\n')
 
-    const spark = window.spark
-
-    if (!spark?.llm) {
-      throw new LLMError(
-        'EREMOTE',
-        'LLM interface not available. Configure Azure OpenAI in the Azure tab for production use.'
+    try {
+      const resp = await fetch(
+        (import.meta as any)?.env?.VITE_LLM_ENDPOINT || '/api/llm',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt: resolvedPrompt,
+            model: model ?? appConfig.model.defaultModel,
+            json: Boolean(forceJson),
+          }),
+        }
       )
+      if (!resp.ok) {
+        // Graceful local fallback: if the route doesn't exist (e.g., Vite dev without Worker),
+        // return a deterministic stub instead of throwing.
+        if (resp.status === 404) {
+          if (forceJson) {
+            const stub = {
+              summary: resolvedPrompt.slice(0, 120),
+              note: 'Local dev stub (Worker /api/llm not running)',
+              model: model ?? appConfig.model.defaultModel,
+            }
+            return JSON.stringify(stub)
+          }
+          const head = resolvedPrompt.length > 300 ? resolvedPrompt.slice(0, 300) + '…' : resolvedPrompt
+          return `Stubbed local response (model: ${model ?? appConfig.model.defaultModel}): ${head}`
+        }
+        const text = await resp.text().catch(() => String(resp.status))
+        throw new LLMError('EREMOTE', `Worker LLM proxy error (${resp.status}): ${text}`)
+      }
+      const data = (await resp.json()) as { text?: string }
+      if (!data?.text) {
+        throw new LLMError('EPARSE', 'Worker LLM proxy returned empty response')
+      }
+      return data.text
+    } catch (error) {
+      // Network or other failures: in dev, provide a deterministic stub
+      if (forceJson) {
+        const stub = {
+          summary: resolvedPrompt.slice(0, 120),
+          note: 'Local dev stub (Worker /api/llm unreachable)',
+          model: model ?? appConfig.model.defaultModel,
+        }
+        return JSON.stringify(stub)
+      }
+      const head = resolvedPrompt.length > 300 ? resolvedPrompt.slice(0, 300) + '…' : resolvedPrompt
+      return `Stubbed local response (model: ${model ?? appConfig.model.defaultModel}): ${head}`
     }
-
-    // This will either call a real LLM backend or return a mock response
-    // depending on the environment configuration
-    return spark.llm(resolvedPrompt, model ?? appConfig.model.defaultModel, forceJson ?? false)
   }
 
   private parseJson(response: string): unknown {

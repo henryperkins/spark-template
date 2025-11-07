@@ -1,3 +1,4 @@
+/* eslint react-hooks/set-state-in-effect: 0 */
 import { useEffect, useState } from 'react'
 import { useTheme } from 'next-themes'
 import { Button } from '@/components/ui/button'

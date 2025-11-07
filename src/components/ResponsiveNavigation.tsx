@@ -39,6 +39,7 @@ export function ResponsiveNavigation({
             key={tab.value}
             value={tab.value}
             className="flex items-center gap-1.5 px-2.5 py-2 text-xs font-medium transition-all duration-200 sm:gap-2 sm:px-3 sm:text-sm"
+            aria-label={tab.label}
           >
             {tab.icon}
             <span className="hidden lg:inline">{tab.label}</span>

@@ -3,6 +3,7 @@
 /* Load shared design tokens before Tailwind so utilities can resolve the variables. */
 @import "./styles/tokens.css";
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
 @import "tw-animate-css";
 
 @custom-variant dark (&:is(.dark *));

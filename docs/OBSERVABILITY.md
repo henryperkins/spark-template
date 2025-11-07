@@ -7,6 +7,10 @@
 - Track and control LLM token consumption and costs
 - Systematically monitor and classify system errors
 - Provide real-time alerting for operational issues
+ 
+Runtime notes:
+- Client telemetry posts to `/api/telemetry` (configurable via `VITE_ANALYTICS_ENDPOINT`).
+- Worker emits structured logs and can stream to R2 (`LOGS` binding).
 
 ---
 
@@ -50,9 +54,9 @@ These features are documented below but require implementation:
 - Daily budget tracking with configurable limits and thresholds
 - Token estimation for prompts and completions
 - Usage metrics grouped by model
-- Persistent daily usage tracking via Spark KV (with in-memory fallback)
+- Persistent daily usage tracking via Cloudflare KV (with in-memory fallback)
 - In-memory metrics retention (last 1000 requests)
-- Safe storage abstraction compatible with Spark environment
+- Safe storage abstraction compatible with Cloudflare Worker environment
 
 **API Interface:**
 ```typescript
@@ -63,7 +67,7 @@ interface LLMUsageMetrics {
   estimatedCost: number
   modelUsed: string
   timestamp: string
-  provider: 'azure' | 'spark'
+  provider: 'azure' | 'worker'
 }
 
 // Record usage

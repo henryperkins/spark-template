@@ -60,19 +60,16 @@ export class CacheManager {
   private invalidationHistory: CacheInvalidationEvent[] = []
   private hits = 0
   private misses = 0
-  private kv: CloudflareKVAdapter | null = null
+  private kv: CloudflareKVAdapter
 
-  private getKV(): CloudflareKVAdapter {
-    if (!this.kv) {
-      const cf = createCloudflareKV()
-      this.kv = cf || localStorageAdapter
-      if (cf) {
-        console.info('[cache-manager] Using Cloudflare KV')
-      } else {
-        console.info('[cache-manager] Using localStorage fallback')
-      }
+  constructor(kv?: CloudflareKVAdapter | null) {
+    const cf = kv ?? createCloudflareKV()
+    this.kv = cf || localStorageAdapter
+    if (cf) {
+      console.info('[cache-manager] Using Cloudflare KV')
+    } else {
+      console.info('[cache-manager] Using localStorage fallback')
     }
-    return this.kv
   }
 
   private getTTLByContentType(keyPrefix: string): number {
@@ -99,12 +96,12 @@ export class CacheManager {
       lastAccessed: new Date().toISOString(),
     }
     const cacheKey = this.buildCacheKey(key)
-    await this.getKV().set(cacheKey, entry)
+    await this.kv.set(cacheKey, entry)
   }
 
   async get<T>(key: string): Promise<T | null> {
     const cacheKey = this.buildCacheKey(key)
-    const rawEntry = await this.getKV().get(cacheKey)
+    const rawEntry = await this.kv.get(cacheKey)
     const entry = rawEntry as CacheEntry<T> | undefined
 
     if (!entry) {
@@ -126,7 +123,7 @@ export class CacheManager {
 
     entry.accessCount++
     entry.lastAccessed = new Date().toISOString()
-    await this.getKV().set(cacheKey, entry)
+    await this.kv.set(cacheKey, entry)
 
     this.hits++
     return entry.data
@@ -137,10 +134,9 @@ export class CacheManager {
     type: CacheInvalidationEvent['type'],
     reason: string
   ): Promise<void> {
-    const kv = this.getKV()
     for (const key of keys) {
       const cacheKey = this.buildCacheKey(key)
-      await kv.delete(cacheKey)
+      await this.kv.delete(cacheKey)
     }
 
     const event: CacheInvalidationEvent = {
@@ -156,7 +152,7 @@ export class CacheManager {
   }
 
   async invalidateByPrefix(prefix: string, reason?: string): Promise<number> {
-    const allKeys = await this.getKV().keys()
+    const allKeys = await this.kv.keys()
     const cachePrefix = this.buildCacheKey(prefix)
     const matchingKeys = allKeys.filter(key => key.startsWith(cachePrefix))
     const originalKeys = matchingKeys.map(key => this.extractOriginalKey(key))
@@ -192,7 +188,7 @@ export class CacheManager {
       semanticHash
     }
     const cacheKey = this.buildCacheKey(key)
-    await this.getKV().set(cacheKey, entry)
+    await this.kv.set(cacheKey, entry)
   }
 
   async checkSemanticDrift(
@@ -201,7 +197,7 @@ export class CacheManager {
     threshold: number = 0.9
   ): Promise<boolean> {
     const cacheKey = this.buildCacheKey(key)
-    const rawEntry = await this.getKV().get(cacheKey)
+    const rawEntry = await this.kv.get(cacheKey)
     const entry = rawEntry as CacheEntry | undefined
     if (!entry || !entry.semanticHash) {
       return false
@@ -226,7 +222,7 @@ export class CacheManager {
 
   async adaptiveTTL(key: string): Promise<number> {
     const cacheKey = this.buildCacheKey(key)
-    const rawEntry = await this.getKV().get(cacheKey)
+    const rawEntry = await this.kv.get(cacheKey)
     const entry = rawEntry as CacheEntry | undefined
     if (!entry) {
       return this.DEFAULT_TTL_MS
@@ -243,15 +239,15 @@ export class CacheManager {
   }
 
   async cleanStaleEntries(): Promise<number> {
-    const allKeys = await this.getKV().keys()
+    const allKeys = await this.kv.keys()
     const cacheKeys = allKeys.filter(key => key.startsWith('cache:'))
     let cleaned = 0
     for (const cacheKey of cacheKeys) {
-      const rawEntry = await this.getKV().get(cacheKey)
+      const rawEntry = await this.kv.get(cacheKey)
       const entry = rawEntry as CacheEntry | undefined
       if (!entry) continue
       if (this.isStale(entry) || entry.version !== this.CACHE_VERSION) {
-        await this.getKV().delete(cacheKey)
+        await this.kv.delete(cacheKey)
         cleaned++
       }
     }
@@ -268,13 +264,13 @@ export class CacheManager {
   }
 
   async getMetrics(): Promise<CacheMetrics> {
-    const allKeys = await this.getKV().keys()
+    const allKeys = await this.kv.keys()
     const cacheKeys = allKeys.filter(key => key.startsWith('cache:'))
     const byTTL: Record<string, number> = {}
     let totalAge = 0
     let staleEntries = 0
     for (const cacheKey of cacheKeys) {
-      const rawEntry = await this.getKV().get(cacheKey)
+      const rawEntry = await this.kv.get(cacheKey)
       const entry = rawEntry as CacheEntry | undefined
       if (!entry) continue
       const ttlCategory = this.categorizeTTL(entry.ttl)
@@ -326,4 +322,4 @@ export class CacheManager {
   }
 }
 
-export const cacheManager = new CacheManager()
+export const cacheManager = new CacheManager(createCloudflareKV())

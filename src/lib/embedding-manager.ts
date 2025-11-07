@@ -1,4 +1,6 @@
 import { Document } from '@/types'
+import type { CloudflareKVAdapter } from '@/lib/cloudflare-kv'
+import { createCloudflareKV } from '@/lib/cloudflare-kv'
 
 export interface EmbeddingMetadata {
   version: string
@@ -33,6 +35,11 @@ export interface RefreshResult {
 
 export class EmbeddingManager {
   private readonly EMBEDDING_VERSION = 'v2025.01'
+  private kv: CloudflareKVAdapter | null
+
+  constructor(kv?: CloudflareKVAdapter | null) {
+    this.kv = kv ?? createCloudflareKV()
+  }
   
   async calculateChecksum(content: string): Promise<string> {
     const encoder = new TextEncoder()
@@ -44,12 +51,17 @@ export class EmbeddingManager {
 
   async getMetadata(documentId: string): Promise<EmbeddingMetadata | null> {
     const key = `embedding-metadata:${documentId}`
-    return await (window.spark!.kv)!.get(key) as EmbeddingMetadata | null || null
+    if (this.kv) {
+      return (await this.kv.get(key) as EmbeddingMetadata | null) || null
+    }
+    return null
   }
 
   async setMetadata(metadata: EmbeddingMetadata): Promise<void> {
     const key = `embedding-metadata:${metadata.documentId}`
-    await (window.spark!.kv)!.set(key, metadata)
+    if (this.kv) {
+      await this.kv.set(key, metadata)
+    }
   }
 
   async needsRefresh(document: Document): Promise<{ needed: boolean; reason: string }> {
@@ -218,12 +230,12 @@ export class EmbeddingManager {
   }
 
   async listAllVersions(): Promise<string[]> {
-    const allKeys = await (window.spark!.kv)!.keys()
+    const allKeys = this.kv ? await this.kv.keys() : []
     const metadataKeys = allKeys.filter(key => key.startsWith('embedding-metadata:'))
     const versions = new Set<string>()
 
     for (const key of metadataKeys) {
-      const metadata = await (window.spark!.kv)!.get(key) as EmbeddingMetadata | null
+      const metadata = this.kv ? (await this.kv.get(key) as EmbeddingMetadata | null) : null
       if (metadata?.version) {
         versions.add(metadata.version)
       }
@@ -239,7 +251,7 @@ export class EmbeddingManager {
     needingRefresh: number
     averageDaysSinceRefresh: number
   }> {
-    const allKeys = await (window.spark!.kv)!.keys()
+    const allKeys = this.kv ? await this.kv.keys() : []
     const metadataKeys = allKeys.filter(key => key.startsWith('embedding-metadata:'))
     
     const byVersion: Record<string, number> = {}
@@ -248,7 +260,7 @@ export class EmbeddingManager {
     let needingRefresh = 0
 
     for (const key of metadataKeys) {
-      const metadata = await (window.spark!.kv)!.get(key) as EmbeddingMetadata | null
+      const metadata = this.kv ? (await this.kv.get(key) as EmbeddingMetadata | null) : null
       if (!metadata) continue
 
       byVersion[metadata.version] = (byVersion[metadata.version] || 0) + 1
@@ -272,4 +284,4 @@ export class EmbeddingManager {
   }
 }
 
-export const embeddingManager = new EmbeddingManager()
+export const embeddingManager = new EmbeddingManager(createCloudflareKV())

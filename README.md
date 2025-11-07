@@ -10,6 +10,7 @@ An enterprise-grade intelligent knowledge assistant targeting Cloudflare Workers
 - **☁️ Azure Integration**: Optional Azure OpenAI embeddings and AI Search with semantic ranking
 - **⚡ Production-Ready**: Caching, compression, namespacing, and scalability features
 - **📊 Quality Metrics**: Faithfulness and relevance scoring with transparent agent workflows
+- **🌐 Cloudflare-first Runtime**: Edge APIs for KV (`/api/kv`), Telemetry (`/api/telemetry`), and LLM proxy (`/api/llm`)
 
 ## Quick Start
 
@@ -26,6 +27,26 @@ npm run dev        # Start development server
 npm run build      # Build for production
 npm run lint       # Check code quality
 ```
+
+### Environment
+
+Client (.env or Vite env):
+- `VITE_CLOUDFLARE_ACCOUNT_ID` — Cloudflare account ID
+- `VITE_CLOUDFLARE_KV_NAMESPACE_ID` — Workers KV namespace ID (RAG_KV)
+- `VITE_CLOUDFLARE_API_TOKEN` — API token with Workers KV:Edit
+- `VITE_LLM_ENDPOINT` (optional) — defaults to `/api/llm`
+- `VITE_ANALYTICS_ENDPOINT` (optional) — defaults to `/api/telemetry`
+- `VITE_ENABLE_ANALYTICS` (optional: `true`/`false`)
+
+Worker (wrangler secrets / bindings):
+- `RAG_KV` — KV binding for storage
+- `KV_API_KEY` — Bearer token for `/api/kv` (browser sends Authorization when present)
+- `LOGS` — R2 bucket (optional) for `/api/logs`
+- `MIGRATION_KEY` — Bearer token for `/api/migrate` (optional)
+- `OPENAI_API_KEY` — enables `/api/llm` to forward to OpenAI Chat Completions
+- `OPENAI_BASE_URL` (optional) — override base URL (default `https://api.openai.com/v1`)
+- `OPENAI_DEFAULT_MODEL` (optional) — default model when the client doesn’t specify one
+- `ALLOW_CLIENT_MODEL` (optional: `true`/`false`) — allow client-provided model override
 
 ### Basic Usage
 
@@ -103,10 +124,10 @@ When enabled (default), queries flow through a sophisticated agent pipeline:
 
 ## Implementation Status
 - Vite icon proxy/plugins: Not used in this repo. Icons are imported directly from '@phosphor-icons/react'; no custom Vite plugins are required.
-- Storage hook naming: useKV (src/hooks/use-kv.ts) is primary. useSparkKV (src/hooks/use-spark-kv.ts) re-exports useKV for backward compatibility.
+- Storage hook naming: `useKV` (src/hooks/use-kv.ts) is primary.
 - Observability: Token tracking implemented with estimation-based tokenizer; see docs/OBSERVABILITY.md limitations.
 - Azure features: Azure OpenAI and Azure AI Search are optional. Some advanced features (semantic ranking config, compression, custom scoring) depend on azure-service-manager and may be partially implemented.
-- Forward-looking docs: Context manager and updated orchestrator mentioned in docs are roadmap items and not yet implemented.
+- Runtime: Cloudflare Worker exposes `/api/kv`, `/api/telemetry`, and a stubbed `/api/llm` proxy used when Azure is disabled.
 
 ## License
 

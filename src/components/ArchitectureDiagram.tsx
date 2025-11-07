@@ -86,7 +86,7 @@ export function ArchitectureDiagram() {
       ],
       icon: <Users size={20} />,
       accent: 'presentation',
-      interactions: ['Spark Runtime SDK', 'Agent Orchestration', 'Browser KV Store']
+      interactions: ['Cloudflare Worker runtime', 'Agent Orchestration', 'Browser KV Store']
     },
     {
       id: 'runtime',
@@ -155,9 +155,9 @@ export function ArchitectureDiagram() {
     {
       id: 'llm-services',
       name: '6. LLM Services Layer',
-      description: 'Language model integration via Spark Runtime and Azure',
+      description: 'Language model integration via Edge LLM proxy and Azure',
       components: [
-        'Spark Runtime LLM API (GPT-4o/mini)',
+        'Edge LLM proxy (/api/llm)',
         'Azure OpenAI Integration (optional)',
         'Prompt Engineering Templates',
         'JSON Mode Parsing',
@@ -166,7 +166,7 @@ export function ArchitectureDiagram() {
       ],
       icon: <Cube size={20} />,
       accent: 'llm-services',
-      interactions: ['Spark Runtime', 'Agent Layer', 'Azure OpenAI']
+      interactions: ['Worker runtime', 'Agent Layer', 'Azure OpenAI']
     },
     {
       id: 'retrieval',
@@ -237,7 +237,7 @@ export function ArchitectureDiagram() {
     {
       id: 'document-store',
       name: '11. Document Store Layer',
-      description: 'Document persistence using Spark KV store',
+      description: 'Document persistence using Cloudflare KV',
       components: [
         'useStorage Hook (rag-documents key)',
         'Document Metadata Storage',
@@ -248,7 +248,7 @@ export function ArchitectureDiagram() {
       ],
       icon: <HardDrives size={20} />,
       accent: 'document-store',
-      interactions: ['Spark Runtime KV', 'Document Processing', 'Vector Store']
+      interactions: ['Worker KV API', 'Document Processing', 'Vector Store']
     },
     {
       id: 'cache',
@@ -265,7 +265,7 @@ export function ArchitectureDiagram() {
       ],
       icon: <ArrowsDownUp size={20} />,
       accent: 'cache',
-      interactions: ['Spark KV Store', 'All Service Layers', 'Scaling Dashboard']
+      interactions: ['Cloudflare KV store', 'All Service Layers', 'Scaling Dashboard']
     },
     {
       id: 'observability',
@@ -358,7 +358,7 @@ export function ArchitectureDiagram() {
       {
         name: 'QueryClassifierAgent',
         purpose: 'Analyzes query complexity to determine processing strategy (simple/moderate/complex)',
-        technologies: ['spark.llm()', 'JSON mode', 'Complexity scoring'],
+        technologies: ['Edge LLM proxy (/api/llm)', 'JSON mode', 'Complexity scoring'],
         patterns: ['Classification Pipeline', 'Strategy Pattern', 'Confidence Scoring']
       },
       {
@@ -382,7 +382,7 @@ export function ArchitectureDiagram() {
       {
         name: 'CriticAgent',
         purpose: 'Validates response quality and identifies hallucinations with faithfulness scoring',
-        technologies: ['spark.llm()', 'Faithfulness Analysis', 'Source Verification'],
+        technologies: ['Edge LLM proxy (/api/llm)', 'Faithfulness Analysis', 'Source Verification'],
         patterns: ['Validator Pattern', 'Quality Gates', 'Dual-Agent Verification']
       },
       {
@@ -394,7 +394,7 @@ export function ArchitectureDiagram() {
       {
         name: 'QueryExpansionAgent',
         purpose: 'Generates 4 types of related questions (clarification/related/deeper/broader)',
-        technologies: ['spark.llm()', 'Question Generation', 'Cache Integration'],
+        technologies: ['Edge LLM proxy (/api/llm)', 'Question Generation', 'Cache Integration'],
         patterns: ['Content Discovery', 'Recommendation Engine', 'Cache-Aside']
       }
     ],
@@ -444,7 +444,7 @@ export function ArchitectureDiagram() {
       {
         name: 'CacheManager',
         purpose: 'Centralized multi-level caching with intelligent invalidation strategies',
-        technologies: ['Spark KV', 'TTL Management', 'Prefix Matching', 'Cosine Similarity'],
+        technologies: ['Cloudflare KV', 'TTL Management', 'Prefix Matching', 'Cosine Similarity'],
         patterns: ['Cache-Aside', 'Write-Through', 'Invalidation Strategies']
       },
       {
@@ -471,8 +471,8 @@ export function ArchitectureDiagram() {
     'security': [
       {
         name: 'Client-side KV Storage',
-        purpose: 'Browser-based storage for Azure API keys using Spark KV with localStorage fallback',
-        technologies: ['Spark KV API', 'localStorage', 'Cloudflare KV REST API'],
+        purpose: 'Browser-based storage for Azure API keys using Cloudflare KV (via Worker) with localStorage fallback',
+        technologies: ['Worker KV API', 'localStorage', 'Cloudflare KV REST API'],
         patterns: ['Secure Storage', 'Runtime Detection', 'Fallback Strategy']
       },
       {
@@ -491,8 +491,8 @@ export function ArchitectureDiagram() {
     'llm-services': [
       {
         name: 'LLMService',
-        purpose: 'Unified LLM interface with Azure OpenAI primary and Spark fallback',
-        technologies: ['Azure OpenAI', 'Spark Runtime LLM', 'Token Bucket Rate Limiting'],
+        purpose: 'Unified LLM interface with Azure OpenAI primary and Worker proxy fallback',
+        technologies: ['Azure OpenAI', 'Edge LLM proxy', 'Token Bucket Rate Limiting'],
         patterns: ['Provider Abstraction', 'Retry with Backoff', 'Timeout Management']
       },
       {
@@ -532,7 +532,7 @@ export function ArchitectureDiagram() {
       {
         name: 'useStorage Hook',
         purpose: 'React hook for persistent document storage with automatic sync to Cloudflare KV or localStorage',
-        technologies: ['React Hooks', 'Spark KV', 'Cloudflare KV', 'localStorage'],
+        technologies: ['React Hooks', 'Cloudflare KV', 'localStorage'],
         patterns: ['Custom Hook', 'Auto-sync', 'Optimistic Updates']
       },
       {
@@ -557,8 +557,8 @@ export function ArchitectureDiagram() {
       },
       {
         name: 'Telemetry Service',
-        purpose: 'Emits agent step events and alerts to Spark analytics with fallback console logging',
-        technologies: ['Spark Telemetry SDK', 'Structured Events'],
+        purpose: 'Emits agent step events and alerts to Worker telemetry with fallback console logging',
+        technologies: ['Worker Telemetry (/api/telemetry)', 'Structured Events'],
         patterns: ['Event Emission', 'Telemetry Sink Abstraction', 'Dev Fallback']
       },
       {
@@ -570,7 +570,7 @@ export function ArchitectureDiagram() {
       {
         name: 'Token & Cost Tracker',
         purpose: 'Tracks LLM token usage, estimates costs per model, enforces daily budgets with alerts',
-        technologies: ['Model Pricing Tables', 'Spark KV Budget Persistence'],
+        technologies: ['Model Pricing Tables', 'KV Budget Persistence'],
         patterns: ['Usage Metering', 'Budget Enforcement', 'Cost Estimation']
       }
     ],
@@ -594,8 +594,8 @@ export function ArchitectureDiagram() {
         patterns: ['Runtime Abstraction', 'Auto-configuration', 'Fallback Chains']
       },
       {
-        name: 'Spark Fallback System',
-        purpose: 'Fetch interceptor providing localStorage and mock LLM fallbacks when Spark/Azure unavailable',
+        name: 'Worker LLM Fallback System',
+        purpose: 'Edge proxy or deterministic stub used when Azure is unavailable',
         technologies: ['Fetch Interception', 'In-Memory KV', 'Mock LLM Responses'],
         patterns: ['Transparent Fallback', 'Mode Switching', 'Auto-recovery']
       }
@@ -890,7 +890,7 @@ export function ArchitectureDiagram() {
                 Browser-First Architecture
               </h4>
               <p className="text-xs text-muted-foreground">
-                Runs entirely in the browser using Spark Runtime for LLM access and KV persistence, with optional Azure integration for production scale
+                Runs with a Cloudflare Worker runtime for LLM access and KV persistence, with optional Azure integration for production scale
               </p>
             </div>
 

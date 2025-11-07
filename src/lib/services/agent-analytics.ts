@@ -1,6 +1,9 @@
-import { AgentStepEvent, AgentAlertCode, telemetry } from './telemetry'
+import type { AgentStepEvent, AgentAlertCode } from './telemetry'
 import { analyticsBackend } from './analytics-backend'
 import { toast } from 'sonner'
+import type { CloudflareKVAdapter } from '@/lib/cloudflare-kv'
+import { createCloudflareKV } from '@/lib/cloudflare-kv'
+import { track } from '@/lib/runtime-telemetry'
 
 interface AlertThresholds {
   longRunningMs: number
@@ -26,6 +29,40 @@ class AgentAnalytics {
   }
 
   private failureCounts = new Map<FailureKey, number>()
+  private kv: CloudflareKVAdapter | null
+
+  constructor(kv?: CloudflareKVAdapter | null) {
+    // LocalStorage fallback adapter to match useStorage behavior
+    const localStorageAdapter: CloudflareKVAdapter = {
+      async keys(): Promise<string[]> {
+        if (typeof window === 'undefined' || !window.localStorage) return []
+        const keys: string[] = []
+        for (let i = 0; i < window.localStorage.length; i++) {
+          const k = window.localStorage.key(i)
+          if (k) keys.push(k)
+        }
+        return keys
+      },
+      async get(key: string): Promise<unknown> {
+        if (typeof window === 'undefined' || !window.localStorage) return undefined
+        const raw = window.localStorage.getItem(key)
+        if (!raw) return undefined
+        try { return JSON.parse(raw) } catch { return raw }
+      },
+      async set(key: string, value: unknown): Promise<void> {
+        if (typeof window === 'undefined' || !window.localStorage) return
+        const payload = typeof value === 'string' ? value : JSON.stringify(value)
+        window.localStorage.setItem(key, payload)
+      },
+      async delete(key: string): Promise<void> {
+        if (typeof window === 'undefined' || !window.localStorage) return
+        window.localStorage.removeItem(key)
+      }
+    }
+
+    // Prefer provided adapter, otherwise Cloudflare KV, otherwise localStorage
+    this.kv = (kv ?? createCloudflareKV()) || localStorageAdapter
+  }
 
   recordStepEvent(event: AgentStepEvent): void {
     void analyticsBackend.send('agent_step_status', event)
@@ -96,9 +133,7 @@ class AgentAnalytics {
     }
 
     void analyticsBackend.send('agent_step_alert', alertPayload)
-    telemetry.trackAgentAlert({
-      ...alertPayload
-    })
+    void track('agent_step_alert', alertPayload)
 
     // Show toast notification
     this.showAlertToast(alertPayload)
@@ -123,25 +158,29 @@ class AgentAnalytics {
     query: string
     stepIndex: number
   }): Promise<void> {
-    if (typeof window === 'undefined') return
+    const STORAGE_KEY = 'system-alerts'
+    const nowMinus2Min = Date.now() - 120000
 
-    const sparkKV = (window as any)?.spark?.kv
-    if (!sparkKV) return
+    const writeToLocal = (alerts: SystemAlert[]) => {
+      try {
+        if (typeof window !== 'undefined' && window.localStorage) {
+          window.localStorage.setItem(STORAGE_KEY, JSON.stringify(alerts))
+        }
+      } catch {}
+    }
 
     try {
-      const existing = ((await sparkKV.get('system-alerts')) as SystemAlert[] | undefined) ?? []
+      // Load existing alerts from configured storage (KV or local fallback)
+      const existing = ((await this.kv?.get(STORAGE_KEY)) as SystemAlert[] | undefined) ?? []
       const message = this.formatAlertMessage(alert)
-      const cutoff = Date.now() - 120000
 
       const duplicate = existing.find((item) => {
         if (item.code !== alert.code) return false
         if (item.agent !== alert.agent) return false
         if (item.message !== message) return false
-
-        const timestamp = new Date(item.timestamp).getTime()
-        return Number.isFinite(timestamp) && timestamp >= cutoff
+        const ts = new Date(item.timestamp).getTime()
+        return Number.isFinite(ts) && ts >= nowMinus2Min
       })
-
       if (duplicate) return
 
       const systemAlert: SystemAlert = {
@@ -157,13 +196,43 @@ class AgentAnalytics {
         acknowledged: false
       }
 
-      existing.push(systemAlert)
+      const updated = [...existing, systemAlert].slice(-100)
 
-      const trimmed = existing.slice(-100)
-      await sparkKV.set('system-alerts', trimmed)
+      // Try primary adapter write
+      await this.kv?.set(STORAGE_KEY, updated)
     } catch (error) {
+      // On any KV error, attempt to persist to localStorage so AlertPanel still works
+      try {
+        const raw = typeof window !== 'undefined' ? window.localStorage?.getItem(STORAGE_KEY) : null
+        const parsed: SystemAlert[] = raw ? (() => { try { return JSON.parse(raw) } catch { return [] } })() : []
+        const message = this.formatAlertMessage(alert)
+        const duplicate = parsed.find((item) => {
+          if (item.code !== alert.code) return false
+          if (item.agent !== alert.agent) return false
+          if (item.message !== message) return false
+          const ts = new Date(item.timestamp).getTime()
+          return Number.isFinite(ts) && ts >= nowMinus2Min
+        })
+        if (!duplicate) {
+          const systemAlert: SystemAlert = {
+            id:
+              typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+                ? crypto.randomUUID()
+                : `alert-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            severity: alert.severity,
+            code: alert.code,
+            agent: alert.agent,
+            message,
+            timestamp: alert.timestamp,
+            acknowledged: false
+          }
+          parsed.push(systemAlert)
+          writeToLocal(parsed.slice(-100))
+        }
+      } catch {}
+
       if (import.meta.env?.MODE !== 'production') {
-        console.warn('[agent-analytics] KV persist error', error)
+        console.warn('[agent-analytics] KV persist error; used localStorage fallback', error)
       }
     }
   }

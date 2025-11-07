@@ -38,24 +38,8 @@ const ENABLE_ANALYTICS = (() => {
   }
 })()
 
-const computeEndpoint = (): string | null => {
-  if (typeof window === 'undefined') {
-    return null
-  }
-
-  const sparkContainer = window as unknown as { spark?: AnalyticsConfig }
-  const sparkEndpoint = sparkContainer.spark?.endpoint || sparkContainer.spark?.analyticsEndpoint
-
-  if (sparkEndpoint) {
-    return sparkEndpoint
-  }
-
-  if (import.meta?.env?.VITE_ANALYTICS_ENDPOINT) {
-    return import.meta.env.VITE_ANALYTICS_ENDPOINT as string
-  }
-
-  return null
-}
+const computeEndpoint = (): string | null =>
+  (import.meta?.env?.VITE_ANALYTICS_ENDPOINT as string | undefined) || null
 
 class AnalyticsBackend {
   private endpoint: string | null

@@ -29,15 +29,7 @@ export interface AgentAlertEvent {
   timestamp: string
 }
 
-type TelemetrySink =
-  | { track: (eventName: string, payload: unknown) => void }
-  | { capture: (eventName: string, payload: unknown) => void }
-
-interface SparkLike {
-  telemetry?: TelemetrySink
-  analytics?: TelemetrySink
-  analyticsClient?: TelemetrySink
-}
+import { track as sendTelemetry } from '@/lib/runtime-telemetry'
 
 type ProcessLike = {
   env?: Record<string, string | undefined>
@@ -58,30 +50,8 @@ const isDevEnvironment = (): boolean => {
 
 class TelemetryService {
   private track(eventName: string, payload: unknown): void {
-    if (typeof window === 'undefined') {
-      return
-    }
-
-    const sparkContainer = window as unknown as { spark?: SparkLike }
-    const spark = sparkContainer.spark
-    const telemetry: TelemetrySink | undefined =
-      spark?.telemetry || spark?.analytics || spark?.analyticsClient
-
     try {
-      if (telemetry) {
-        if ('track' in telemetry && typeof telemetry.track === 'function') {
-          telemetry.track(eventName, payload)
-          return
-        }
-        if ('capture' in telemetry && typeof telemetry.capture === 'function') {
-          telemetry.capture(eventName, payload)
-          return
-        }
-      }
-
-      if (isDevEnvironment()) {
-        console.debug(`[telemetry:${eventName}]`, payload)
-      }
+      void sendTelemetry(eventName, payload)
     } catch (error) {
       if (isDevEnvironment()) {
         console.warn('Telemetry dispatch failed:', error)

@@ -43,11 +43,8 @@ class QueryHistoryService {
   private cache: QueryHistoryEntry[] | null = null
   private kv: CloudflareKVAdapter | null = null
 
-  private getKv(): CloudflareKVAdapter | null {
-    if (!this.kv) {
-      this.kv = createCloudflareKV()
-    }
-    return this.kv
+  constructor(kv?: CloudflareKVAdapter | null) {
+    this.kv = kv ?? createCloudflareKV()
   }
 
   private normalize(value: unknown): QueryHistoryEntry[] {
@@ -75,9 +72,8 @@ class QueryHistoryService {
 
   private async load(): Promise<QueryHistoryEntry[]> {
     try {
-      const kv = this.getKv()
-      if (kv) {
-        const value = await kv.get(KV_KEY)
+      if (this.kv) {
+        const value = await this.kv.get(KV_KEY)
         const normalized = this.normalize(value)
         if (normalized.length > 0) return normalized
       }
@@ -103,9 +99,8 @@ class QueryHistoryService {
 
     // Try KV first
     try {
-      const kv = this.getKv()
-      if (kv) {
-        await kv.set(KV_KEY, serialized)
+      if (this.kv) {
+        await this.kv.set(KV_KEY, serialized)
         return
       }
     } catch (error) {
@@ -203,4 +198,4 @@ class QueryHistoryService {
   }
 }
 
-export const queryHistoryService = new QueryHistoryService()
+export const queryHistoryService = new QueryHistoryService(createCloudflareKV())

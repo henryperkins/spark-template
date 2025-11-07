@@ -2,8 +2,7 @@ import { Document, DocumentChunk, Source } from '@/types'
 import { cacheManager } from './cache-manager'
 import { azureServiceManager } from './azure-service-manager'
 import { DocumentAnalyzerAgent, ChunkingStrategy } from './agents/document-analyzer'
-
- // window.spark types are declared in global ambient declarations
+import { runtime } from './runtime-context'
 
 
 export interface FindRelevantChunksOptions {
@@ -445,29 +444,27 @@ export async function generateResponse(query: string, sources: Source[]): Promis
     try {
       return await azureServiceManager.generateResponseWithAzure(query, sources)
     } catch (error) {
-      console.warn('Azure completion failed, falling back to Spark LLM:', error)
+      console.warn('Azure completion failed, falling back to worker LLM:', error)
     }
   }
 
-  // Fallback to Spark LLM
+  // Fallback to worker LLM via runtime.llm
   const context = sources
     .map((source, index) => `[${index + 1}] ${source.content}`)
     .join('\n\n')
 
-  const prompt = window.spark!.llmPrompt`You are a helpful research assistant. Answer the user's question based on the provided context from documents. Be accurate and cite your sources using the numbers in brackets.
-
-Context from documents:
-${context}
-
-User question: ${query}
-
-Please provide a comprehensive answer based on the context above. If the context doesn't fully answer the question, acknowledge what information is missing. Always cite your sources using the numbers in brackets (e.g., [1], [2]).`
-
   try {
-    const response = await window.spark!.llm(prompt)
-    return response
-  } catch {
-    return "I apologize, but I'm having trouble processing your request right now. Please try again in a moment."
+    if (!runtime.llm) {
+      return 'LLM not configured. Configure Azure or the Worker LLM proxy ("/api/llm").'
+    }
+    const prompt = [
+      { role: 'system', content: `You are a helpful research assistant. Answer the user's question based on the provided context from documents. Be accurate and cite your sources using the numbers in brackets.` },
+      { role: 'user', content: `Context from documents:\n${context}\n\nUser question: ${query}\n\nPlease provide a comprehensive answer based on the context above. If the context doesn't fully answer the question, acknowledge what information is missing. Always cite your sources using the numbers in brackets (e.g., [1], [2]).` }
+    ]
+    return await runtime.llm.complete(prompt)
+  } catch (err) {
+    console.warn('Worker LLM fallback failed:', err)
+    return 'Unable to complete the request. Neither Azure nor the Worker LLM proxy are available.'
   }
 }
 

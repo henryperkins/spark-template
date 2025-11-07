@@ -79,7 +79,7 @@ export interface LLMUsageMetrics {
   estimatedCost: number
   modelUsed: string
   timestamp: string
-  provider: 'azure' | 'spark' | 'openai'
+  provider: 'azure' | 'worker' | 'openai'
 }
 
 interface ModelPricing {
@@ -132,7 +132,7 @@ class TokenTracker {
     completionTokens: number
     totalTokens: number
     modelUsed: string
-    provider: 'azure' | 'spark' | 'openai'
+    provider: 'azure' | 'worker' | 'openai'
     timestamp?: string
   }): Promise<void> {
     const pricing = this.getPricingForModel(metrics.modelUsed)
@@ -166,7 +166,7 @@ class TokenTracker {
     completionTokens: number
     totalTokens: number
     modelUsed: string
-    provider: 'azure' | 'spark' | 'openai'
+    provider: 'azure' | 'worker' | 'openai'
     timestamp?: string
   }): Promise<void> {
     return this.trackUsage(metrics)

@@ -60,6 +60,12 @@ This application implements production-ready agentic RAG patterns based on indus
 - **Local Hybrid**: Executes vector and keyword locally and fuses with Reciprocal Rank Fusion (RRF). If vector candidates are unavailable, hybrid falls back to keyword.
 - **Telemetry & UI**: Retrieval steps emit status “degraded” and the Query UI surfaces a banner when Azure fallback occurs. Mode-specific caches prevent mixing Azure and local results for the same query/doc state.
 
+### Cloudflare Worker Runtime
+
+- **Edge LLM Proxy**: A lightweight `/api/llm` route provides a deterministic stub by default and can be wired to an upstream provider. The browser uses this proxy when Azure is disabled.
+- **KV API**: `/api/kv` powers cache, history, and metadata storage. The client attaches `Authorization: Bearer <KV_API_KEY>` when configured.
+- **Telemetry**: `/api/telemetry` accepts client events. In development it can be pointed to the Worker endpoint via `VITE_ANALYTICS_ENDPOINT=/api/telemetry`.
+
 ### 📊 Quality Metrics
 
 Each response includes:

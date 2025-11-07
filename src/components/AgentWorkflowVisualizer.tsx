@@ -1,5 +1,5 @@
 import React from 'react'
-import { AnimatePresence, motion } from 'framer-motion'
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -114,6 +114,7 @@ const isErrorResult = (value: unknown): value is { error: string } => {
 
 export function AgentWorkflowVisualizer({ steps, className, isLive = false }: AgentWorkflowVisualizerProps) {
   const [expandedSteps, setExpandedSteps] = React.useState<Set<number>>(new Set())
+  const shouldReduceMotion = useReducedMotion()
 
   React.useEffect(() => {
     if (steps.length === 0) {
@@ -352,8 +353,8 @@ export function AgentWorkflowVisualizer({ steps, className, isLive = false }: Ag
             {iterations.map((iteration, idx) => (
               <motion.div
                 key={idx}
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
+                initial={shouldReduceMotion ? false : { opacity: 0, y: 6 }}
+                animate={shouldReduceMotion ? false : { opacity: 1, y: 0 }}
                 className="bg-muted/60 rounded p-2 space-y-1"
               >
                 <div className="font-semibold text-muted-foreground">
@@ -446,19 +447,19 @@ export function AgentWorkflowVisualizer({ steps, className, isLive = false }: Ag
                 return (
                   <motion.div
                     key={`${step.agent}-${index}-${step.status}-${step.timestamp}`}
-                    layout
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -10 }}
-                    transition={{ duration: 0.2 }}
+                    layout={!shouldReduceMotion}
+                    initial={shouldReduceMotion ? false : { opacity: 0, y: 10 }}
+                    animate={shouldReduceMotion ? false : { opacity: 1, y: 0 }}
+                    exit={shouldReduceMotion ? undefined : { opacity: 0, y: -10 }}
+                    transition={shouldReduceMotion ? { duration: 0 } : { duration: 0.2 }}
                     className="relative"
                   >
                     {index < steps.length - 1 && (
                       <motion.div
-                        layout
-                        initial={{ opacity: 0, scaleY: 0 }}
-                        animate={{ opacity: 1, scaleY: 1 }}
-                        transition={{ duration: 0.2 }}
+                        layout={!shouldReduceMotion}
+                        initial={shouldReduceMotion ? false : { opacity: 0, scaleY: 0 }}
+                        animate={shouldReduceMotion ? false : { opacity: 1, scaleY: 1 }}
+                        transition={shouldReduceMotion ? { duration: 0 } : { duration: 0.2 }}
                         className={cn(
                           'absolute left-[13px] top-9 bottom-0 w-[2px] origin-top rounded-full',
                           statusMeta.connectorClass
@@ -519,10 +520,10 @@ export function AgentWorkflowVisualizer({ steps, className, isLive = false }: Ag
                         <AnimatePresence initial={false}>
                           {hasDetails && isExpanded && (
                             <motion.div
-                              initial={{ opacity: 0, height: 0 }}
-                              animate={{ opacity: 1, height: 'auto' }}
-                              exit={{ opacity: 0, height: 0 }}
-                              transition={{ duration: 0.2 }}
+                              initial={shouldReduceMotion ? false : { opacity: 0, height: 0 }}
+                              animate={shouldReduceMotion ? false : { opacity: 1, height: 'auto' }}
+                              exit={shouldReduceMotion ? undefined : { opacity: 0, height: 0 }}
+                              transition={shouldReduceMotion ? { duration: 0 } : { duration: 0.2 }}
                               className="mt-2 bg-muted/60 p-3 rounded"
                             >
                               {detailContent}

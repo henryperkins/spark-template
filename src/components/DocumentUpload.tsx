@@ -225,6 +225,12 @@ export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
     }
   }, [handleFiles])
 
+  const handleDropzoneClick = useCallback(() => {
+    if (!uploading) {
+      document.getElementById('file-upload')?.click()
+    }
+  }, [uploading])
+
   return (
     <div className="space-y-6">
       <Card className={cn(
@@ -238,6 +244,7 @@ export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
             onDragLeave={handleDrag}
             onDragOver={handleDrag}
             onDrop={handleDrop}
+            onClick={handleDropzoneClick}
           >
             <div className="mx-auto flex h-12 w-12 items-center justify-center text-muted-foreground sm:h-14 sm:w-14">
               {uploading ? (
@@ -281,7 +288,11 @@ export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
             />
             
             <Button asChild disabled={uploading} className="w-full sm:w-auto">
-              <label htmlFor="file-upload" className="flex cursor-pointer items-center justify-center gap-2">
+              <label
+                htmlFor="file-upload"
+                className="flex cursor-pointer items-center justify-center gap-2"
+                onClick={(e) => e.stopPropagation()}
+              >
                 <FileText className="shrink-0" size={16} />
                 Select Files
               </label>

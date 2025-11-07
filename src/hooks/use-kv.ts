@@ -109,5 +109,4 @@ export function useKV<T = string>(key: string, initialValue?: NoInfer<T>) {
   return [value, setStoredValue, deleteValue] as const
 }
 
-export { useKV as useSparkKV }
 export { useKV as useStorage }
