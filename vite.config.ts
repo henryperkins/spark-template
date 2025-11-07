@@ -4,8 +4,6 @@ import { defineConfig, PluginOption } from "vite";
 import wasm from "vite-plugin-wasm";
 import topLevelAwait from "vite-plugin-top-level-await";
 
-import sparkPlugin from "@github/spark/spark-vite-plugin";
-import createIconImportProxy from "@github/spark/vitePhosphorIconProxyPlugin";
 import { resolve } from 'path'
 
 const projectRoot = process.env.PROJECT_ROOT || import.meta.dirname
@@ -17,9 +15,6 @@ export default defineConfig({
     tailwindcss(),
     wasm(),
     topLevelAwait(),
-    // DO NOT REMOVE
-    createIconImportProxy() as PluginOption,
-    sparkPlugin() as PluginOption,
   ],
   assetsInclude: ['**/*.wasm'],
   optimizeDeps: {

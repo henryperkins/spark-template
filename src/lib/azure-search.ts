@@ -16,7 +16,7 @@ export class AzureSearchService {
   private getBearerToken(): string | undefined {
     try {
       if (typeof window !== 'undefined') {
-        const token = window.localStorage?.getItem('KV_API_KEY')
+        const token = window.localStorage?.getItem('AZURE_API_KEY')
         if (token) {
           return token
         }
@@ -25,8 +25,8 @@ export class AzureSearchService {
       // ignore storage access errors (Safari ITP, disabled storage, etc.)
     }
     // Fallback for build-time key (e.g., for demos, CI)
-    if (import.meta.env.VITE_KV_API_KEY) {
-      return import.meta.env.VITE_KV_API_KEY
+    if (import.meta.env.VITE_AZURE_API_KEY) {
+      return import.meta.env.VITE_AZURE_API_KEY as string
     }
     return undefined
   }

@@ -54,7 +54,7 @@ The `runtime` utility (src/lib/config.ts) automatically detects:
 
 ### State Management Pattern
 
-The `useSparkKV` hook (src/hooks/use-spark-kv.ts) is the primary state management mechanism:
+The `useKV` hook (src/hooks/use-spark-kv.ts) is the primary state management mechanism:
 - Automatically syncs state to Cloudflare KV or localStorage fallback
 - Auto-detects runtime environment and selects appropriate storage
 - Returns `[value, setter, deleter]` tuple similar to useState
@@ -62,7 +62,7 @@ The `useSparkKV` hook (src/hooks/use-spark-kv.ts) is the primary state managemen
 
 Example:
 ```typescript
-const [documents, setDocuments] = useSparkKV<Document[]>('rag-documents', [])
+const [documents, setDocuments] = useKV<Document[]>('rag-documents', [])
 ```
 
 **See**: `docs/CLOUDFLARE_MIGRATION.md` for detailed architecture information.
@@ -86,7 +86,7 @@ Documents flow through this pipeline:
 1. Upload/ingestion from sources (upload, GitHub, website, Dropbox, OneDrive)
 2. **Intelligent chunking** via DocumentAnalyzerAgent (supports: paragraph, sentence, semantic, fixed strategies)
 3. **Embedding generation** locally or via Azure OpenAI
-4. **Storage** in Spark KV and optionally Azure AI Search index
+4. **Storage** in Cloudflare KV and optionally Azure AI Search index
 5. **Retrieval** during queries using various strategies
 
 ### Azure Integration
@@ -94,7 +94,7 @@ Documents flow through this pipeline:
 Optional Azure services integration (src/lib/azure-service-manager.ts):
 - **Azure OpenAI**: For embeddings and completions
 - **Azure AI Search**: For vector search with semantic ranking, hybrid search, and reranking
-- Configuration stored in Spark KV under 'azure-config' key
+- Configuration stored in Cloudflare KV under 'azure-config' key
 - Documents can be indexed to Azure AI Search for enterprise-grade retrieval
 
 ### Cache Management
@@ -124,7 +124,7 @@ The CacheManager (src/lib/cache-manager.ts) provides:
 TypeScript and Vite are configured with `@/*` alias pointing to `src/*`:
 ```typescript
 import { Document } from '@/types'
-import { useSparkKV } from '@/hooks/use-spark-kv'
+import { useKV } from '@/hooks/use-spark-kv'
 ```
 
 ### Type Definitions
@@ -139,9 +139,8 @@ Core types in src/types/index.ts include:
 
 ## Important Development Notes
 
-### Working with Spark KV
-- Always use `useSparkKV` hook for persistent state, not localStorage directly
-- The fallback system (src/lib/spark-fallback.ts) handles both remote and local modes transparently
+### Working with Cloudflare KV
+- Always use `useKV` hook for persistent state, not localStorage directly
 - KV keys are namespaced (e.g., 'rag-documents', 'azure-config')
 
 ### Agent Development
@@ -169,7 +168,6 @@ Core types in src/types/index.ts include:
 ## Testing and Debugging
 
 - Use browser DevTools console to check Spark fallback warnings
-- `window.sparkFallback` object available in console for debugging KV mode
 - Cache metrics available via `cacheManager.getMetrics()`
 - Agent workflow steps are tracked and returned with query results for debugging
 

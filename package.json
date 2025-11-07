@@ -20,7 +20,6 @@
     },
     "dependencies": {
       "@dqbd/tiktoken": "^1.0.22",
-      "@github/spark": "^0.41.20",
       "@hookform/resolvers": "^5.2.2",
       "@octokit/core": "^7.0.6",
       "pdfjs-dist": "^4.6.82",

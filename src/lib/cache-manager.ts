@@ -1,4 +1,4 @@
-// No need to redefine Window.spark - it's already defined by @github/spark/spark import in main.tsx
+import { createCloudflareKV, type CloudflareKVAdapter } from '@/lib/cloudflare-kv'
 
 export interface CacheEntry<T = unknown> {
   data: T
@@ -27,48 +27,84 @@ export interface CacheMetrics {
   recentInvalidations: CacheInvalidationEvent[]
 }
 
+const localStorageAdapter: CloudflareKVAdapter = {
+  async keys(): Promise<string[]> {
+    if (typeof window === 'undefined' || !window.localStorage) return []
+    const keys: string[] = []
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const k = window.localStorage.key(i)
+      if (k) keys.push(k)
+    }
+    return keys
+  },
+  async get(key: string): Promise<unknown> {
+    if (typeof window === 'undefined' || !window.localStorage) return undefined
+    const raw = window.localStorage.getItem(key)
+    if (!raw) return undefined
+    try { return JSON.parse(raw) } catch { return raw }
+  },
+  async set(key: string, value: unknown): Promise<void> {
+    if (typeof window === 'undefined' || !window.localStorage) return
+    const payload = typeof value === 'string' ? value : JSON.stringify(value)
+    window.localStorage.setItem(key, payload)
+  },
+  async delete(key: string): Promise<void> {
+    if (typeof window === 'undefined' || !window.localStorage) return
+    window.localStorage.removeItem(key)
+  }
+}
+
 export class CacheManager {
   private readonly CACHE_VERSION = 'v2025.01'
   private readonly DEFAULT_TTL_MS = 3600000
   private invalidationHistory: CacheInvalidationEvent[] = []
   private hits = 0
   private misses = 0
+  private kv: CloudflareKVAdapter | null = null
+
+  private getKV(): CloudflareKVAdapter {
+    if (!this.kv) {
+      const cf = createCloudflareKV()
+      this.kv = cf || localStorageAdapter
+      if (cf) {
+        console.info('[cache-manager] Using Cloudflare KV')
+      } else {
+        console.info('[cache-manager] Using localStorage fallback')
+      }
+    }
+    return this.kv
+  }
 
   private getTTLByContentType(keyPrefix: string): number {
     if (keyPrefix.includes('news') || keyPrefix.includes('realtime')) {
       return 5 * 60 * 1000
     }
-    
     if (keyPrefix.includes('dynamic') || keyPrefix.includes('query')) {
       return 60 * 60 * 1000
     }
-    
     if (keyPrefix.includes('static') || keyPrefix.includes('document')) {
       return 24 * 60 * 60 * 1000
     }
-    
     return this.DEFAULT_TTL_MS
   }
 
   async set<T>(key: string, data: T, customTTL?: number): Promise<void> {
     const ttl = customTTL || this.getTTLByContentType(key)
-
     const entry: CacheEntry<T> = {
       data,
       timestamp: new Date().toISOString(),
       version: this.CACHE_VERSION,
       ttl,
       accessCount: 0,
-      lastAccessed: new Date().toISOString()
+      lastAccessed: new Date().toISOString(),
     }
-
     const cacheKey = this.buildCacheKey(key)
-    await (window.spark!.kv)!.set(cacheKey, entry)
+    await this.getKV().set(cacheKey, entry)
   }
 
   async get<T>(key: string): Promise<T | null> {
     const cacheKey = this.buildCacheKey(key)
-    const rawEntry = await (window.spark!.kv)!.get(cacheKey)
+    const rawEntry = await this.getKV().get(cacheKey)
     const entry = rawEntry as CacheEntry<T> | undefined
 
     if (!entry) {
@@ -90,7 +126,7 @@ export class CacheManager {
 
     entry.accessCount++
     entry.lastAccessed = new Date().toISOString()
-    await (window.spark!.kv)!.set(cacheKey, entry)
+    await this.getKV().set(cacheKey, entry)
 
     this.hits++
     return entry.data
@@ -101,9 +137,10 @@ export class CacheManager {
     type: CacheInvalidationEvent['type'],
     reason: string
   ): Promise<void> {
+    const kv = this.getKV()
     for (const key of keys) {
       const cacheKey = this.buildCacheKey(key)
-      await (window.spark!.kv)!.delete(cacheKey)
+      await kv.delete(cacheKey)
     }
 
     const event: CacheInvalidationEvent = {
@@ -112,27 +149,22 @@ export class CacheManager {
       reason,
       timestamp: new Date().toISOString()
     }
-
     this.invalidationHistory.push(event)
-    
     if (this.invalidationHistory.length > 100) {
       this.invalidationHistory = this.invalidationHistory.slice(-100)
     }
   }
 
   async invalidateByPrefix(prefix: string, reason?: string): Promise<number> {
-    const allKeys = await (window.spark!.kv)!.keys()
+    const allKeys = await this.getKV().keys()
     const cachePrefix = this.buildCacheKey(prefix)
     const matchingKeys = allKeys.filter(key => key.startsWith(cachePrefix))
-
     const originalKeys = matchingKeys.map(key => this.extractOriginalKey(key))
-
     await this.invalidate(
       originalKeys,
       'prefix',
       reason || `Prefix-based invalidation: ${prefix}`
     )
-
     return matchingKeys.length
   }
 
@@ -150,7 +182,6 @@ export class CacheManager {
     customTTL?: number
   ): Promise<void> {
     const ttl = customTTL || this.getTTLByContentType(key)
-
     const entry: CacheEntry<T> = {
       data,
       timestamp: new Date().toISOString(),
@@ -160,9 +191,8 @@ export class CacheManager {
       lastAccessed: new Date().toISOString(),
       semanticHash
     }
-
     const cacheKey = this.buildCacheKey(key)
-    await (window.spark!.kv)!.set(cacheKey, entry)
+    await this.getKV().set(cacheKey, entry)
   }
 
   async checkSemanticDrift(
@@ -171,76 +201,60 @@ export class CacheManager {
     threshold: number = 0.9
   ): Promise<boolean> {
     const cacheKey = this.buildCacheKey(key)
-    const rawEntry = await (window.spark!.kv)!.get(cacheKey)
+    const rawEntry = await this.getKV().get(cacheKey)
     const entry = rawEntry as CacheEntry | undefined
-
     if (!entry || !entry.semanticHash) {
       return false
     }
-
     const similarity = this.calculateHashSimilarity(entry.semanticHash, currentHash)
-    
     if (similarity < threshold) {
       await this.invalidate([key], 'semantic', `Semantic drift detected: ${similarity.toFixed(2)}`)
       return true
     }
-
     return false
   }
 
   private calculateHashSimilarity(hash1: string, hash2: string): number {
     if (hash1 === hash2) return 1.0
-    
     let matches = 0
     const length = Math.min(hash1.length, hash2.length)
-    
     for (let i = 0; i < length; i++) {
       if (hash1[i] === hash2[i]) matches++
     }
-    
     return matches / Math.max(hash1.length, hash2.length)
   }
 
   async adaptiveTTL(key: string): Promise<number> {
     const cacheKey = this.buildCacheKey(key)
-    const rawEntry = await (window.spark!.kv)!.get(cacheKey)
+    const rawEntry = await this.getKV().get(cacheKey)
     const entry = rawEntry as CacheEntry | undefined
-
     if (!entry) {
       return this.DEFAULT_TTL_MS
     }
-
     const hoursSinceCreation = (Date.now() - new Date(entry.timestamp).getTime()) / (1000 * 60 * 60)
     const accessFrequency = entry.accessCount / Math.max(hoursSinceCreation, 1)
-
     if (accessFrequency < 0.1) {
       return Math.max(entry.ttl * 0.5, 5 * 60 * 1000)
     }
-
     if (accessFrequency > 5) {
       return entry.ttl * 2
     }
-
     return entry.ttl
   }
 
   async cleanStaleEntries(): Promise<number> {
-    const allKeys = await (window.spark!.kv)!.keys()
+    const allKeys = await this.getKV().keys()
     const cacheKeys = allKeys.filter(key => key.startsWith('cache:'))
-
     let cleaned = 0
-
     for (const cacheKey of cacheKeys) {
-      const rawEntry = await (window.spark!.kv)!.get(cacheKey); const entry = rawEntry as CacheEntry | undefined
-
+      const rawEntry = await this.getKV().get(cacheKey)
+      const entry = rawEntry as CacheEntry | undefined
       if (!entry) continue
-
       if (this.isStale(entry) || entry.version !== this.CACHE_VERSION) {
-        await (window.spark!.kv)!.delete(cacheKey)
+        await this.getKV().delete(cacheKey)
         cleaned++
       }
     }
-
     if (cleaned > 0) {
       const event: CacheInvalidationEvent = {
         type: 'ttl',
@@ -250,38 +264,30 @@ export class CacheManager {
       }
       this.invalidationHistory.push(event)
     }
-
     return cleaned
   }
 
   async getMetrics(): Promise<CacheMetrics> {
-    const allKeys = await (window.spark!.kv)!.keys()
+    const allKeys = await this.getKV().keys()
     const cacheKeys = allKeys.filter(key => key.startsWith('cache:'))
-
     const byTTL: Record<string, number> = {}
     let totalAge = 0
     let staleEntries = 0
-
     for (const cacheKey of cacheKeys) {
-      const rawEntry = await (window.spark!.kv)!.get(cacheKey); const entry = rawEntry as CacheEntry | undefined
-
+      const rawEntry = await this.getKV().get(cacheKey)
+      const entry = rawEntry as CacheEntry | undefined
       if (!entry) continue
-
       const ttlCategory = this.categorizeTTL(entry.ttl)
       byTTL[ttlCategory] = (byTTL[ttlCategory] || 0) + 1
-
       const ageMs = Date.now() - new Date(entry.timestamp).getTime()
       totalAge += ageMs
-
       if (this.isStale(entry)) {
         staleEntries++
       }
     }
-
     const total = this.hits + this.misses
     const hitRate = total > 0 ? this.hits / total : 0
     const missRate = total > 0 ? this.misses / total : 0
-
     return {
       totalKeys: cacheKeys.length,
       hitRate,

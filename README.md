@@ -36,7 +36,7 @@ npm run lint       # Check code quality
 ## Tech Stack
 
 **Frontend**: React 19 • TypeScript • Vite 6 • Tailwind CSS 4 • Radix UI • Phosphor Icons
-**Platform**: GitHub Spark (KV store, LLM integration)
+**Platform**: Cloudflare Workers (KV store, edge runtime)
 **AI Services**: Azure OpenAI • Azure AI Search (optional)
 **Architecture**: Multi-agent RAG with orchestration, caching, and streaming
 

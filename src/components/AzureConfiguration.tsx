@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { useSparkKV } from '@/hooks/use-spark-kv'
+import { useStorage } from '@/hooks/use-kv'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -16,9 +16,9 @@ import { azureServiceManager } from '@/lib/azure-service-manager'
 import { isCloudflareKVConfigured, testCloudflareKV } from '@/lib/cloudflare-kv'
 
 export function AzureConfiguration() {
-  const [config, setConfig] = useSparkKV<AzureConfig | null>('azure-config', null)
-  const [status, setStatus] = useSparkKV<AzureConnectionStatus | null>('azure-status', null)
-  const [savedConfigs, setSavedConfigs] = useSparkKV<SavedAzureConfig[]>('azure-saved-configs', [])
+  const [config, setConfig] = useStorage<AzureConfig | null>('azure-config', null)
+  const [status, setStatus] = useStorage<AzureConnectionStatus | null>('azure-status', null)
+  const [savedConfigs, setSavedConfigs] = useStorage<SavedAzureConfig[]>('azure-saved-configs', [])
   const [formData, setFormData] = useState<AzureConfig>({
     openai: {
       endpoint: '',

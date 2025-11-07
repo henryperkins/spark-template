@@ -239,7 +239,7 @@ export function ArchitectureDiagram() {
       name: '11. Document Store Layer',
       description: 'Document persistence using Spark KV store',
       components: [
-        'useKV Hook (rag-documents key)',
+        'useStorage Hook (rag-documents key)',
         'Document Metadata Storage',
         'Chunk Storage & Indexing',
         'Processing Status Tracking',
@@ -306,7 +306,7 @@ export function ArchitectureDiagram() {
       {
         name: 'QueryInterface',
         purpose: 'Dual-mode chat and single-query interface with agentic workflow visualization',
-        technologies: ['React 19', 'TypeScript', 'shadcn/ui', 'useKV persistence'],
+        technologies: ['React 19', 'TypeScript', 'shadcn/ui', 'useStorage persistence'],
         patterns: ['Component Composition', 'Controlled Components', 'State Lifting']
       },
       {
@@ -318,7 +318,7 @@ export function ArchitectureDiagram() {
       {
         name: 'DocumentUpload & DocumentList',
         purpose: 'File upload with drag-and-drop and comprehensive document management',
-        technologies: ['File API', 'useKV', 'shadcn Table'],
+        technologies: ['File API', 'useStorage', 'shadcn Table'],
         patterns: ['File Upload', 'Optimistic UI', 'List Management']
       },
       {
@@ -530,7 +530,7 @@ export function ArchitectureDiagram() {
     ],
     'document-store': [
       {
-        name: 'useSparkKV Hook',
+        name: 'useStorage Hook',
         purpose: 'React hook for persistent document storage with automatic sync to Cloudflare KV or localStorage',
         technologies: ['React Hooks', 'Spark KV', 'Cloudflare KV', 'localStorage'],
         patterns: ['Custom Hook', 'Auto-sync', 'Optimistic Updates']

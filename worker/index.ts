@@ -45,6 +45,7 @@ export interface Env {
   VITE_AZURE_SEARCH_KEY?: string
   LOGS_API_KEY?: string
   KV_API_KEY?: string
+  AZURE_API_KEY?: string
   // Optional legacy KV for one-shot migration
   LEGACY_KV?: KVNamespace
   // Secret key to authorize migration
@@ -85,8 +86,6 @@ function logStructured(entry: Omit<LogEntry, 'timestamp'>): void {
 
 // CORS configuration
 const ALLOWED_ORIGINS = [
-  'https://spark.example.com',
-  'https://staging.spark.example.com',
   'https://paradigmfind.com',
   'https://www.paradigmfind.com',
 ]
@@ -145,20 +144,6 @@ export default {
         return handleAzureSearchRequest(request, env)
       }
 
-      // Health/ping for Spark front-end integrations
-      if (url.pathname === '/_spark/loaded') {
-        const corsHeaders = corsHeadersFor(request, { methods: ['GET', 'OPTIONS'] })
-        if (request.method === 'OPTIONS') {
-          if (!isOriginAllowed(request)) {
-            return new Response('CORS origin not allowed', { status: 403, headers: corsHeaders })
-          }
-          return new Response(null, { headers: corsHeaders })
-        }
-        if (request.headers.get('Origin') && !isOriginAllowed(request)) {
-          return new Response('CORS origin not allowed', { status: 403, headers: corsHeaders })
-        }
-        return Response.json({ loaded: true }, { headers: corsHeaders })
-      }
 
       // API endpoint for accessing logs
       if (url.pathname.startsWith('/api/logs')) {
@@ -384,8 +369,8 @@ async function handleAzureSearchRequest(request: Request, env: Env): Promise<Res
     return new Response('CORS origin not allowed', { status: 403, headers: corsHeaders })
   }
 
-  // Optional bearer enforcement (reuse KV_API_KEY if configured)
-  const expectedBearer = (env as unknown).KV_API_KEY as string | undefined
+  // Optional bearer enforcement (use AZURE_API_KEY if configured)
+  const expectedBearer = env.AZURE_API_KEY as string | undefined
   if (expectedBearer) {
     const authHeader = request.headers.get('Authorization') || ''
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : authHeader.trim()

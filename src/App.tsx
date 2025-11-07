@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react'
-import { useSparkKV } from '@/hooks/use-spark-kv'
+import { useStorage } from '@/hooks/use-kv'
 import { ResponsiveNavigation } from '@/components/ResponsiveNavigation'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { DocumentUpload } from '@/components/DocumentUpload'
@@ -15,8 +15,8 @@ import { azureServiceManager } from '@/lib/azure-service-manager'
 import { cacheManager } from '@/lib/cache-manager'
 
 function App() {
-  const [documents, setDocuments] = useSparkKV<Document[]>('rag-documents', [])
-  const [azureConfig] = useSparkKV<AzureConfig | null>('azure-config', null)
+  const [documents, setDocuments] = useStorage<Document[]>('rag-documents', [])
+  const [azureConfig] = useStorage<AzureConfig | null>('azure-config', null)
 
   useEffect(() => {
     // Initialize Azure services if config exists

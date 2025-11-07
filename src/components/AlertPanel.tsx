@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Bell, X, CheckCircle, WarningCircle, XCircle } from '@phosphor-icons/react'
-import { useSparkKV } from '@/hooks/use-spark-kv'
+import { useStorage } from '@/hooks/use-kv'
 
 interface SystemAlert {
   id: string
@@ -17,7 +17,7 @@ interface SystemAlert {
 }
 
 export function AlertPanel() {
-  const [alerts, setAlerts] = useSparkKV<SystemAlert[]>('system-alerts', [])
+  const [alerts, setAlerts] = useStorage<SystemAlert[]>('system-alerts', [])
   const [autoRefresh] = useState(true)
 
   useEffect(() => {
