@@ -1,12 +1,200 @@
 import { AzureConfig } from '@/types'
+import { estimateTokens, truncateContext } from '@/lib/prompt-utils'
+import { ResponsesClient, ResponsesClientConfig } from './responses-client'
+
+// Embedding model limits with safety margin
+const EMBEDDING_MODEL = 'text-embedding-3-large'
+const EMBEDDING_MAX_CTX = 8192
+const EMBEDDING_SAFETY_MARGIN = 0.8
+const EMBEDDING_MAX_TOKENS = Math.floor(EMBEDDING_MAX_CTX * EMBEDDING_SAFETY_MARGIN) // ~6553
+
+type SafeChatOptions = {
+  maxTokens?: number
+  temperature?: number
+  topP?: number
+  responseFormat?: 'text' | 'json_object'
+  stream?: boolean
+  onChunk?: (chunk: string) => void
+}
+
+interface AzureErrorDetail {
+  status: number
+  code?: string
+  message: string
+  param?: string
+  requestId?: string
+  // sanitized request context (no secrets)
+  requestContext?: {
+    apiVersion: string
+    deployment: string
+    hasStream: boolean
+    maxTokens?: number
+    temperature?: number
+    topP?: number
+  }
+}
 
 export class AzureOpenAIService {
-  private config: AzureConfig['openai']
+  private config: AzureConfig['openai'] & {
+    useResponsesApi?: boolean
+    responsesModel?: string
+    responsesStore?: boolean
+    responsesBackground?: boolean
+    responsesTimeoutMs?: number
+    responsesApiVersion?: string
+  }
+
+  private responsesClient: ResponsesClient | null = null
 
   constructor(config: AzureConfig['openai']) {
-    this.config = config
-    // Normalize endpoint to avoid double slashes in request URLs
-    this.config.endpoint = this.config.endpoint.replace(/\/+$/, '')
+    this.config = {
+      ...config,
+      endpoint: config.endpoint.replace(/\/+$/, '')
+    }
+    this.validateConfig()
+    this.initializeResponsesClientIfEnabled()
+  }
+
+  private validateConfig() {
+    if (!this.config.endpoint) {
+      throw new Error('Azure OpenAI endpoint is required')
+    }
+    if (!this.config.deploymentName) {
+      throw new Error('Azure OpenAI deploymentName is required')
+    }
+    if (!this.config.apiVersion) {
+      throw new Error('Azure OpenAI apiVersion is required')
+    }
+    if (!this.config.apiKey) {
+      throw new Error('Azure OpenAI apiKey is required (RBAC not yet wired)')
+    }
+  }
+
+  /**
+   * Initialize ResponsesClient when feature flag is enabled.
+   * Non-breaking: if useResponsesApi is false or misconfigured, this remains null.
+   */
+  private initializeResponsesClientIfEnabled() {
+    if (!this.config.useResponsesApi) {
+      return
+    }
+
+    const defaultModel =
+      this.config.responsesModel || this.config.deploymentName
+
+    const cfg: ResponsesClientConfig = {
+      endpoint: this.config.endpoint,
+      apiKey: this.config.apiKey,
+      defaultModel,
+      apiVersion: this.config.responsesApiVersion || 'v1',
+      timeoutMs: this.config.responsesTimeoutMs,
+      defaultStore: this.config.responsesStore,
+      defaultBackground: this.config.responsesBackground
+    }
+
+    this.responsesClient = new ResponsesClient(cfg)
+  }
+
+  /**
+   * Enforce embedding token limits to prevent 400 context-length errors.
+   * Truncates text if it exceeds the model's context window.
+   */
+  private enforceEmbeddingTokenLimit(text: string): string {
+    const tokens = estimateTokens(text, EMBEDDING_MODEL)
+    if (tokens <= EMBEDDING_MAX_TOKENS) {
+      return text
+    }
+
+    console.warn(
+      `[azure-openai] Text exceeds embedding token limit (${tokens} > ${EMBEDDING_MAX_TOKENS}), truncating`
+    )
+    return truncateContext(text, EMBEDDING_MAX_TOKENS, {
+      notice: ' [truncated for embedding]'
+    })
+  }
+
+  /**
+   * Capability hints per deployment.
+   * In a real implementation, drive this from config or a lookup table.
+   */
+  private getDeploymentCapabilities() {
+    const name = this.config.deploymentName.toLowerCase()
+
+    // Strict/default-only models: do not send temperature/top_p/etc.
+    const STRICT_DEPLOYMENTS = ['gpt-5-mini', 'o1', 'o1-mini', 'instruct-strict']
+    const strictDefaults = STRICT_DEPLOYMENTS.some(id => name.includes(id))
+
+    return {
+      strictDefaults,
+      supportsMaxCompletionTokens: true,
+      allowTemperature: !strictDefaults,
+      allowTopP: !strictDefaults
+    }
+  }
+
+  /**
+   * Build a model-safe chat completion request body for Azure.
+   * Ensures we never send unsupported parameters.
+   */
+  private buildChatRequestBody(
+    messages: Array<{ role: string; content: string }> | string,
+    options?: SafeChatOptions
+  ): Record<string, unknown> {
+    const caps = this.getDeploymentCapabilities()
+    const messageArray =
+      typeof messages === 'string'
+        ? [{ role: 'user', content: messages }]
+        : messages
+
+    const body: Record<string, unknown> = {
+      messages: messageArray,
+      stream: options?.stream ?? false
+    }
+
+    // max tokens: preview models expect max_completion_tokens; keep internal name stable
+    const maxTokens = options?.maxTokens ?? 2000
+    if (caps.supportsMaxCompletionTokens && maxTokens > 0) {
+      body.max_completion_tokens = maxTokens
+    }
+
+    // Temperature / top_p handling:
+    // - For strict models: do NOT send these at all (use server defaults).
+    // - For flexible models: clamp to valid ranges and only send if provided.
+    if (caps.strictDefaults) {
+      if (options?.temperature !== undefined && options.temperature !== 1) {
+        console.warn(
+          `[azure-openai] Ignoring temperature=${options.temperature} for strict deployment ${this.config.deploymentName}; using model default.`
+        )
+      }
+      if (options?.topP !== undefined && options.topP !== 1) {
+        console.warn(
+          `[azure-openai] Ignoring top_p=${options.topP} for strict deployment ${this.config.deploymentName}; using model default.`
+        )
+      }
+    } else {
+      if (caps.allowTemperature && options?.temperature !== undefined) {
+        const t = Number.isFinite(options.temperature)
+          ? Math.min(Math.max(options.temperature, 0), 2)
+          : 1
+        body.temperature = t
+      }
+      if (caps.allowTopP && options?.topP !== undefined) {
+        const p = Number.isFinite(options.topP)
+          ? Math.min(Math.max(options.topP, 0), 1)
+          : 1
+        body.top_p = p
+      }
+    }
+
+    if (options?.responseFormat === 'json_object') {
+      body.response_format = { type: 'json_object' }
+    }
+
+    if (this.config.enableStoredCompletions) {
+      body.store = true
+    }
+
+    return body
   }
 
   async testConnection(): Promise<{ success: boolean; error?: string }> {
@@ -35,6 +223,9 @@ export class AzureOpenAIService {
 
   async generateEmbedding(text: string): Promise<number[]> {
     try {
+      // Enforce token limit before sending request
+      const safeTex = this.enforceEmbeddingTokenLimit(text)
+
       const response = await fetch(
         `${this.config.endpoint}/openai/deployments/${this.config.embeddingDeploymentName}/embeddings?api-version=${this.config.apiVersion}`,
         {
@@ -44,7 +235,7 @@ export class AzureOpenAIService {
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
-            input: text,
+            input: safeTex,
             encoding_format: 'float'
           })
         }
@@ -67,11 +258,36 @@ export class AzureOpenAIService {
     texts: string[],
     onProgress?: (done: number, total: number) => void
   ): Promise<number[][]> {
-    // Automatically batch large inputs to avoid request size/token limits.
+    // Enforce per-item token limits first
+    const safeTexts = texts.map(t => this.enforceEmbeddingTokenLimit(t))
+
+    // Build batches respecting both count and token budget
     const maxBatchSize = 64
-    const results: number[][] = []
-    const total = texts.length
-    let done = 0
+    const batches: string[][] = []
+    let currentBatch: string[] = []
+    let currentBatchTokens = 0
+
+    for (const text of safeTexts) {
+      const textTokens = estimateTokens(text, EMBEDDING_MODEL)
+
+      // Start new batch if adding this text would exceed limits
+      if (
+        currentBatch.length >= maxBatchSize ||
+        (currentBatch.length > 0 && currentBatchTokens + textTokens > EMBEDDING_MAX_TOKENS)
+      ) {
+        batches.push(currentBatch)
+        currentBatch = []
+        currentBatchTokens = 0
+      }
+
+      currentBatch.push(text)
+      currentBatchTokens += textTokens
+    }
+
+    // Add final batch
+    if (currentBatch.length > 0) {
+      batches.push(currentBatch)
+    }
 
     // Helper to POST a single batch; reduces batch size on 413/400 if needed.
     const postBatch = async (batch: string[], attemptSize: number): Promise<number[][]> => {
@@ -115,9 +331,12 @@ export class AzureOpenAIService {
       }
     }
 
-    for (let i = 0; i < texts.length; i += maxBatchSize) {
-      const batch = texts.slice(i, i + maxBatchSize)
-      const embeddings = await postBatch(batch, Math.min(batch.length, maxBatchSize))
+    const results: number[][] = []
+    const total = safeTexts.length
+    let done = 0
+
+    for (const batch of batches) {
+      const embeddings = await postBatch(batch, batch.length)
       results.push(...embeddings)
       done += batch.length
       if (onProgress) {
@@ -132,134 +351,138 @@ export class AzureOpenAIService {
     return results
   }
 
+  /**
+   * Core chat completion call with robust validation, no invalid-parameter retries,
+   * and structured error reporting. Streaming path delegates to handleStreamingResponse.
+   */
   async generateCompletion(
     messages: Array<{ role: string; content: string }> | string,
-    options?: {
-      maxTokens?: number
-      temperature?: number
-      topP?: number
-      responseFormat?: 'text' | 'json_object'
-      stream?: boolean
-      onChunk?: (chunk: string) => void
-    }
+    options?: SafeChatOptions
   ): Promise<string> {
-    try {
-      const messageArray = typeof messages === 'string'
-        ? [{ role: 'user', content: messages }]
-        : messages
-
-      const requestBody: Record<string, unknown> = {
-        messages: messageArray,
-        max_tokens: options?.maxTokens ?? 2000,
-        temperature: options?.temperature ?? 0.7,
-        top_p: options?.topP ?? 0.95,
-        frequency_penalty: 0,
-        presence_penalty: 0,
-        stream: options?.stream ?? false
-      }
-
-      if (options?.responseFormat === 'json_object') {
-        requestBody.response_format = { type: 'json_object' }
-      }
-
-      if (this.config.enableStoredCompletions) {
-        requestBody.store = true
-      }
-
-      const response = await fetch(
-        `${this.config.endpoint}/openai/deployments/${this.config.deploymentName}/chat/completions?api-version=${this.config.apiVersion}`,
-        {
-          method: 'POST',
-          headers: {
-            'api-key': this.config.apiKey,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(requestBody)
-        }
-      )
-
-      if (!response.ok) {
-        const errorText = await response.text()
-        throw new Error(`Completion generation failed: ${response.status} ${errorText}`)
-      }
-
-      if (options?.stream && response.body) {
-        return await this.handleStreamingResponse(response.body, options.onChunk)
-      }
-
-      const data = await response.json()
-      return data.choices[0].message.content
-    } catch (error) {
-      console.error('Error generating completion:', error)
-      throw error
+    // Prefer Responses API when configured; fall back to legacy /chat/completions.
+    if (this.responsesClient && !options?.stream) {
+      const result = await this.responsesClient.createResponse({
+        messages: this.toResponseMessages(messages),
+        maxOutputTokens: options?.maxTokens,
+        temperature: options?.temperature,
+        topP: options?.topP,
+        extraBody:
+          options?.responseFormat === 'json_object'
+            ? { response_format: { type: 'json_object' } }
+            : undefined
+      })
+      return result.outputText
     }
+
+    if (this.responsesClient && options?.stream && options.onChunk) {
+      // Bridge Responses streaming into onChunk callback.
+      for await (const delta of this.responsesClient.streamText({
+        messages: this.toResponseMessages(messages),
+        maxOutputTokens: options.maxTokens,
+        temperature: options.temperature,
+        topP: options.topP,
+        extraBody:
+          options.responseFormat === 'json_object'
+            ? { response_format: { type: 'json_object' } }
+            : undefined
+      })) {
+        options.onChunk?.(delta)
+      }
+      // For streaming path, caller typically doesn't need the full text; return empty string.
+      return ''
+    }
+
+    const url = `${this.config.endpoint}/openai/deployments/${this.config.deploymentName}/chat/completions?api-version=${this.config.apiVersion}`
+    const body = this.buildChatRequestBody(messages, options)
+
+    const res = await this.fetchWithRetry(url, {
+      method: 'POST',
+      headers: {
+        'api-key': this.config.apiKey!,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(body)
+    })
+
+    if (!res.ok) {
+      throw await this.toAzureError(res, body)
+    }
+
+    if (options?.stream && res.body) {
+      return this.handleStreamingResponse(res.body, options.onChunk)
+    }
+
+    const data = await res.json()
+    return data.choices?.[0]?.message?.content ?? ''
   }
 
   /**
-   * Non-streaming completion that returns both text and Azure usage metadata when present.
+   * Non-streaming completion returning text + usage.
+   * Uses Responses API when enabled; otherwise falls back to legacy /chat/completions.
    */
   async generateCompletionWithUsage(
     messages: Array<{ role: string; content: string }> | string,
-    options?: {
-      maxTokens?: number
-      temperature?: number
-      topP?: number
-      responseFormat?: 'text' | 'json_object'
+    options?: Omit<SafeChatOptions, 'stream' | 'onChunk'>
+  ): Promise<{
+    text: string
+    usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number }
+  }> {
+    if (this.responsesClient) {
+      const result = await this.responsesClient.createResponse({
+        messages: this.toResponseMessages(messages),
+        maxOutputTokens: options?.maxTokens,
+        temperature: options?.temperature,
+        topP: options?.topP,
+        extraBody:
+          options?.responseFormat === 'json_object'
+            ? { response_format: { type: 'json_object' } }
+            : undefined
+      })
+
+      const usage = result.usage
+        ? {
+            promptTokens: result.usage.inputTokens,
+            completionTokens: result.usage.outputTokens,
+            totalTokens: result.usage.totalTokens
+          }
+        : undefined
+
+      return { text: result.outputText, usage }
     }
-  ): Promise<{ text: string; usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number } }>
-  {
-    // Delegate to generateCompletion for request build and error handling, but reissue to capture JSON body
-    try {
-      const messageArray = typeof messages === 'string'
-        ? [{ role: 'user', content: messages }]
-        : messages
 
-      const requestBody: Record<string, unknown> = {
-        messages: messageArray,
-        max_tokens: options?.maxTokens ?? 2000,
-        temperature: options?.temperature ?? 0.7,
-        top_p: options?.topP ?? 0.95,
-        frequency_penalty: 0,
-        presence_penalty: 0,
-        stream: false
-      }
+    const url = `${this.config.endpoint}/openai/deployments/${this.config.deploymentName}/chat/completions?api-version=${this.config.apiVersion}`
+    const body = this.buildChatRequestBody(messages, { ...options, stream: false })
 
-      if (options?.responseFormat === 'json_object') {
-        requestBody.response_format = { type: 'json_object' }
-      }
+    const res = await this.fetchWithRetry(url, {
+      method: 'POST',
+      headers: {
+        'api-key': this.config.apiKey!,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(body)
+    })
 
-      if (this.config.enableStoredCompletions) {
-        requestBody.store = true
-      }
+    if (!res.ok) {
+      throw await this.toAzureError(res, body)
+    }
 
-      const response = await fetch(
-        `${this.config.endpoint}/openai/deployments/${this.config.deploymentName}/chat/completions?api-version=${this.config.apiVersion}`,
-        {
-          method: 'POST',
-          headers: {
-            'api-key': this.config.apiKey,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(requestBody)
+    const data = await res.json()
+    const text: string = data?.choices?.[0]?.message?.content ?? ''
+    const usage = data?.usage
+      ? {
+          promptTokens: usageNumber(usageValue(data.usage.prompt_tokens)),
+          completionTokens: usageNumber(usageValue(data.usage.completion_tokens)),
+          totalTokens: usageNumber(usageValue(data.usage.total_tokens))
         }
-      )
+      : undefined
 
-      if (!response.ok) {
-        const errorText = await response.text()
-        throw new Error(`Completion generation failed: ${response.status} ${errorText}`)
-      }
+    return { text, usage }
 
-      const data = await response.json()
-      const text: string = data?.choices?.[0]?.message?.content ?? ''
-      const usage = data?.usage ? {
-        promptTokens: data.usage.prompt_tokens as number | undefined,
-        completionTokens: data.usage.completion_tokens as number | undefined,
-        totalTokens: data.usage.total_tokens as number | undefined
-      } : undefined
-      return { text, usage }
-    } catch (error) {
-      console.error('Error generating completion (with usage):', error)
-      throw error
+    function usageValue(v: unknown): number | undefined {
+      return typeof v === 'number' ? v : undefined
+    }
+    function usageNumber(v: number | undefined): number | undefined {
+      return v && Number.isFinite(v) ? v : undefined
     }
   }
 
@@ -322,5 +545,120 @@ ${context}`
     ]
 
     return this.generateCompletion(messages)
+  }
+
+  /**
+   * Structured error builder: no secrets, includes status/code/message/param.
+   */
+  private async toAzureError(
+    res: Response,
+    body: Record<string, unknown>
+  ): Promise<Error> {
+    let parsed: { error?: { code?: string; message?: string; param?: string } } | null = null
+    try {
+      parsed = await res.json()
+    } catch {
+      // ignore parse errors
+    }
+
+    const detail: AzureErrorDetail = {
+      status: res.status,
+      code: parsed?.error?.code,
+      message: parsed?.error?.message || res.statusText || 'Azure OpenAI request failed',
+      param: parsed?.error?.param,
+      requestId: res.headers.get('x-ms-request-id') ?? undefined,
+      requestContext: {
+        apiVersion: this.config.apiVersion,
+        deployment: this.config.deploymentName,
+        hasStream: !!body.stream,
+        maxTokens: body.max_completion_tokens as number | undefined,
+        temperature: body.temperature as number | undefined,
+        topP: body.top_p as number | undefined
+      }
+    }
+
+    const err = new Error(
+      `AzureOpenAIError ${detail.status}${
+        detail.code ? ` (${detail.code})` : ''
+      }: ${detail.message}`
+    ) as Error & { azure?: AzureErrorDetail }
+
+    err.azure = detail
+    return err
+  }
+
+  /**
+   * fetchWithRetry: retries only transient errors.
+   * - Retries on: 429, 500, 502, 503, 504
+   * - Respects Retry-After when present
+   * - No retry on 4xx validation errors (e.g., unsupported_value)
+   */
+  private async fetchWithRetry(
+    url: string,
+    init: RequestInit,
+    maxRetries = 3
+  ): Promise<Response> {
+    let attempt = 0
+
+    while (true) {
+      const res = await fetch(url, init)
+
+      // Success or non-retryable status
+      if (!this.shouldRetry(res, attempt, maxRetries)) {
+        return res
+      }
+
+      attempt++
+      const delayMs = this.computeBackoff(res, attempt)
+      await new Promise(r => setTimeout(r, delayMs))
+    }
+  }
+
+  private shouldRetry(res: Response, attempt: number, maxRetries: number): boolean {
+    if (attempt >= maxRetries) return false
+
+    const status = res.status
+    if ([429, 500, 502, 503, 504].includes(status)) {
+      return true
+    }
+
+    // For 4xx other than 429, do not retry (validation/config errors).
+    return false
+  }
+
+  private computeBackoff(res: Response, attempt: number): number {
+    const retryAfter = res.headers.get('Retry-After')
+    if (retryAfter) {
+      const seconds = parseInt(retryAfter, 10)
+      if (!Number.isNaN(seconds) && seconds > 0) {
+        return seconds * 1000
+      }
+    }
+    const base = 500 * Math.pow(2, attempt) // 500, 1000, 2000...
+    const jitter = Math.random() * 250
+    return Math.min(base + jitter, 8000)
+  }
+
+  /**
+   * Map legacy chat-style messages into Responses API message format.
+   * This keeps AzureServiceManager / callers unchanged while switching transport.
+   */
+  private toResponseMessages(
+    messages: Array<{ role: string; content: string }> | string
+  ): Array<{ role: string; content: Array<{ type: string; text: string }> }> {
+    const arr =
+      typeof messages === 'string'
+        ? [{ role: 'user', content: messages }]
+        : messages
+
+    return arr.map(m => ({
+      role: m.role || 'user',
+      content: [
+        {
+          type: 'input_text',
+          text: m.content
+        }
+      ]
+    }))
   }
 }

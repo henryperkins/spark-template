@@ -9,7 +9,37 @@ export class AzureServiceManager {
 
   async initialize(config: AzureConfig): Promise<AzureConnectionStatus> {
     this.config = config
-    this.openaiService = new AzureOpenAIService(config.openai)
+
+    // Wire AzureOpenAIService with Responses API feature flags; all fields are optional and non-breaking.
+    const openaiConfig = {
+      ...config.openai,
+      useResponsesApi:
+        config.openai.useResponsesApi ??
+        process.env.VITE_AZURE_USE_RESPONSES === 'true',
+      responsesModel:
+        config.openai.responsesModel ??
+        process.env.VITE_AZURE_RESPONSES_MODEL,
+      responsesStore:
+        config.openai.responsesStore ??
+        (process.env.VITE_AZURE_RESPONSES_STORE === 'true'
+          ? true
+          : undefined),
+      responsesBackground:
+        config.openai.responsesBackground ??
+        (process.env.VITE_AZURE_RESPONSES_BACKGROUND_DEFAULT === 'true'
+          ? true
+          : undefined),
+      responsesTimeoutMs:
+        config.openai.responsesTimeoutMs ??
+        (process.env.VITE_AZURE_RESPONSES_TIMEOUT_MS
+          ? Number(process.env.VITE_AZURE_RESPONSES_TIMEOUT_MS)
+          : undefined),
+      responsesApiVersion:
+        config.openai.responsesApiVersion ??
+        process.env.VITE_AZURE_RESPONSES_API_VERSION
+    }
+
+    this.openaiService = new AzureOpenAIService(openaiConfig as any)
     this.searchService = new AzureSearchService(config.search)
 
     const status: AzureConnectionStatus = {

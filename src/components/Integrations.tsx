@@ -1,4 +1,3 @@
-import React from 'react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { GitHubIngestion } from '@/components/GitHubIngestion'
 import { WebsiteIngestion } from '@/components/WebsiteIngestion'

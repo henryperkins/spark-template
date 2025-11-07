@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { type ReactNode } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -42,22 +42,22 @@ type StatusMeta = {
   indicatorClass: string
   connectorClass: string
   badgeClass: string
-  icon: React.ReactNode
+  icon: ReactNode
 }
 
 const STATUS_META: Record<AgentWorkflowStep['status'], StatusMeta> = {
   completed: {
     label: 'Completed',
-    indicatorClass: 'border-green-9 bg-green-2 text-green-11',
-    connectorClass: 'bg-green-9/70',
-    badgeClass: 'border-green-9 text-green-11',
+    indicatorClass: 'border-status-success bg-status-success/10 text-status-success-foreground',
+    connectorClass: 'bg-status-success/70',
+    badgeClass: 'border-status-success text-status-success-foreground',
     icon: <CheckCircle size={14} />
   },
   running: {
     label: 'In progress',
-    indicatorClass: 'border-amber-9 bg-amber-2 text-amber-11 animate-pulse',
-    connectorClass: 'bg-amber-9/70 animate-pulse',
-    badgeClass: 'border-amber-9 text-amber-11',
+    indicatorClass: 'border-status-processing bg-status-processing/10 text-status-processing-foreground',
+    connectorClass: 'bg-status-processing/70',
+    badgeClass: 'border-status-processing text-status-processing-foreground',
     icon: <PlayCircle size={14} />
   },
   failed: {
@@ -178,23 +178,25 @@ export function AgentWorkflowVisualizer({ steps, className, isLive = false }: Ag
   }
 
   const getAgentAccent = (agentName: string) => {
+    // Use brand accent scales instead of raw palettes for consistency
+    // Alternate between primary and secondary accent to retain some differentiation
     switch (agentName.toLowerCase()) {
       case 'classifier':
-        return 'bg-blue-3'
+        return 'bg-accent-3'
       case 'planner':
-        return 'bg-purple-3'
+        return 'bg-accent-secondary-3'
       case 'router':
-        return 'bg-green-3'
+        return 'bg-accent-3'
       case 'retrieval':
-        return 'bg-yellow-3'
+        return 'bg-accent-secondary-3'
       case 'generator':
-        return 'bg-pink-3'
+        return 'bg-accent-3'
       case 'critic':
-        return 'bg-red-3'
+        return 'bg-accent-secondary-3'
       case 'react':
-        return 'bg-indigo-3'
+        return 'bg-accent-3'
       default:
-        return 'bg-neutral-3'
+        return 'bg-muted'
     }
   }
 
@@ -286,7 +288,7 @@ export function AgentWorkflowVisualizer({ steps, className, isLive = false }: Ag
     if (step.agent === 'Critic' && isValidationResult(step.result)) {
       const validation = step.result
       return (
-        <div className="text-xs space-y-2">
+        <div className="text-xs space-y-2 leading-relaxed">
           <div className="flex gap-3">
             <span>Faithfulness: {(validation.faithfulnessScore * 100).toFixed(0)}%</span>
             <span>Relevance: {(validation.relevanceScore * 100).toFixed(0)}%</span>
@@ -329,7 +331,7 @@ export function AgentWorkflowVisualizer({ steps, className, isLive = false }: Ag
           </div>
           <ul className="space-y-1">
             {subQueries.map((sq: SubQuery) => (
-              <li key={sq.id} className="bg-muted/60 rounded p-2">
+              <li key={sq.id} className="bg-muted/60 rounded p-2.5 leading-relaxed">
                 <div className="font-medium">{sq.query}</div>
                 <div className="text-muted-foreground">
                   Priority {sq.priority} • {sq.purpose}
@@ -344,7 +346,7 @@ export function AgentWorkflowVisualizer({ steps, className, isLive = false }: Ag
     if (step.agent === 'ReAct' && isReActResult(step.result)) {
       const iterations = step.result.steps as ReActStep[]
       return (
-        <div className="text-xs space-y-2">
+        <div className="text-xs space-y-2 leading-relaxed">
           <div className="flex items-center gap-2 text-muted-foreground font-medium">
             <ChatsCircle size={14} />
             Thought → Action → Observation
@@ -355,7 +357,7 @@ export function AgentWorkflowVisualizer({ steps, className, isLive = false }: Ag
                 key={idx}
                 initial={shouldReduceMotion ? false : { opacity: 0, y: 6 }}
                 animate={shouldReduceMotion ? false : { opacity: 1, y: 0 }}
-                className="bg-muted/60 rounded p-2 space-y-1"
+                className="bg-muted/60 rounded p-2.5 space-y-1 leading-relaxed"
               >
                 <div className="font-semibold text-muted-foreground">
                   Iteration {iteration.iteration}
@@ -382,11 +384,11 @@ export function AgentWorkflowVisualizer({ steps, className, isLive = false }: Ag
     if (step.agent === 'Expansion' && isExpansionResult(step.result)) {
       const expansion = step.result
       return (
-        <div className="text-xs space-y-2">
+        <div className="text-xs space-y-2 leading-relaxed">
           <div className="font-medium text-muted-foreground">Suggested Questions</div>
           <div className="grid gap-2 md:grid-cols-2">
             {expansion.suggestedQuestions.slice(0, 4).map((question, idx) => (
-              <div key={idx} className="bg-muted/60 rounded p-2">
+              <div key={idx} className="bg-muted/60 rounded p-2.5 leading-relaxed">
                 <div className="font-medium">{question.question}</div>
                 <div className="text-muted-foreground">
                   {question.category} • {(question.relevanceScore * 100).toFixed(0)}%
@@ -401,13 +403,13 @@ export function AgentWorkflowVisualizer({ steps, className, isLive = false }: Ag
     if (step.agent === 'Retrieval' && isSourceArray(step.result)) {
       const sources = step.result as Source[]
       return (
-        <div className="text-xs space-y-1">
+        <div className="text-xs space-y-1 leading-relaxed">
           <div className="font-medium text-muted-foreground">
             Retrieved sources ({sources.length})
           </div>
           <ul className="space-y-1">
             {sources.slice(0, 4).map((source, idx) => (
-              <li key={source.chunkId || idx} className="bg-muted/60 rounded p-2">
+              <li key={source.chunkId || idx} className="bg-muted/60 rounded p-2.5 leading-relaxed">
                 <div className="font-medium">{source.documentName}</div>
                 <div className="text-muted-foreground truncate">
                   {source.content?.slice(0, 120)}{source.content?.length > 120 ? '…' : ''}

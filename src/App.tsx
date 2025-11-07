@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react'
+import { useEffect } from 'react'
 import { useStorage } from '@/hooks/use-kv'
 import { ResponsiveNavigation } from '@/components/ResponsiveNavigation'
 import { ThemeToggle } from '@/components/ThemeToggle'
@@ -113,6 +113,15 @@ function App() {
               </div>
             </div>
             <ThemeToggle />
+          </div>
+          {/* Subtle step motif to connect the workflow visually */}
+          <div className="mt-4 flex items-center gap-2">
+            <div className="flex items-center gap-1.5 rounded-lg border border-border bg-muted/40 p-1.5">
+              <span className="rounded-md border border-border bg-background px-2 py-1 text-xs text-muted-foreground">Ingest</span>
+              <span className="rounded-md border border-border bg-background px-2 py-1 text-xs text-muted-foreground">Configure</span>
+              <span className="rounded-md border border-accent/30 bg-accent/10 px-2 py-1 text-xs text-foreground">Query</span>
+              <span className="rounded-md border border-border bg-background px-2 py-1 text-xs text-muted-foreground">Observe</span>
+            </div>
           </div>
         </div>
 

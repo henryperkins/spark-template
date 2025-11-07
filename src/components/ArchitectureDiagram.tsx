@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import { useState, type ReactNode, type CSSProperties } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -48,7 +48,7 @@ interface ArchitectureLayer {
   name: string
   description: string
   components: string[]
-  icon: React.ReactNode
+  icon: ReactNode
   accent: ArchitectureLayerAccent
   interactions: string[]
 }
@@ -60,7 +60,7 @@ interface ComponentDetail {
   patterns: string[]
 }
 
-const getLayerAccentStyles = (accent: ArchitectureLayerAccent): React.CSSProperties => ({
+const getLayerAccentStyles = (accent: ArchitectureLayerAccent): CSSProperties => ({
   backgroundColor: `var(--layer-${accent})`,
   color: `var(--layer-${accent}-foreground)`
 })

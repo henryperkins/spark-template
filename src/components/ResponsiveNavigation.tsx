@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { cn } from '@/lib/utils'
@@ -6,8 +6,8 @@ import { cn } from '@/lib/utils'
 interface NavTab {
   value: string
   label: string
-  icon: React.ReactNode
-  content: React.ReactNode
+  icon: ReactNode
+  content: ReactNode
 }
 
 interface ResponsiveNavigationProps {

@@ -1,4 +1,3 @@
-import React from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -34,17 +33,18 @@ export function SuggestedQuestions({ expansion, onQuestionSelect, loading = fals
   }
 
   const getCategoryColor = (category: string) => {
+    // Normalize to semantic status tokens for consistent theming across modes
     switch (category) {
       case 'clarification':
-        return 'bg-blue-2 text-blue-11 border-blue-9'
+        return 'bg-status-info/10 text-status-info-foreground border-status-info'
       case 'related':
-        return 'bg-purple-2 text-purple-11 border-purple-9'
+        return 'bg-status-processing/10 text-status-processing-foreground border-status-processing'
       case 'deeper':
-        return 'bg-green-2 text-green-11 border-green-9'
+        return 'bg-status-success/10 text-status-success-foreground border-status-success'
       case 'broader':
-        return 'bg-orange-2 text-orange-11 border-orange-9'
+        return 'bg-status-warning/10 text-status-warning-foreground border-status-warning'
       default:
-        return 'bg-neutral-2 text-neutral-11 border-neutral-9'
+        return 'bg-muted/50 text-muted-foreground border-border'
     }
   }
 

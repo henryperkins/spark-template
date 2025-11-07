@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect, useId } from 'react'
 import { useStorage } from '@/hooks/use-kv'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -16,6 +16,7 @@ import { azureServiceManager } from '@/lib/azure-service-manager'
 import { isCloudflareKVConfigured, testCloudflareKV } from '@/lib/cloudflare-kv'
 
 export function AzureConfiguration() {
+  const idPrefix = useId()
   const [config, setConfig] = useStorage<AzureConfig | null>('azure-config', null)
   const [status, setStatus] = useStorage<AzureConnectionStatus | null>('azure-status', null)
   const [savedConfigs, setSavedConfigs] = useStorage<SavedAzureConfig[]>('azure-saved-configs', [])
@@ -25,13 +26,17 @@ export function AzureConfiguration() {
       apiKey: '',
       deploymentName: '',
       embeddingDeploymentName: '',
-      apiVersion: '2024-08-01-preview'
+      apiVersion: '2025-08-01-preview',
+      useResponsesApi: false,
+      responsesStore: false,
+      responsesBackground: false,
+      responsesApiVersion: 'v1'
     },
     search: {
       endpoint: '',
       apiKey: '',
       indexName: 'documents',
-      apiVersion: '2024-05-01-preview',
+      apiVersion: '2025-08-01-preview',
       vectorDimensions: 1536,
       semanticConfiguration: {
         enabled: true,
@@ -336,9 +341,9 @@ export function AzureConfiguration() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {/* Load Configuration */}
               <div className="space-y-2">
-                <Label htmlFor="load-config">Load Configuration</Label>
+                <Label htmlFor={`${idPrefix}-load-config`}>Load Configuration</Label>
                 <Select value={selectedConfigId} onValueChange={handleLoadConfig}>
-                  <SelectTrigger id="load-config">
+                  <SelectTrigger id={`${idPrefix}-load-config`}>
                     <SelectValue placeholder="Select a saved configuration" />
                   </SelectTrigger>
                   <SelectContent>
@@ -405,18 +410,18 @@ export function AzureConfiguration() {
               <div className="mt-4 p-4 border rounded-lg bg-muted/50 space-y-3">
                 <h5 className="font-medium text-sm">Save Configuration</h5>
                 <div className="space-y-2">
-                  <Label htmlFor="config-name">Configuration Name *</Label>
+                  <Label htmlFor={`${idPrefix}-config-name`}>Configuration Name *</Label>
                   <Input
-                    id="config-name"
+                    id={`${idPrefix}-config-name`}
                     placeholder="e.g., Production, Development, Staging"
                     value={configName}
                     onChange={(e) => setConfigName(e.target.value)}
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="config-description">Description (Optional)</Label>
+                  <Label htmlFor={`${idPrefix}-config-description`}>Description (Optional)</Label>
                   <Input
-                    id="config-description"
+                    id={`${idPrefix}-config-description`}
                     placeholder="Brief description of this configuration"
                     value={configDescription}
                     onChange={(e) => setConfigDescription(e.target.value)}
@@ -512,46 +517,46 @@ export function AzureConfiguration() {
             <TabsContent value="openai" className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor="openai-endpoint">Endpoint URL</Label>
+                  <Label htmlFor={`${idPrefix}-openai-endpoint`}>Endpoint URL</Label>
                   <Input
-                    id="openai-endpoint"
+                    id={`${idPrefix}-openai-endpoint`}
                     placeholder="https://your-resource.openai.azure.com"
                     value={formData.openai.endpoint}
                     onChange={(e) => handleInputChange('openai', 'endpoint', e.target.value)}
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="openai-deployment">Chat Deployment Name</Label>
+                  <Label htmlFor={`${idPrefix}-openai-deployment`}>Chat Deployment Name</Label>
                   <Input
-                    id="openai-deployment"
+                    id={`${idPrefix}-openai-deployment`}
                     placeholder="gpt-4"
                     value={formData.openai.deploymentName}
                     onChange={(e) => handleInputChange('openai', 'deploymentName', e.target.value)}
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="openai-embedding-deployment">Embedding Deployment Name</Label>
+                  <Label htmlFor={`${idPrefix}-openai-embedding-deployment`}>Embedding Deployment Name</Label>
                   <Input
-                    id="openai-embedding-deployment"
+                    id={`${idPrefix}-openai-embedding-deployment`}
                     placeholder="text-embedding-ada-002"
                     value={formData.openai.embeddingDeploymentName}
                     onChange={(e) => handleInputChange('openai', 'embeddingDeploymentName', e.target.value)}
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="openai-version">API Version</Label>
+                  <Label htmlFor={`${idPrefix}-openai-version`}>API Version</Label>
                   <Input
-                    id="openai-version"
+                    id={`${idPrefix}-openai-version`}
                     value={formData.openai.apiVersion}
                     onChange={(e) => handleInputChange('openai', 'apiVersion', e.target.value)}
                   />
                 </div>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="openai-key">API Key</Label>
+                <Label htmlFor={`${idPrefix}-openai-key`}>API Key</Label>
                 <div className="flex gap-2">
                   <Input
-                    id="openai-key"
+                    id={`${idPrefix}-openai-key`}
                     name="openai-api-key"
                     type={showKeys.openai ? 'text' : 'password'}
                     placeholder="Your Azure OpenAI API key"
@@ -569,42 +574,181 @@ export function AzureConfiguration() {
                   </Button>
                 </div>
               </div>
+
+              {/* Responses API Configuration */}
+              <div className="mt-6 p-4 border rounded-lg bg-muted/30 space-y-4">
+                <div className="flex items-center gap-2">
+                  <Sparkle size={18} className="text-primary" />
+                  <h4 className="font-medium">Responses API (v1)</h4>
+                  <Badge variant="outline" className="ml-auto">Advanced</Badge>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  Use the new stateful v1 Responses API for chat and RAG (recommended for production)
+                </p>
+
+                <div className="space-y-4 pt-2">
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <Label htmlFor={`${idPrefix}-use-responses-api`} className="cursor-pointer">
+                        Use v1 Responses API for chat and RAG
+                      </Label>
+                      <p className="text-xs text-muted-foreground">
+                        Enables stateful conversations, tool calling, and advanced features
+                      </p>
+                    </div>
+                    <Switch
+                      id={`${idPrefix}-use-responses-api`}
+                      checked={formData.openai.useResponsesApi ?? false}
+                      onCheckedChange={(checked) =>
+                        setFormData(prev => ({
+                          ...prev,
+                          openai: { ...prev.openai, useResponsesApi: checked }
+                        }))
+                      }
+                    />
+                  </div>
+
+                  {formData.openai.useResponsesApi && (
+                    <>
+                      <div className="space-y-2">
+                        <Label htmlFor={`${idPrefix}-responses-model`}>Responses Model (Optional)</Label>
+                        <Input
+                          id={`${idPrefix}-responses-model`}
+                          placeholder={`Defaults to ${formData.openai.deploymentName || 'chat deployment'}`}
+                          value={formData.openai.responsesModel ?? ''}
+                          onChange={(e) =>
+                            setFormData(prev => ({
+                              ...prev,
+                              openai: { ...prev.openai, responsesModel: e.target.value || undefined }
+                            }))
+                          }
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Override the model used for Responses API calls
+                        </p>
+                      </div>
+
+                      <div className="flex items-center justify-between">
+                        <div className="space-y-0.5">
+                          <Label htmlFor={`${idPrefix}-responses-store`} className="cursor-pointer">
+                            Store Responses by default
+                          </Label>
+                          <p className="text-xs text-muted-foreground">
+                            30-day retention for conversation chaining
+                          </p>
+                        </div>
+                        <Switch
+                          id={`${idPrefix}-responses-store`}
+                          checked={formData.openai.responsesStore ?? false}
+                          onCheckedChange={(checked) =>
+                            setFormData(prev => ({
+                              ...prev,
+                              openai: { ...prev.openai, responsesStore: checked }
+                            }))
+                          }
+                        />
+                      </div>
+
+                      <div className="flex items-center justify-between">
+                        <div className="space-y-0.5">
+                          <Label htmlFor={`${idPrefix}-responses-background`} className="cursor-pointer">
+                            Run responses in background by default
+                          </Label>
+                          <p className="text-xs text-muted-foreground">
+                            Async processing for long-running tasks
+                          </p>
+                        </div>
+                        <Switch
+                          id={`${idPrefix}-responses-background`}
+                          checked={formData.openai.responsesBackground ?? false}
+                          onCheckedChange={(checked) =>
+                            setFormData(prev => ({
+                              ...prev,
+                              openai: { ...prev.openai, responsesBackground: checked }
+                            }))
+                          }
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor={`${idPrefix}-responses-timeout`}>Responses Timeout (ms)</Label>
+                        <Input
+                          id={`${idPrefix}-responses-timeout`}
+                          type="number"
+                          min={0}
+                          step={1000}
+                          placeholder="Default: no timeout"
+                          value={formData.openai.responsesTimeoutMs ?? ''}
+                          onChange={(e) => {
+                            const val = e.target.value ? parseInt(e.target.value, 10) : undefined
+                            setFormData(prev => ({
+                              ...prev,
+                              openai: { ...prev.openai, responsesTimeoutMs: val }
+                            }))
+                          }}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Request timeout in milliseconds (leave empty for no timeout)
+                        </p>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor={`${idPrefix}-responses-api-version`}>Responses API Version</Label>
+                        <Input
+                          id={`${idPrefix}-responses-api-version`}
+                          placeholder="v1"
+                          value={formData.openai.responsesApiVersion ?? 'v1'}
+                          onChange={(e) =>
+                            setFormData(prev => ({
+                              ...prev,
+                              openai: { ...prev.openai, responsesApiVersion: e.target.value || 'v1' }
+                            }))
+                          }
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Azure OpenAI v1 API version (default: v1)
+                        </p>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
             </TabsContent>
 
             <TabsContent value="search" className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor="search-endpoint">Service URL</Label>
+                  <Label htmlFor={`${idPrefix}-search-endpoint`}>Service URL</Label>
                   <Input
-                    id="search-endpoint"
+                    id={`${idPrefix}-search-endpoint`}
                     placeholder="https://your-service.search.windows.net"
                     value={formData.search.endpoint}
                     onChange={(e) => handleInputChange('search', 'endpoint', e.target.value)}
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="search-index">Index Name</Label>
+                  <Label htmlFor={`${idPrefix}-search-index`}>Index Name</Label>
                   <Input
-                    id="search-index"
+                    id={`${idPrefix}-search-index`}
                     placeholder="documents"
                     value={formData.search.indexName}
                     onChange={(e) => handleInputChange('search', 'indexName', e.target.value)}
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="search-version">API Version</Label>
+                  <Label htmlFor={`${idPrefix}-search-version`}>API Version</Label>
                   <Input
-                    id="search-version"
+                    id={`${idPrefix}-search-version`}
                     value={formData.search.apiVersion}
                     onChange={(e) => handleInputChange('search', 'apiVersion', e.target.value)}
                   />
                 </div>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="search-key">Admin API Key</Label>
+                <Label htmlFor={`${idPrefix}-search-key`}>Admin API Key</Label>
                 <div className="flex gap-2">
                   <Input
-                    id="search-key"
+                    id={`${idPrefix}-search-key`}
                     name="search-api-key"
                     type={showKeys.search ? 'text' : 'password'}
                     placeholder="Your Azure AI Search admin key"
@@ -623,9 +767,9 @@ export function AzureConfiguration() {
                 </div>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="vector-dimensions">Vector Dimensions</Label>
+                <Label htmlFor={`${idPrefix}-vector-dimensions`}>Vector Dimensions</Label>
                 <Input
-                  id="vector-dimensions"
+                  id={`${idPrefix}-vector-dimensions`}
                   type="number"
                   min={1}
                   step={1}
@@ -668,9 +812,9 @@ export function AzureConfiguration() {
                   {formData.search.semanticConfiguration?.enabled && (
                     <div className="space-y-3 pt-3 border-t">
                       <div className="space-y-2">
-                        <Label htmlFor="semantic-config-name">Configuration Name</Label>
+                        <Label htmlFor={`${idPrefix}-semantic-config-name`}>Configuration Name</Label>
                         <Input
-                          id="semantic-config-name"
+                          id={`${idPrefix}-semantic-config-name`}
                           placeholder="semantic-config"
                           value={formData.search.semanticConfiguration?.configName ?? 'semantic-config'}
                           onChange={(e) => 
@@ -688,13 +832,13 @@ export function AzureConfiguration() {
                         />
                       </div>
                       <div className="flex items-center justify-between">
-                        <Label htmlFor="prioritize-title" className="cursor-pointer">
+                        <Label htmlFor={`${idPrefix}-prioritize-title`} className="cursor-pointer">
                           Prioritize Document Titles
                         </Label>
                         <Switch
-                          id="prioritize-title"
+                          id={`${idPrefix}-prioritize-title`}
                           checked={formData.search.semanticConfiguration?.prioritizeTitle ?? true}
-                          onCheckedChange={(prioritizeTitle) => 
+                          onCheckedChange={(prioritizeTitle) =>
                             setFormData(prev => ({
                               ...prev,
                               search: {
@@ -709,11 +853,11 @@ export function AzureConfiguration() {
                         />
                       </div>
                       <div className="flex items-center justify-between">
-                        <Label htmlFor="prioritize-keywords" className="cursor-pointer">
+                        <Label htmlFor={`${idPrefix}-prioritize-keywords`} className="cursor-pointer">
                           Prioritize Metadata Keywords
                         </Label>
                         <Switch
-                          id="prioritize-keywords"
+                          id={`${idPrefix}-prioritize-keywords`}
                           checked={formData.search.semanticConfiguration?.prioritizeKeywords ?? true}
                           onCheckedChange={(prioritizeKeywords) => 
                             setFormData(prev => ({
@@ -760,10 +904,10 @@ export function AzureConfiguration() {
                   </p>
                   {formData.search.vectorCompression?.enabled && (
                     <div className="space-y-2 pt-3 border-t">
-                      <Label htmlFor="compression-method">Compression Method</Label>
+                      <Label htmlFor={`${idPrefix}-compression-method`}>Compression Method</Label>
                       <Select
                         value={formData.search.vectorCompression?.method ?? 'scalar'}
-                        onValueChange={(method: 'scalar' | 'binary') => 
+                        onValueChange={(method: 'scalar' | 'binary') =>
                           setFormData(prev => ({
                             ...prev,
                             search: {
@@ -776,7 +920,7 @@ export function AzureConfiguration() {
                           }))
                         }
                       >
-                        <SelectTrigger id="compression-method">
+                        <SelectTrigger id={`${idPrefix}-compression-method`}>
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>

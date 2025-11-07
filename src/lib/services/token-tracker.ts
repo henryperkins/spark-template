@@ -9,15 +9,20 @@ class StorageManager {
   private store = new Map<string, string>()
   private kv: CloudflareKVAdapter | null = null
   private initialized = false
+  private static hasLogged = false
 
   private initialize() {
     if (!this.initialized) {
       this.kv = createCloudflareKV()
       this.initialized = true
-      if (this.kv) {
-        console.info('[token-tracker] Using Cloudflare KV for persistence')
-      } else {
-        console.info('[token-tracker] Using in-memory storage')
+      // Only log once per runtime to reduce noise
+      if (!StorageManager.hasLogged) {
+        if (this.kv) {
+          console.info('[token-tracker] Using Cloudflare KV for persistence')
+        } else {
+          console.info('[token-tracker] Using in-memory storage')
+        }
+        StorageManager.hasLogged = true
       }
     }
   }

@@ -5,6 +5,10 @@ import { RoutingAgent, RoutingDecision, RetrievalStrategy } from './routing-agen
 import { CriticAgent, ValidationResult } from './critic-agent'
 import { ReActAgent, ReActResult } from './react-agent'
 import { QueryExpansionAgent, QueryExpansion } from './query-expansion'
+import { cacheManager } from '../cache-manager'
+import { DocumentAnalyzerAgent } from './document-analyzer'
+import type { ChunkingDecision } from './types'
+import { healthProgressAgent } from './health-progress-agent'
 import { findRelevantChunks, findRelevantChunksLocal, generateResponse } from '../rag'
 import { azureServiceManager } from '../azure-service-manager'
 import { AgentStepEvent, telemetry, type AgentStepMetadata } from '../services/telemetry'
@@ -72,6 +76,7 @@ export class AgenticOrchestrator {
   private criticAgent = new CriticAgent()
   private reactAgent = new ReActAgent()
   private expansionAgent = new QueryExpansionAgent()
+  private docAnalyzer = new DocumentAnalyzerAgent()
 
   async processQuery(
     query: string,
@@ -681,6 +686,77 @@ export class AgenticOrchestrator {
     ].join(' ')
   }
 
+  // --- Document Analysis State Machine (Layer 4) ---
+  async processDocumentAnalysis(
+    runId: string,
+    docSlug: string,
+    fileName: string,
+    contentSample: string
+  ): Promise<ChunkingDecision> {
+    const start = Date.now()
+    const id = runId || this.generateRunId()
+    const TTL_7_DAYS = 7 * 24 * 60 * 1000
+    const normalizedName = normalizeFileNameForAnalysis(fileName)
+    const cacheKey = `doc-analysis:${normalizedName}`
+    const contentHash = await computeContentHashForAnalysis(contentSample)
+
+    let state: DocAnalysisState = 'INIT'
+    let decision: ChunkingDecision | null = null
+
+    try {
+      await healthProgressAgent.heartbeat(id, 'init')
+      await healthProgressAgent.setProgress({ runId: id, docSlug, percent: 0, phase: 'init', updatedAt: new Date().toISOString() })
+      state = 'CHECK_CANCELLED'
+
+      if (await healthProgressAgent.isCancelled(id)) {
+        await healthProgressAgent.setProgress({ runId: id, docSlug, percent: 100, phase: 'complete', updatedAt: new Date().toISOString(), message: 'cancelled' })
+        this.logDocAnalysis('DOC_ANALYSIS_CANCELLED', { runId: id, docSlug })
+        return { strategy: 'semantic', chunkSize: 1000, overlap: 100, reasoning: 'Cancelled: returning safe default' }
+      }
+
+      state = 'CHECK_CACHE'
+      const cached = await cacheManager.get<ChunkingDecision>(cacheKey)
+      if (cached) {
+        await healthProgressAgent.setProgress({ runId: id, docSlug, percent: 100, phase: 'complete', updatedAt: new Date().toISOString() })
+        this.logDocAnalysis('doc_analysis_cache_hit', { runId: id, docSlug })
+        return cached
+      }
+      this.logDocAnalysis('doc_analysis_cache_miss', { runId: id, docSlug })
+      await healthProgressAgent.setProgress({ runId: id, docSlug, percent: 10, phase: 'analyzing', updatedAt: new Date().toISOString() })
+
+      state = 'LLM_ANALYZE'
+      const agentRes = await this.docAnalyzer.analyzeDocumentResult(fileName, contentSample)
+      if (agentRes.ok) {
+        decision = agentRes.value
+      } else {
+        this.logDocAnalysis('LLM_JSON_PARSE_FAIL', { runId: id, docSlug, code: agentRes.error.code })
+        decision = { strategy: 'semantic', chunkSize: 1000, overlap: 100, reasoning: 'Conservative default (unrecoverable error)' }
+      }
+
+      state = 'CACHE_WRITE'
+      await healthProgressAgent.setProgress({ runId: id, docSlug, percent: 90, phase: 'caching', updatedAt: new Date().toISOString() })
+      try {
+        await cacheManager.setWithSemanticHash(cacheKey, decision!, contentHash, TTL_7_DAYS)
+      } catch (err) {
+        console.warn('[doc-analysis] KV_WRITE_FAIL', { runId: id, docSlug, error: (err as Error)?.message })
+      }
+
+      state = 'COMPLETE'
+      await healthProgressAgent.heartbeat(id, 'complete')
+      await healthProgressAgent.setProgress({ runId: id, docSlug, percent: 100, phase: 'complete', updatedAt: new Date().toISOString() })
+      this.logDocAnalysis('doc_analysis_complete', { runId: id, docSlug, ms: Date.now() - start })
+      return decision!
+    } catch (error: any) {
+      console.error('[doc-analysis] ERROR', { runId: id, docSlug, state, error: error?.message })
+      await healthProgressAgent.setProgress({ runId: id, docSlug, percent: 100, phase: 'error', updatedAt: new Date().toISOString(), message: 'error' }).catch(() => void 0)
+      return { strategy: 'semantic', chunkSize: 1000, overlap: 100, reasoning: 'Conservative default (runtime error)' }
+    }
+  }
+
+  private logDocAnalysis(event: string, meta?: Record<string, unknown>): void {
+    try { console.info(JSON.stringify({ level: 'info', event, ...meta })) } catch { /* noop */ }
+  }
+
   private generateRunId(): string {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
       return crypto.randomUUID()
@@ -688,3 +764,44 @@ export class AgenticOrchestrator {
     return `run-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`
   }
 }
+
+// --- Document analysis orchestration (Layer 4 state machine) ---
+export interface ProcessDocumentAnalysisOptions {
+  runId?: string
+}
+
+type DocAnalysisState =
+  | 'INIT'
+  | 'CHECK_CANCELLED'
+  | 'CHECK_CACHE'
+  | 'LLM_ANALYZE'
+  | 'JSON_REPAIR'
+  | 'FALLBACK_ANALYZE'
+  | 'CACHE_WRITE'
+  | 'COMPLETE'
+  | 'ERROR'
+
+function normalizeFileNameForAnalysis(fileName: string): string {
+  return fileName.toLowerCase().replace(/\s+-\s+copy(\.\w+)?$/i, '$1')
+}
+
+async function computeContentHashForAnalysis(content: string): Promise<string> {
+  try {
+    const encoder = new TextEncoder()
+    const data = encoder.encode(content)
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data)
+    const hashArray = Array.from(new Uint8Array(hashBuffer))
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
+  } catch {
+    let hash = 0
+    for (let i = 0; i < content.length; i++) {
+      hash = (hash << 5) - hash + content.charCodeAt(i)
+      hash |= 0
+    }
+    return hash.toString(16)
+  }
+}
+
+export interface ChunkingDecisionResult extends ChunkingDecision {}
+
+// (removed duplicate class definition here; method attached to primary class below)

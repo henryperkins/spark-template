@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -14,7 +14,6 @@ import { AzureConfig, Document } from '@/types'
 import { findRelevantChunksWithMeta } from '@/lib/rag'
 import { queryHistoryService, QueryHistoryEntry } from '@/lib/services/query-history'
 import { toast } from 'sonner'
-import { useStorage } from '@/hooks/use-kv'
 
 interface SearchDebuggerProps {
   documents: Document[]
@@ -121,7 +120,7 @@ export function SearchDebugger({ documents }: SearchDebuggerProps) {
         documents,
         5,
         routing.strategy,
-        { namespaceId: (activeNamespace || azureConfig?.search?.namespace) || undefined }
+        { namespaceId: undefined }
       )
 
       setExplainResult({
@@ -695,7 +694,7 @@ export function SearchDebugger({ documents }: SearchDebuggerProps) {
                     </div>
                     <div className="space-y-1">
                       <div className="text-sm text-muted-foreground">With Embeddings</div>
-                      <div className="text-2xl font-bold text-green-11">
+                      <div className="text-2xl font-bold text-status-success">
                         {chunksWithEmbeddings} / {selectedDoc.chunks.length}
                       </div>
                     </div>
@@ -821,5 +820,3 @@ export function SearchDebugger({ documents }: SearchDebuggerProps) {
     </div>
   )
 }
-  const [azureConfig] = useStorage<AzureConfig | null>('azure-config', null)
-  const [activeNamespace] = useStorage<string>('active-namespace', '')

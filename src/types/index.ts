@@ -82,6 +82,13 @@ export interface AzureConfig {
     apiVersion: string
     enableStreaming?: boolean
     enableStoredCompletions?: boolean
+    // Responses API (v1) configuration
+    useResponsesApi?: boolean
+    responsesModel?: string
+    responsesStore?: boolean
+    responsesBackground?: boolean
+    responsesTimeoutMs?: number
+    responsesApiVersion?: string
   }
   search: {
     endpoint: string

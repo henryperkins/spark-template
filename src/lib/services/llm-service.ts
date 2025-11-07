@@ -11,11 +11,14 @@ export type LLMErrorCode = 'ETIMEDOUT' | 'ERATELIMIT' | 'EPARSE' | 'EREMOTE'
 export class LLMError extends Error {
   code: LLMErrorCode
   cause?: unknown
-  constructor(code: LLMErrorCode, message: string, cause?: unknown) {
+  // Optional raw text to assist JSON repair on EPARSE
+  rawText?: string
+  constructor(code: LLMErrorCode, message: string, cause?: unknown, rawText?: string) {
     super(message)
     this.name = 'LLMError'
     this.code = code
     this.cause = cause
+    this.rawText = rawText
   }
 }
 
@@ -33,12 +36,52 @@ export class LLMService {
   private lastRefill: number
   private readonly rate: number
   private readonly burst: number
+  private readonly strictModels = new Set([
+    'gpt-5-mini',
+    'gpt-5-mini-strict',
+    'o1',
+    'o1-mini',
+    'o1-preview',
+    'instruct-strict'
+  ])
 
   constructor() {
     this.rate = Math.max(1, appConfig.llm.rateLimitQPS)
     this.burst = Math.max(this.rate, appConfig.llm.rateLimitBurst)
     this.tokens = this.burst
     this.lastRefill = Date.now()
+  }
+
+  /**
+   * Check if a model deployment requires strict defaults (no temperature/topP overrides).
+   */
+  private isStrictDeployment(modelName?: string): boolean {
+    const name = (modelName || appConfig.model.defaultModel).toLowerCase()
+    return Array.from(this.strictModels).some(strict => name.includes(strict))
+  }
+
+  /**
+   * Sanitize completion options for strict deployments.
+   * Removes temperature and topP for models that don't support them.
+   */
+  private sanitizeOptionsForDeployment(
+    options: CompletionOptions
+  ): Omit<CompletionOptions, 'model'> & { maxTokens?: number; responseFormat?: 'text' | 'json_object' } {
+    const isStrict = this.isStrictDeployment(options.model)
+
+    if (isStrict) {
+      // Omit temperature and topP for strict deployments
+      return {
+        maxTokens: options.maxTokens
+      }
+    }
+
+    // For flexible deployments, pass all options
+    return {
+      maxTokens: options.maxTokens,
+      temperature: options.temperature,
+      topP: options.topP
+    }
   }
 
   private refillTokens(): void {
@@ -167,16 +210,12 @@ export class LLMService {
       const start = Date.now()
       // Priority 1: Azure OpenAI (production)
       if (azureServiceManager.hasOpenAI()) {
+        // Sanitize options for strict deployments
+        const azureOptions = this.sanitizeOptionsForDeployment(options)
+
         // Prefer path that returns usage metadata when available
-        const p = azureServiceManager.generateCompletionWithUsage?.(prompt, {
-          maxTokens: options.maxTokens,
-          temperature: options.temperature,
-          topP: options.topP
-        }) ?? azureServiceManager.generateCompletion(prompt, {
-          maxTokens: options.maxTokens,
-          temperature: options.temperature,
-          topP: options.topP
-        }).then(text => ({ text }))
+        const p = azureServiceManager.generateCompletionWithUsage?.(prompt, azureOptions)
+          ?? azureServiceManager.generateCompletion(prompt, azureOptions).then(text => ({ text }))
         const res = await this.withTimeout(p, timeoutMs)
         // Centralized recording (context + telemetry)
         this.recordLLMOutcome('azure', options.model, promptTokens, res.text, options, start, res.usage)
@@ -205,11 +244,19 @@ export class LLMService {
     schema: ZodSchema<T>,
     options: CompletionOptions = {}
   ): Promise<T> {
-    const raw = await this.generateRawJson(prompt, options)
     try {
+      const raw = await this.generateRawJson(prompt, options)
       return schema.parse(raw)
-    } catch (error) {
-      throw new LLMError('EPARSE', 'JSON schema validation failed', error)
+    } catch (err: any) {
+      if (err instanceof LLMError && err.code === 'EPARSE') {
+        // Preserve EPARSE with its rawText; caller (e.g. DocumentAnalyzerAgent) will repair.
+        throw err
+      }
+      if (err instanceof Error) {
+        // Schema parse failure or other error: attach message as rawText if useful
+        throw new LLMError('EPARSE', 'JSON schema validation failed', err, (err as any).rawText)
+      }
+      throw err
     }
   }
 
@@ -241,19 +288,16 @@ export class LLMService {
     const call = async () => {
       const start = Date.now()
       if (azureServiceManager.hasOpenAI()) {
+        // Sanitize options for strict deployments and add JSON format
+        const azureOptions = {
+          ...this.sanitizeOptionsForDeployment(options),
+          responseFormat: 'json_object' as const
+        }
+
         const response = await this.withTimeout(
           (async () => {
-            const r = await (azureServiceManager.generateCompletionWithUsage?.(prompt, {
-              maxTokens: options.maxTokens,
-              temperature: options.temperature,
-              topP: options.topP,
-              responseFormat: 'json_object'
-            }) ?? azureServiceManager.generateCompletion(prompt, {
-              maxTokens: options.maxTokens,
-              temperature: options.temperature,
-              topP: options.topP,
-              responseFormat: 'json_object'
-            }).then(text => ({ text })))
+            const r = await (azureServiceManager.generateCompletionWithUsage?.(prompt, azureOptions)
+              ?? azureServiceManager.generateCompletion(prompt, azureOptions).then(text => ({ text })))
             return r
           })(),
           timeoutMs
@@ -263,11 +307,11 @@ export class LLMService {
         return parsed
       } else {
         const startWorker = Date.now()
-        const response = await this.withTimeout(
+        const responseText = await this.withTimeout(
           this.callWorkerLLM(prompt, options.model, true),
           timeoutMs
         )
-        const parsed = this.parseJson(response)
+        const parsed = this.parseJson(responseText)
         this.recordLLMOutcome('worker', options.model, promptTokens, JSON.stringify(parsed), options, startWorker)
         return parsed
       }
@@ -310,12 +354,13 @@ export class LLMService {
         // return a deterministic stub instead of throwing.
         if (resp.status === 404) {
           if (forceJson) {
-            const stub = {
-              summary: resolvedPrompt.slice(0, 120),
-              note: 'Local dev stub (Worker /api/llm not running)',
-              model: model ?? appConfig.model.defaultModel,
+            const stubDecision = {
+              strategy: 'semantic',
+              chunkSize: 1000,
+              overlap: 100,
+              reasoning: 'Stubbed JSON decision for local/dev; Worker /api/llm not running.'
             }
-            return JSON.stringify(stub)
+            return JSON.stringify(stubDecision)
           }
           const head = resolvedPrompt.length > 300 ? resolvedPrompt.slice(0, 300) + '…' : resolvedPrompt
           return `Stubbed local response (model: ${model ?? appConfig.model.defaultModel}): ${head}`
@@ -331,12 +376,13 @@ export class LLMService {
     } catch (error) {
       // Network or other failures: in dev, provide a deterministic stub
       if (forceJson) {
-        const stub = {
-          summary: resolvedPrompt.slice(0, 120),
-          note: 'Local dev stub (Worker /api/llm unreachable)',
-          model: model ?? appConfig.model.defaultModel,
+        const stubDecision = {
+          strategy: 'semantic',
+          chunkSize: 1000,
+          overlap: 100,
+          reasoning: 'Stubbed JSON decision for local/dev; Worker /api/llm unreachable.'
         }
-        return JSON.stringify(stub)
+        return JSON.stringify(stubDecision)
       }
       const head = resolvedPrompt.length > 300 ? resolvedPrompt.slice(0, 300) + '…' : resolvedPrompt
       return `Stubbed local response (model: ${model ?? appConfig.model.defaultModel}): ${head}`
@@ -346,29 +392,46 @@ export class LLMService {
   private parseJson(response: string): unknown {
     const text = (response ?? '').trim()
 
-    // 1) Try direct parse
+    if (!text) {
+      throw new LLMError('EPARSE', 'Empty LLM response when JSON expected', undefined, '')
+    }
+
+    // 1) Direct parse
     try {
       return JSON.parse(text)
-    } catch { /* ignore parse error */ }
+    } catch {
+      // continue
+    }
 
-    // 2) Try fenced markdown ```json ... ```
+    // 2) ```json fenced block
     const md = text.match(/```json?\s*\n([\s\S]*?)\n```/i)
     if (md) {
       try {
         return JSON.parse(md[1])
-      } catch { /* ignore parse error */ }
+      } catch {
+        // continue
+      }
     }
 
-    // 3) Try first JSON object substring
-    const objectMatch = text.match(/\{[\s\S]*\}/)
-    if (objectMatch) {
+    // 3) First '{' to last '}' slice
+    const firstBrace = text.indexOf('{')
+    const lastBrace = text.lastIndexOf('}')
+    if (firstBrace !== -1 && lastBrace > firstBrace) {
+      const candidate = text.slice(firstBrace, lastBrace + 1)
       try {
-        return JSON.parse(objectMatch[0])
-      } catch { /* ignore parse error */ }
+        return JSON.parse(candidate)
+      } catch {
+        // continue
+      }
     }
 
-    // 4) Give up with diagnostic
-    throw new LLMError('EPARSE', `Could not parse JSON from LLM response: ${text.slice(0, 200)}`)
+    // 4) Give up; include rawText for repair
+    throw new LLMError(
+      'EPARSE',
+      'Could not parse JSON from LLM response',
+      undefined,
+      text.slice(0, 4000)
+    )
   }
 
   async *generateTextStream(

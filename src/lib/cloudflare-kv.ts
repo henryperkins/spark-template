@@ -39,6 +39,7 @@ export class CloudflareKV implements CloudflareKVAdapter {
   private baseUrl: string
   private headers: Record<string, string>
   private useWorkerAPI: boolean
+  private static hasLoggedMode = false
 
   constructor(config: CloudflareKVConfig) {
     // Check if we're running on Cloudflare Workers (has /api/kv endpoint)
@@ -51,7 +52,11 @@ export class CloudflareKV implements CloudflareKVAdapter {
       this.headers = {
         'Content-Type': 'application/json',
       }
-      console.info(`${LOG_PREFIX} Using Worker KV API`)
+      // Only log mode once per runtime to reduce noise
+      if (!CloudflareKV.hasLoggedMode) {
+        console.info(`${LOG_PREFIX} Using Worker KV API`)
+        CloudflareKV.hasLoggedMode = true
+      }
     } else {
       // Use Cloudflare REST API
       this.baseUrl = `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/storage/kv/namespaces/${config.namespaceId}`
@@ -100,9 +105,12 @@ export class CloudflareKV implements CloudflareKVAdapter {
 
     if (!response.ok) {
       const error = await response.text().catch(() => response.statusText)
-      throw new Error(
-        `${LOG_PREFIX} API error (${response.status}): ${error}`
-      )
+      const status = response.status
+      const kvHint =
+        this.useWorkerAPI && (status === 401 || status === 503)
+          ? '\n\nHint: The Worker KV API requires Authorization: Bearer KV_API_KEY.\n- Set Worker secret: npx wrangler secret put KV_API_KEY\n- Provide client token for dev: localStorage.setItem("KV_API_KEY", "<same-value>")\n- Optional (dev): expose VITE_KV_API_KEY in wrangler.toml [vars]'
+          : ''
+      throw new Error(`${LOG_PREFIX} API error (${status}): ${error}${kvHint}`)
     }
 
     return response
@@ -157,7 +165,14 @@ export class CloudflareKV implements CloudflareKVAdapter {
 
       if (this.useWorkerAPI) {
         // Worker API returns JSON directly
-        return await response.json()
+        const data = await response.json()
+
+        // Handle soft-missing keys (known keys that return 200 with configured:false)
+        if (typeof data === 'object' && data !== null && 'configured' in data && data.configured === false) {
+          return undefined
+        }
+
+        return data
       } else {
         // REST API returns raw value
         const text = await response.text()
@@ -237,6 +252,7 @@ export function isCloudflareKVConfigured(): boolean {
  * Create a Cloudflare KV instance from environment variables
  */
 let hasWarned = false
+let hasInitialized = false
 export function createCloudflareKV(): CloudflareKV | null {
   if (!isCloudflareKVConfigured()) {
     if (!hasWarned) {
@@ -254,7 +270,11 @@ export function createCloudflareKV(): CloudflareKV | null {
     apiToken: import.meta.env.VITE_CLOUDFLARE_API_TOKEN!,
   }
 
-  console.info(`${LOG_PREFIX} Initialized with namespace ${config.namespaceId}`)
+  // Only log initialization once per runtime to reduce noise
+  if (!hasInitialized) {
+    console.info(`${LOG_PREFIX} Initialized with namespace ${config.namespaceId}`)
+    hasInitialized = true
+  }
   return new CloudflareKV(config)
 }
 

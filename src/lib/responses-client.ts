@@ -1,0 +1,590 @@
+import { AzureConfig } from '@/types'
+
+/**
+ * Lightweight client for Azure OpenAI v1 Responses API.
+ * Wraps /openai/v1/responses in a project-friendly interface.
+ *
+ * Endpoint shape (from v1azureAPI.json servers):
+ *   {endpoint}/openai/v1
+ *
+ * Notes:
+ * - Non-breaking: only used when wired/enabled by AzureOpenAIService.
+ * - Does not depend on the OpenAI SDK; uses fetch directly.
+ */
+
+export interface ResponsesClientConfig {
+  endpoint: string // e.g. https://<resource>.openai.azure.com
+  apiKey?: string
+  tokenProvider?: () => Promise<string>
+  defaultModel: string
+  apiVersion?: string // default: 'v1'
+  timeoutMs?: number
+  defaultStore?: boolean
+  defaultBackground?: boolean
+  defaultMaxOutputTokens?: number
+  defaultHeaders?: Record<string, string>
+}
+
+export type ResponseRole = 'system' | 'developer' | 'user' | 'assistant'
+
+/**
+ * Minimal item types we care about for this project.
+ * We intentionally keep this narrow and tolerant of unknown fields.
+ */
+export type ResponseContentItem =
+  | {
+      type: 'input_text' | 'output_text'
+      text: string
+    }
+  | {
+      type: 'input_image'
+      image_url: string
+    }
+  | {
+      // generic catch-all to avoid runtime failures if new types appear
+      type: string
+      [key: string]: unknown
+    }
+
+export interface ResponseMessage {
+  id?: string
+  role: ResponseRole
+  content: ResponseContentItem[]
+}
+
+export interface ResponsesUsage {
+  inputTokens?: number
+  outputTokens?: number
+  totalTokens?: number
+  reasoningTokens?: number
+}
+
+export interface ResponsesResult {
+  id: string
+  status: string
+  model?: string
+  outputText: string
+  messages: ResponseMessage[]
+  usage?: ResponsesUsage
+  raw: any
+}
+
+/**
+ * Streaming event surface for higher-level services.
+ */
+export type ResponsesStreamEvent =
+  | { type: 'text-delta'; delta: string }
+  | { type: 'message-complete'; result: ResponsesResult }
+  | { type: 'error'; error: Error }
+
+export interface CreateResponseOptions {
+  model?: string
+  messages: Array<{ role: ResponseRole; content: string | ResponseContentItem[] }>
+
+  // Sampling / behavior
+  maxOutputTokens?: number
+  temperature?: number
+  topP?: number
+
+  // Storage / background
+  store?: boolean
+  background?: boolean
+
+  // Tools (function calling, MCP, etc.) - passed through opaquely
+  tools?: any[]
+  toolChoice?: any
+
+  // Additional raw fields if needed (e.g. metadata, reasoning, include, etc.)
+  extraBody?: Record<string, unknown>
+}
+
+/**
+ * Internal helper for building the input array expected by Responses API.
+ */
+function buildInputItemsFromMessages(
+  messages: Array<{ role: ResponseRole; content: string | ResponseContentItem[] }>
+): any[] {
+  return messages.map(m => {
+    const content: ResponseContentItem[] =
+      typeof m.content === 'string'
+        ? [
+            {
+              type: 'input_text',
+              text: m.content
+            }
+          ]
+        : m.content
+
+    return {
+      type: 'message',
+      role: m.role,
+      content
+    }
+  })
+}
+
+export class ResponsesClient {
+  private readonly config: Required<Pick<ResponsesClientConfig, 'endpoint' | 'defaultModel'>> &
+    Omit<ResponsesClientConfig, 'endpoint' | 'defaultModel'>
+
+  constructor(cfg: ResponsesClientConfig) {
+    const endpoint = cfg.endpoint.replace(/\/+$/, '')
+    if (!endpoint) {
+      throw new Error('[ResponsesClient] endpoint is required')
+    }
+    if (!cfg.defaultModel) {
+      throw new Error('[ResponsesClient] defaultModel is required')
+    }
+
+    this.config = {
+      ...cfg,
+      endpoint,
+      defaultModel: cfg.defaultModel,
+      apiVersion: cfg.apiVersion ?? 'v1'
+    }
+  }
+
+  /**
+   * Create a single Responses API call (non-streaming by default).
+   */
+  async createResponse(options: CreateResponseOptions): Promise<ResponsesResult> {
+    const body = await this.buildRequestBody(options, { stream: false })
+    const res = await this.fetchWithAuth('/responses', {
+      method: 'POST',
+      headers: this.jsonHeaders(),
+      body: JSON.stringify(body)
+    })
+
+    if (!res.ok) {
+      throw await this.buildError(res, body)
+    }
+
+    const json = await res.json()
+    return this.toResult(json)
+  }
+
+  /**
+   * Retrieve a previously created response by ID.
+   */
+  async retrieveResponse(id: string): Promise<ResponsesResult> {
+    const res = await this.fetchWithAuth(`/responses/${encodeURIComponent(id)}`, {
+      method: 'GET',
+      headers: this.jsonHeaders()
+    })
+
+    if (!res.ok) {
+      throw await this.buildError(res)
+    }
+
+    const json = await res.json()
+    return this.toResult(json)
+  }
+
+  /**
+   * Delete a stored response.
+   * Aligns with delete semantics described in responses docs.
+   */
+  async deleteResponse(
+    id: string
+  ): Promise<{ id: string; deleted: boolean; raw: any }> {
+    const res = await this.fetchWithAuth(`/responses/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: this.jsonHeaders()
+    })
+
+    if (!res.ok) {
+      throw await this.buildError(res)
+    }
+
+    const json = await res.json().catch(() => ({}))
+    const deleted =
+      json && typeof json.deleted === 'boolean' ? json.deleted : true
+    return {
+      id,
+      deleted,
+      raw: json
+    }
+  }
+
+  /**
+   * Start a background response (store=true, background=true).
+   * Call retrieveResponse(...) later to get final result.
+   */
+  async createBackgroundResponse(
+    options: CreateResponseOptions
+  ): Promise<{ id: string; status: string; raw: any }> {
+    const body = await this.buildRequestBody(
+      {
+        ...options,
+        store: options.store ?? true,
+        background: true
+      },
+      { stream: false }
+    )
+
+    const res = await this.fetchWithAuth('/responses', {
+      method: 'POST',
+      headers: this.jsonHeaders(),
+      body: JSON.stringify(body)
+    })
+
+    if (!res.ok) {
+      throw await this.buildError(res, body)
+    }
+
+    const json = await res.json()
+    return {
+      id: json.id,
+      status: json.status,
+      raw: json
+    }
+  }
+
+  /**
+   * Stream a response as text/event-stream.
+   * Returns an async iterator of normalized events.
+   */
+  async *streamResponse(
+    options: CreateResponseOptions
+  ): AsyncIterable<ResponsesStreamEvent> {
+    const body = await this.buildRequestBody(options, { stream: true })
+
+    const res = await this.fetchWithAuth('/responses', {
+      method: 'POST',
+      headers: this.jsonHeaders(),
+      body: JSON.stringify(body)
+    })
+
+    if (!res.ok || !res.body) {
+      const err = await this.buildError(res, body).catch(e => e)
+      yield { type: 'error', error: err }
+      return
+    }
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let fullText = ''
+    let lastJson: any = null
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        const chunk = decoder.decode(value, { stream: true })
+        const lines = chunk.split('\n').map(l => l.trim()).filter(Boolean)
+
+        for (const line of lines) {
+          if (!line.startsWith('data:')) {
+            continue
+          }
+          const data = line.slice('data:'.length).trim()
+          if (!data || data === '[DONE]') {
+            continue
+          }
+
+          try {
+            const parsed = JSON.parse(data)
+            lastJson = parsed
+
+            // Text delta event
+            const textDelta = this.extractTextDelta(parsed)
+            if (textDelta) {
+              fullText += textDelta
+              yield { type: 'text-delta', delta: textDelta }
+            }
+          } catch (e) {
+            yield {
+              type: 'error',
+              error: new Error(
+                `[ResponsesClient] Failed to parse SSE data chunk: ${
+                  e instanceof Error ? e.message : String(e)
+                }`
+              )
+            }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock()
+    }
+
+    if (lastJson) {
+      // If we got a final structured response object, expose it.
+      const result = this.toResult(lastJson, fullText)
+      yield { type: 'message-complete', result }
+    } else if (fullText) {
+      // Fallback: create a synthetic result with just text.
+      const synthetic: ResponsesResult = {
+        id: '',
+        status: 'completed',
+        outputText: fullText,
+        messages: [],
+        raw: null
+      }
+      yield { type: 'message-complete', result: synthetic }
+    }
+  }
+
+  /**
+   * Convenience: iterate only raw text deltas.
+   */
+  async *streamText(
+    options: CreateResponseOptions
+  ): AsyncIterable<string> {
+    for await (const ev of this.streamResponse(options)) {
+      if (ev.type === 'text-delta') {
+        yield ev.delta
+      }
+    }
+  }
+
+  // ===== Internal helpers =====
+
+  private async buildRequestBody(
+    options: CreateResponseOptions,
+    flags: { stream: boolean }
+  ): Promise<Record<string, unknown>> {
+    const model = options.model ?? this.config.defaultModel
+    const input = buildInputItemsFromMessages(options.messages)
+
+    const body: Record<string, unknown> = {
+      model,
+      input,
+      stream: flags.stream
+    }
+
+    const maxOut =
+      options.maxOutputTokens ??
+      this.config.defaultMaxOutputTokens
+    if (maxOut && maxOut > 0) {
+      body.max_output_tokens = maxOut
+    }
+
+    if (typeof options.temperature === 'number') {
+      body.temperature = options.temperature
+    }
+    if (typeof options.topP === 'number') {
+      body.top_p = options.topP
+    }
+
+    const store =
+      typeof options.store === 'boolean'
+        ? options.store
+        : this.config.defaultStore
+    if (typeof store === 'boolean') {
+      body.store = store
+    }
+
+    const background =
+      typeof options.background === 'boolean'
+        ? options.background
+        : this.config.defaultBackground
+    if (typeof background === 'boolean') {
+      body.background = background
+    }
+
+    if (options.tools && options.tools.length > 0) {
+      body.tools = options.tools
+    }
+    if (options.toolChoice !== undefined) {
+      body.tool_choice = options.toolChoice
+    }
+
+    if (options.extraBody) {
+      Object.assign(body, options.extraBody)
+    }
+
+    return body
+  }
+
+  private async fetchWithAuth(
+    path: string,
+    init: RequestInit
+  ): Promise<Response> {
+    const url = `${this.config.endpoint}/openai/v1${path}`
+
+    const headers: Record<string, string> = {
+      ...(this.config.defaultHeaders || {}),
+      ...(init.headers as Record<string, string>),
+      // Azure v1 spec uses 'api-key' or 'authorization' (case-insensitive) via securitySchemes
+    }
+
+    if (this.config.apiKey) {
+      headers['api-key'] = this.config.apiKey
+    } else if (this.config.tokenProvider) {
+      const token = await this.config.tokenProvider()
+      headers['Authorization'] = `Bearer ${token}`
+    }
+
+    // Set explicit api-version header when configured; otherwise default is v1.
+    if (this.config.apiVersion) {
+      headers['api-version'] = this.config.apiVersion
+    }
+
+    const controller =
+      this.config.timeoutMs && typeof AbortController !== 'undefined'
+        ? new AbortController()
+        : undefined
+    const timeout =
+      controller && this.config.timeoutMs
+        ? setTimeout(() => controller.abort(), this.config.timeoutMs)
+        : null
+
+    try {
+      return await fetch(url, {
+        ...init,
+        headers,
+        signal: controller?.signal
+      })
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout)
+      }
+    }
+  }
+
+  private jsonHeaders(): Record<string, string> {
+    return {
+      'Content-Type': 'application/json',
+      ...(this.config.defaultHeaders || {})
+    }
+  }
+
+  private async buildError(
+    res: Response,
+    body?: Record<string, unknown>
+  ): Promise<Error> {
+    let parsed: any = null
+    try {
+      parsed = await res.json()
+    } catch {
+      // ignore
+    }
+
+    const message =
+      parsed?.error?.message ||
+      parsed?.message ||
+      `Responses API request failed with status ${res.status}`
+
+    const err = new Error(
+      `[ResponsesClient] ${message}`
+    ) as Error & {
+      status?: number
+      code?: string
+      requestId?: string | null
+      responseBody?: any
+      requestBody?: any
+    }
+
+    err.status = res.status
+    err.code = parsed?.error?.code
+    err.requestId =
+      res.headers.get('x-ms-request-id') ||
+      res.headers.get('apim-request-id')
+    err.responseBody = parsed
+    if (body) {
+      // sanitized: no secrets stored here
+      err.requestBody = body
+    }
+
+    return err
+  }
+
+  private toResult(json: any, overrideText?: string): ResponsesResult {
+    const outputText =
+      overrideText ??
+      this.extractFirstOutputText(json) ??
+      ''
+
+    const messages: ResponseMessage[] = Array.isArray(json.output)
+      ? json.output
+          .filter((item: any) => item && item.type === 'message')
+          .map((item: any) => ({
+            id: item.id,
+            role: item.role as ResponseRole,
+            content: Array.isArray(item.content)
+              ? item.content.map((c: any) => ({
+                  type: c.type,
+                  text: c.text,
+                  ...c
+                }))
+              : []
+          }))
+      : []
+
+    const usage: ResponsesUsage | undefined = json.usage
+      ? {
+          inputTokens: numberOrUndefined(json.usage.input_tokens),
+          outputTokens: numberOrUndefined(json.usage.output_tokens),
+          totalTokens: numberOrUndefined(json.usage.total_tokens),
+          reasoningTokens: json.usage.output_tokens_details
+            ? numberOrUndefined(
+                json.usage.output_tokens_details.reasoning_tokens
+              )
+            : undefined
+        }
+      : undefined
+
+    return {
+      id: json.id,
+      status: json.status ?? 'completed',
+      model: json.model,
+      outputText,
+      messages,
+      usage,
+      raw: json
+    }
+
+    function numberOrUndefined(v: any): number | undefined {
+      return typeof v === 'number' && Number.isFinite(v) ? v : undefined
+    }
+  }
+
+  private extractFirstOutputText(json: any): string | undefined {
+    if (!json) return undefined
+    if (typeof json.text === 'string') {
+      return json.text
+    }
+
+    if (Array.isArray(json.output)) {
+      for (const item of json.output) {
+        if (item?.type === 'message' && Array.isArray(item.content)) {
+          for (const c of item.content) {
+            if (
+              (c.type === 'output_text' || c.type === 'input_text') &&
+              typeof c.text === 'string'
+            ) {
+              return c.text
+            }
+          }
+        }
+      }
+    }
+
+    return undefined
+  }
+
+  private extractTextDelta(parsed: any): string | null {
+    // Handle incremental output events for Responses stream.
+    // Different implementations may emit specialized event types; we treat
+    // any `output_text.delta`-like payloads as text.
+    try {
+      // Common shape (per docs examples): event.type == 'response.output_text.delta'
+      if (
+        typeof parsed === 'object' &&
+        parsed !== null &&
+        typeof parsed.type === 'string'
+      ) {
+        if (
+          parsed.type === 'response.output_text.delta' &&
+          typeof parsed.delta === 'string'
+        ) {
+          return parsed.delta
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return null
+  }
+}

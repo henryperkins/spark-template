@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import { useState, useId } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -14,6 +14,7 @@ interface GitHubIngestionProps {
 }
 
 export function GitHubIngestion({ onDocumentsIngested }: GitHubIngestionProps) {
+  const idPrefix = useId()
   const [config, setConfig] = useState<GitHubRepo>({
     owner: '',
     repo: '',
@@ -96,9 +97,9 @@ export function GitHubIngestion({ onDocumentsIngested }: GitHubIngestionProps) {
         <form onSubmit={(e) => { e.preventDefault(); }}>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="github-owner">Owner</Label>
+              <Label htmlFor={`${idPrefix}-github-owner`}>Owner</Label>
               <Input
-                id="github-owner"
+                id={`${idPrefix}-github-owner`}
                 name="owner"
                 placeholder="facebook"
                 value={config.owner}
@@ -106,9 +107,9 @@ export function GitHubIngestion({ onDocumentsIngested }: GitHubIngestionProps) {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="github-repo">Repository</Label>
+              <Label htmlFor={`${idPrefix}-github-repo`}>Repository</Label>
               <Input
-                id="github-repo"
+                id={`${idPrefix}-github-repo`}
                 name="repo"
                 placeholder="react"
                 value={config.repo}
@@ -119,9 +120,9 @@ export function GitHubIngestion({ onDocumentsIngested }: GitHubIngestionProps) {
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="github-branch">Branch (optional)</Label>
+              <Label htmlFor={`${idPrefix}-github-branch`}>Branch (optional)</Label>
               <Input
-                id="github-branch"
+                id={`${idPrefix}-github-branch`}
                 name="branch"
                 placeholder="main"
                 value={config.branch}
@@ -129,9 +130,9 @@ export function GitHubIngestion({ onDocumentsIngested }: GitHubIngestionProps) {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="github-path">Path (optional)</Label>
+              <Label htmlFor={`${idPrefix}-github-path`}>Path (optional)</Label>
               <Input
-                id="github-path"
+                id={`${idPrefix}-github-path`}
                 name="path"
                 placeholder="docs/"
                 value={config.path}
@@ -141,9 +142,9 @@ export function GitHubIngestion({ onDocumentsIngested }: GitHubIngestionProps) {
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="github-token">Personal Access Token (optional)</Label>
+            <Label htmlFor={`${idPrefix}-github-token`}>Personal Access Token (optional)</Label>
             <Input
-              id="github-token"
+              id={`${idPrefix}-github-token`}
               name="token"
               type="password"
               placeholder="ghp_xxxxxxxxxxxx"

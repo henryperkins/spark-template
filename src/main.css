@@ -46,9 +46,7 @@
   }
 
   .error-details {
-    @apply max-h-32 max-w-full overflow-auto whitespace-pre-wrap break-words rounded-md border p-2.5 text-xs text-status-error font-mono leading-relaxed;
-    border-color: var(--red-6);
-    background-color: var(--red-1);
+    @apply max-h-32 max-w-full overflow-auto whitespace-pre-wrap break-words rounded-md border border-destructive bg-destructive/10 p-2.5 text-xs text-status-error font-mono leading-relaxed;
   }
 
   .error-summary {

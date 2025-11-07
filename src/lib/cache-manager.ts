@@ -10,6 +10,130 @@ export interface CacheEntry<T = unknown> {
   semanticHash?: string
 }
 
+export interface GuidanceProfile {
+  // shape is flexible; keep minimal to avoid coupling
+  completionStyle?: string
+  loggingLevel?: 'info' | 'debug' | 'warn' | 'error'
+  pageSize?: number
+  maxPages?: number
+}
+
+const missingKeyLogCache = new Set<string>()
+// Track missing keys with expiry to avoid repeated 404 fetches (key -> expiry timestamp)
+const missingKeyExpiry = new Map<string, number>()
+const MISSING_KEY_TTL_MS = 5 * 60 * 1000 // 5 minutes
+
+const DEFAULT_GUIDANCE: Record<string, GuidanceProfile> = {
+  'cache:v2025.01:doc-analysis:Completion.md': {
+    completionStyle: 'concise-expert'
+  },
+  'cache:v2025.01:doc-analysis:Logging.md': {
+    loggingLevel: 'info'
+  },
+  'cache:v2025.01:doc-analysis:Pagination.md': {
+    pageSize: 50,
+    maxPages: 10
+  },
+  'cache:v2025.01:doc-analysis:Authorization.md': {
+    completionStyle: 'secure-strict'
+  },
+  'cache:v2025.01:doc-analysis:Lifecycle.md': {
+    completionStyle: 'detailed'
+  },
+  'cache:v2025.01:doc-analysis:Overview.md': {
+    completionStyle: 'comprehensive'
+  },
+  'cache:v2025.01:doc-analysis:Security Best Practices.md': {
+    completionStyle: 'secure-strict',
+    loggingLevel: 'warn'
+  }
+}
+
+/**
+ * Fetch a guidance doc/config from KV with robust fallback:
+ * - On 200: return parsed content.
+ * - On 404: log once per key, return default (if configured) or null.
+ * - On transient errors: minimal retry, then fall back.
+ */
+export async function getFromKVWithFallback<T = unknown>(
+  key: string,
+  fetcher: (key: string) => Promise<Response>,
+  options?: { parseJson?: boolean; retries?: number }
+): Promise<T | null> {
+  // Check negative cache to avoid repeated 404s
+  const cachedExpiry = missingKeyExpiry.get(key)
+  if (cachedExpiry && cachedExpiry > Date.now()) {
+    // Key is known to be missing, return default without re-fetching
+    const fallback = (DEFAULT_GUIDANCE[key] as T | undefined) ?? null
+    return fallback
+  }
+
+  const retries = options?.retries ?? 1
+  let attempt = 0
+
+  while (true) {
+    try {
+      const res = await fetcher(key)
+
+      if (res.status === 404) {
+        // Add to negative cache to prevent repeated fetches
+        missingKeyExpiry.set(key, Date.now() + MISSING_KEY_TTL_MS)
+
+        if (!missingKeyLogCache.has(key)) {
+          missingKeyLogCache.add(key)
+          console.warn(`[kv] Guidance key missing: ${key} (using defaults if available)`)
+        }
+        const fallback = (DEFAULT_GUIDANCE[key] as T | undefined) ?? null
+        return fallback
+      }
+
+      if (!res.ok) {
+        // Non-404: transient/infra errors, allow small retry then fallback
+        if (attempt < retries && isTransientStatus(res.status)) {
+          attempt++
+          await new Promise(r => setTimeout(r, 200 * attempt))
+          continue
+        }
+        console.warn(
+          `[kv] Failed to load key=${key}, status=${res.status} (using defaults if available)`
+        )
+        const fallback = (DEFAULT_GUIDANCE[key] as T | undefined) ?? null
+        return fallback
+      }
+
+      // Successfully fetched, clear from negative cache if present
+      missingKeyExpiry.delete(key)
+
+      const text = await res.text()
+      if (options?.parseJson) {
+        try {
+          return JSON.parse(text) as T
+        } catch {
+          console.warn(`[kv] Invalid JSON for key=${key}, returning raw text`)
+        }
+      }
+      return text as unknown as T
+    } catch (err) {
+      if (attempt < retries) {
+        attempt++
+        await new Promise(r => setTimeout(r, 200 * attempt))
+        continue
+      }
+      console.warn(
+        `[kv] Error fetching key=${key}: ${
+          err instanceof Error ? err.message : String(err)
+        } (using defaults if available)`
+      )
+      const fallback = (DEFAULT_GUIDANCE[key] as T | undefined) ?? null
+      return fallback
+    }
+  }
+
+  function isTransientStatus(status: number): boolean {
+    return [429, 500, 502, 503, 504].includes(status)
+  }
+}
+
 export interface CacheInvalidationEvent {
   type: 'ttl' | 'version' | 'prefix' | 'semantic' | 'manual'
   keys: string[]
@@ -61,14 +185,19 @@ export class CacheManager {
   private hits = 0
   private misses = 0
   private kv: CloudflareKVAdapter
+  private static hasLogged = false
 
   constructor(kv?: CloudflareKVAdapter | null) {
     const cf = kv ?? createCloudflareKV()
     this.kv = cf || localStorageAdapter
-    if (cf) {
-      console.info('[cache-manager] Using Cloudflare KV')
-    } else {
-      console.info('[cache-manager] Using localStorage fallback')
+    // Only log once per runtime to reduce noise
+    if (!CacheManager.hasLogged) {
+      if (cf) {
+        console.info('[cache-manager] Using Cloudflare KV')
+      } else {
+        console.info('[cache-manager] Using localStorage fallback')
+      }
+      CacheManager.hasLogged = true
     }
   }
 

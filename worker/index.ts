@@ -295,12 +295,14 @@ async function handleLLMRequest(request: Request, env: Env): Promise<Response> {
 
     // Deterministic stub to ensure local/dev behavior without upstream config.
     if (body.json) {
-      const answer = {
-        summary: promptText.slice(0, 120),
-        note: 'Stubbed worker JSON response (configure upstream to disable stub).',
-        model: body.model ?? 'worker-stub',
+      // Emit a schema-conforming stub for JSON-mode calls
+      const stubDecision = {
+        strategy: 'semantic',
+        chunkSize: 1000,
+        overlap: 100,
+        reasoning: 'Stubbed JSON decision for local/dev; configure OPENAI_API_KEY for real analysis.'
       }
-      return Response.json({ text: JSON.stringify(answer) }, { headers: corsHeaders })
+      return Response.json({ text: JSON.stringify(stubDecision) }, { headers: corsHeaders })
     }
     const text =
       `Stubbed worker response (model: ${body.model ?? 'worker-stub'}): ` +
@@ -359,7 +361,8 @@ async function handleTelemetryRequest(request: Request, _env: Env): Promise<Resp
 async function handleKVRequest(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url)
   const path = url.pathname.replace('/api/kv', '')
-  const key = path.slice(1) // Remove leading slash
+  const rawKey = path.startsWith('/') ? path.slice(1) : path
+  const key = rawKey ? decodeURIComponent(rawKey) : ''
 
   // CORS headers for restricted origins
   const corsHeaders = corsHeadersFor(request, {
@@ -378,6 +381,56 @@ async function handleKVRequest(request: Request, env: Env): Promise<Response> {
   // Enforce origin on CORS requests
   if (request.headers.get('Origin') && !isOriginAllowed(request)) {
     return new Response('CORS origin not allowed', { status: 403, headers: corsHeaders })
+  }
+
+  // Health endpoint - check KV configuration without requiring auth
+  if (request.method === 'GET' && key === 'health') {
+    const hasKVApiKey = Boolean(env.KV_API_KEY)
+    const hasKVBinding = Boolean(env.RAG_KV)
+
+    let canAccessKV = false
+    let kvError: string | null = null
+
+    if (hasKVBinding) {
+      try {
+        // Test KV access with a simple list operation
+        await (env.RAG_KV as any).list({ limit: 1 })
+        canAccessKV = true
+      } catch (error) {
+        kvError = (error as Error)?.message || 'Unknown KV error'
+      }
+    }
+
+    const isHealthy = hasKVApiKey && hasKVBinding && canAccessKV
+
+    logStructured({
+      level: isHealthy ? 'info' : 'warn',
+      event: 'kv_health_check',
+      metadata: {
+        ok: isHealthy,
+        hasKVApiKey,
+        hasKVBinding,
+        canAccessKV,
+        kvError,
+      },
+    })
+
+    return Response.json(
+      {
+        ok: isHealthy,
+        mode: 'worker',
+        details: {
+          kvApiKeyConfigured: hasKVApiKey,
+          kvBindingPresent: hasKVBinding,
+          kvAccessible: canAccessKV,
+          error: kvError,
+        },
+      },
+      {
+        status: isHealthy ? 200 : 503,
+        headers: corsHeaders
+      }
+    )
   }
 
   const expectedApiKey = env.KV_API_KEY
@@ -441,15 +494,61 @@ async function handleKVRequest(request: Request, env: Env): Promise<Response> {
           )
         }
 
-        // Get single key
-        const value = await (env.RAG_KV as any).get(key, { type: 'json' })
-        if (value === null) {
+        // Get single key with defensive JSON parsing
+        let value: any = null
+        try {
+          value = await (env.RAG_KV as any).get(key, { type: 'json' })
+        } catch (parseError) {
+          // JSON parse error: value is corrupted or not valid JSON
           logStructured({
             level: 'warn',
+            event: 'kv_invalid_json',
+            key,
+            metadata: { error: (parseError as Error)?.message || 'Parse error' },
+          })
+          // Treat invalid JSON as missing/unconfigured
+          value = null
+        }
+
+        if (value === null) {
+          // Known expected keys that may not be configured yet
+          // Return 200 with structured response instead of 404 to reduce console noise
+          const knownKeys = [
+            'azure-config',
+            'azure-status',
+            'azure-saved-configs',
+            'rag-documents',
+            'llm-usage-metrics',
+            'cache-metrics',
+            'query-history',
+            'alert-history',
+            'alert-config',
+            'active-namespace',
+            'token-budget',
+          ]
+
+          if (knownKeys.includes(key)) {
+            logStructured({
+              level: 'info',
+              event: 'kv_key_not_configured',
+              key,
+            })
+            return Response.json(
+              { configured: false, key, message: 'Key not yet configured' },
+              { headers: corsHeaders }
+            )
+          }
+
+          // Unknown keys: return structured 404
+          logStructured({
+            level: 'info',
             event: 'kv_key_not_found',
             key,
           })
-          return new Response('Not found', { status: 404, headers: corsHeaders })
+          return Response.json(
+            { error: 'Not found', key, message: 'Key does not exist' },
+            { status: 404, headers: corsHeaders }
+          )
         }
 
         logStructured({
