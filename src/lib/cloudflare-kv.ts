@@ -236,11 +236,15 @@ export function isCloudflareKVConfigured(): boolean {
 /**
  * Create a Cloudflare KV instance from environment variables
  */
+let hasWarned = false
 export function createCloudflareKV(): CloudflareKV | null {
   if (!isCloudflareKVConfigured()) {
-    console.warn(
-      `${LOG_PREFIX} Not configured. Set VITE_CLOUDFLARE_ACCOUNT_ID, VITE_CLOUDFLARE_KV_NAMESPACE_ID, and VITE_CLOUDFLARE_API_TOKEN`
-    )
+    if (!hasWarned) {
+      console.warn(
+        `${LOG_PREFIX} Not configured. Set VITE_CLOUDFLARE_ACCOUNT_ID, VITE_CLOUDFLARE_KV_NAMESPACE_ID, and VITE_CLOUDFLARE_API_TOKEN`
+      )
+      hasWarned = true
+    }
     return null
   }
 
