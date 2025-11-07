@@ -106,10 +106,20 @@ export interface CreateResponseOptions {
   // Additional raw fields if needed (e.g. metadata, include, etc.)
   extraBody?: Record<string, unknown>
 
-  // Response format control (aligns with v1 `response_format`)
+  // Response format control (aligns with v1 text.format helper)
   responseFormat?:
     | { type: 'text' }
-    | { type: 'json_schema'; json_schema: Record<string, unknown> }
+    | { type: 'json_object' }
+    | {
+        type: 'json_schema'
+        json_schema: {
+          name?: string
+          schema?: Record<string, unknown>
+          description?: string
+          strict?: boolean
+          [key: string]: unknown
+        }
+      }
 }
 
 /**
@@ -428,14 +438,56 @@ export class ResponsesClient {
       body.tool_choice = options.toolChoice
     }
 
-    // Map high-level responseFormat helper into spec-aligned response_format
+    // Map high-level responseFormat helper into spec-aligned text.format structure
     if (options.responseFormat) {
+      const ensureTextContainer = () => {
+        if (!body.text || typeof body.text !== 'object') {
+          body.text = {}
+        }
+        return body.text as Record<string, unknown>
+      }
+
+      const target = ensureTextContainer()
+
       if (options.responseFormat.type === 'text') {
-        body.response_format = { type: 'text' }
+        target.format = { type: 'text' }
+      } else if (options.responseFormat.type === 'json_object') {
+        target.format = { type: 'json_object' }
       } else if (options.responseFormat.type === 'json_schema') {
-        body.response_format = {
+        const formatSource = options.responseFormat.json_schema || {}
+        const hasWrapper =
+          formatSource && typeof formatSource === 'object' && 'schema' in formatSource
+
+        const schemaCandidate = hasWrapper
+          ? (formatSource as { schema?: Record<string, unknown> }).schema
+          : (formatSource as Record<string, unknown>)
+
+        const schema =
+          schemaCandidate && typeof schemaCandidate === 'object'
+            ? (schemaCandidate as Record<string, unknown>)
+            : {}
+
+        const name =
+          hasWrapper && typeof (formatSource as { name?: unknown }).name === 'string'
+            ? ((formatSource as { name: string }).name.trim() || 'response')
+            : 'response'
+
+        const description =
+          hasWrapper && typeof (formatSource as { description?: unknown }).description === 'string'
+            ? (formatSource as { description: string }).description
+            : undefined
+
+        const strict =
+          hasWrapper && typeof (formatSource as { strict?: unknown }).strict === 'boolean'
+            ? (formatSource as { strict: boolean }).strict
+            : undefined
+
+        target.format = {
           type: 'json_schema',
-          json_schema: options.responseFormat.json_schema
+          name,
+          schema,
+          ...(description ? { description } : {}),
+          ...(strict !== undefined ? { strict } : {})
         }
       }
     }

@@ -376,28 +376,33 @@ export class AzureOpenAIService {
           maxOutputTokens: options.maxTokens,
           temperature: options.temperature,
           topP: options.topP,
-          extraBody:
+          responseFormat:
             options.responseFormat === 'json_object'
-              ? { response_format: { type: 'json_object' } }
-              : undefined
+              ? { type: 'json_object' }
+              : { type: 'text' }
         })) {
           options.onChunk?.(delta)
         }
         return ''
       } else {
         // Non-streaming path
-        const result = await this.responsesClient.createResponse({
-          messages: this.toResponseMessages(userMessages),
-          instructions: systemInstructions,
-          maxOutputTokens: options?.maxTokens,
-          temperature: options?.temperature,
-          topP: options?.topP,
-          responseFormat:
-            options?.responseFormat === 'json_object'
-              ? { type: 'json_schema', json_schema: {} }
-              : { type: 'text' }
-        })
-        return result.outputText
+        try {
+          const result = await this.responsesClient.createResponse({
+            messages: this.toResponseMessages(userMessages),
+            instructions: systemInstructions,
+            maxOutputTokens: options?.maxTokens,
+            temperature: options?.temperature,
+            topP: options?.topP,
+            responseFormat:
+              options?.responseFormat === 'json_object'
+                ? { type: 'json_object' }
+                : { type: 'text' }
+          })
+          return result.outputText
+        } catch (error) {
+          this.logResponsesClient400(error, options?.responseFormat === 'json_object')
+          throw error
+        }
       }
     }
 
@@ -442,27 +447,32 @@ export class AzureOpenAIService {
 
     // RESPONSES API PATH
     if (this.responsesClient) {
-      const result = await this.responsesClient.createResponse({
-        messages: this.toResponseMessages(userMessages),
-        instructions: systemInstructions,
-        maxOutputTokens: options?.maxTokens,
-        temperature: options?.temperature,
-        topP: options?.topP,
-        responseFormat:
-          options?.responseFormat === 'json_object'
-            ? { type: 'json_schema', json_schema: {} }
-            : { type: 'text' }
-      })
+      try {
+        const result = await this.responsesClient.createResponse({
+          messages: this.toResponseMessages(userMessages),
+          instructions: systemInstructions,
+          maxOutputTokens: options?.maxTokens,
+          temperature: options?.temperature,
+          topP: options?.topP,
+          responseFormat:
+            options?.responseFormat === 'json_object'
+              ? { type: 'json_object' }
+              : { type: 'text' }
+        })
 
-      const usage = result.usage
-        ? {
-            promptTokens: result.usage.inputTokens,
-            completionTokens: result.usage.outputTokens,
-            totalTokens: result.usage.totalTokens
-          }
-        : undefined
+        const usage = result.usage
+          ? {
+              promptTokens: result.usage.inputTokens,
+              completionTokens: result.usage.outputTokens,
+              totalTokens: result.usage.totalTokens
+            }
+          : undefined
 
-      return { text: result.outputText, usage }
+        return { text: result.outputText, usage }
+      } catch (error) {
+        this.logResponsesClient400(error, options?.responseFormat === 'json_object')
+        throw error
+      }
     }
 
     const url = `${this.config.endpoint}/openai/deployments/${this.config.deploymentName}/chat/completions?api-version=${this.config.apiVersion}`
@@ -745,6 +755,46 @@ ${context}`
         }
       ]
     }))
+  }
+
+  private logResponsesClient400(error: unknown, hasResponseFormat: boolean) {
+    if (!error || typeof error !== 'object') {
+      return
+    }
+
+    const err = error as {
+      status?: number
+      code?: string
+      requestId?: string | null
+      requestBody?: Record<string, unknown>
+    }
+
+    if (err.status !== 400) {
+      return
+    }
+
+    const requestBody =
+      err.requestBody && typeof err.requestBody === 'object' ? err.requestBody : undefined
+    const requestModel =
+      requestBody && typeof (requestBody as { model?: unknown }).model === 'string'
+        ? ((requestBody as { model?: string }).model as string)
+        : this.config.responsesModel || this.config.deploymentName
+
+    const hasTools =
+      !!(
+        requestBody &&
+        Array.isArray((requestBody as { tools?: unknown[] }).tools) &&
+        (requestBody as { tools?: unknown[] }).tools?.length
+      )
+
+    console.error('[azure-openai][responses] 400 from v1 Responses API', {
+      status: err.status,
+      code: err.code ?? null,
+      requestId: err.requestId ?? null,
+      model: requestModel,
+      hasTools,
+      hasResponseFormat
+    })
   }
 
   // ===== ADVANCED RESPONSES API METHODS =====

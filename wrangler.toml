@@ -4,12 +4,19 @@
 name = "agentic-rag"
 main = "worker/index.ts"
 compatibility_date = "2025-11-02"
+workers_dev = true
 
 # Enable Logpush for Worker logs
 # Active Logpush job: cloudflare-managed-17bd49a0
 # Destination R2 bucket: cloudflare-managed-17bd49a0
 # Logs are automatically sent to R2 for analysis and debugging
 logpush = true
+
+# Custom domain configuration
+# The Worker will be accessible at both paradigmfind.com and *.workers.dev
+[[routes]]
+pattern = "paradigmfind.com/*"
+zone_name = "paradigmfind.com"
 
 # Observability configuration
 [observability]
