@@ -3,10 +3,13 @@ import { cacheManager } from './cache-manager'
 import { azureServiceManager } from './azure-service-manager'
 import { DocumentAnalyzerAgent, ChunkingStrategy } from './agents/document-analyzer'
 import { runtime } from './runtime-context'
+import { appConfig } from './config'
+import type { RetrievalMetadata } from './agents/agent-context'
 
 
 export interface FindRelevantChunksOptions {
   onAzureFallback?: () => void
+  namespaceId?: string
 }
 
 export async function intelligentChunkDocument(
@@ -306,7 +309,8 @@ export async function findRelevantChunks(
     .sort()
     .join('|') || 'no-docs'
 
-  const baseKey = `rag-query:${strategy}:${maxResults}:${hashString(normalizedQuery)}:${hashString(documentFingerprint)}:`
+  const nsKey = options?.namespaceId ? `ns:${options.namespaceId}:` : ''
+  const baseKey = `rag-query:${strategy}:${maxResults}:${nsKey}${hashString(normalizedQuery)}:${hashString(documentFingerprint)}:`
   const azureConfigured = azureServiceManager.isConfigured()
 
   // Local-only path
@@ -317,7 +321,7 @@ export async function findRelevantChunks(
     const cachedLocal = await cacheManager.get<Source[]>(`${baseKey}local`)
     if (cachedLocal) return cachedLocal
 
-    const localSources = await findRelevantChunksLocal(query, documents, maxResults, strategy)
+    const localSources = await findRelevantChunksLocal(query, documents, maxResults, strategy, options)
     await cacheManager.set(`${baseKey}local`, localSources)
     return localSources
   }
@@ -329,7 +333,9 @@ export async function findRelevantChunks(
   try {
     const azureSources = await azureServiceManager.searchWithAzure(query, strategy)
     if (azureSources.length > 0) {
-      const sliced = azureSources.slice(0, maxResults)
+      // Normalize Azure scores if enabled for a unified 0–1 scale
+      const normalized = appConfig.retrieval.normalizeScores ? normalizeLocalScores(azureSources) : azureSources
+      const sliced = normalized.slice(0, maxResults)
       await cacheManager.set(`${baseKey}azure`, sliced)
       return sliced
     }
@@ -343,7 +349,7 @@ export async function findRelevantChunks(
   const cachedLocalOnFallback = await cacheManager.get<Source[]>(`${baseKey}azure-fallback-local`)
   if (cachedLocalOnFallback) return cachedLocalOnFallback
 
-  const local = await findRelevantChunksLocal(query, documents, maxResults, strategy)
+  const local = await findRelevantChunksLocal(query, documents, maxResults, strategy, options)
   await cacheManager.set(`${baseKey}azure-fallback-local`, local)
   return local
 }
@@ -352,12 +358,23 @@ export async function findRelevantChunksLocal(
   query: string,
   documents: Document[],
   maxResults: number = 5,
-  strategy: 'vector' | 'keyword' | 'hybrid' = 'hybrid'
+  strategy: 'vector' | 'keyword' | 'hybrid' = 'hybrid',
+  options?: FindRelevantChunksOptions
 ): Promise<Source[]> {
   const allChunks: Array<{ chunk: DocumentChunk; document: Document }> = []
+  const ns = options?.namespaceId
   documents.forEach(doc => {
     if (doc.chunks && doc.chunks.length > 0) {
-      doc.chunks.forEach(chunk => allChunks.push({ chunk, document: doc }))
+      doc.chunks.forEach(chunk => {
+        if (!ns) {
+          allChunks.push({ chunk, document: doc })
+        } else {
+          const cNs = chunk.namespace || chunk.metadata?.namespace_id
+          if (cNs === ns) {
+            allChunks.push({ chunk, document: doc })
+          }
+        }
+      })
     }
   })
 
@@ -375,7 +392,8 @@ export async function findRelevantChunksLocal(
     let filtered = scored.filter(s => s.relevanceScore > 0.1)
     if (filtered.length === 0) filtered = scored.filter(s => s.relevanceScore > 0.0)
     if (filtered.length === 0 && scored.length > 0) filtered = scored.slice(0, maxResults)
-    return filtered.slice(0, maxResults)
+    const sliced = filtered.slice(0, maxResults)
+    return normalizeLocalScores(sliced)
   }
 
   const vectorScores = async (): Promise<Source[]> => {
@@ -400,7 +418,8 @@ export async function findRelevantChunksLocal(
       })
       .filter(Boolean) as Source[]
 
-    return vectorized.sort((a, b) => b.relevanceScore - a.relevanceScore).slice(0, maxResults)
+    const top = vectorized.sort((a, b) => b.relevanceScore - a.relevanceScore).slice(0, maxResults)
+    return normalizeLocalScores(top)
   }
 
   const runStrategy = async (s: 'vector' | 'keyword' | 'hybrid'): Promise<Source[]> => {
@@ -417,7 +436,7 @@ export async function findRelevantChunksLocal(
       // If no vector candidates, fall back to keyword results for hybrid
       return k.slice(0, maxResults)
     }
-    return rrfFuse(v, k, 60).slice(0, maxResults)
+    return rrfFuse(v, k, appConfig.retrieval.rrfK).slice(0, maxResults)
   }
 
   let result = await runStrategy(strategy)
@@ -434,13 +453,55 @@ export async function findRelevantChunksLocal(
   return result.slice(0, maxResults)
 }
 
+// Normalize local scores to 0–1 range if enabled
+function normalizeLocalScores(items: Source[]): Source[] {
+  if (!appConfig.retrieval.normalizeScores || items.length === 0) return items
+  let min = Infinity
+  let max = -Infinity
+  for (const s of items) {
+    if (s.relevanceScore < min) min = s.relevanceScore
+    if (s.relevanceScore > max) max = s.relevanceScore
+  }
+  if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return items
+  return items.map(s => ({
+    ...s,
+    relevanceScore: (s.relevanceScore - min) / (max - min)
+  }))
+}
+
+export async function findRelevantChunksWithMeta(
+  query: string,
+  documents: Document[],
+  maxResults: number = 5,
+  strategy: 'vector' | 'keyword' | 'hybrid' = 'hybrid',
+  options?: FindRelevantChunksOptions
+): Promise<{ sources: Source[]; metadata: RetrievalMetadata }>
+{
+  const start = Date.now()
+  let degraded = false
+  const sources = await findRelevantChunks(query, documents, maxResults, strategy, {
+    ...options,
+    onAzureFallback: () => { degraded = true; options?.onAzureFallback?.() }
+  })
+  const duration = Date.now() - start
+  const avg = sources.length > 0 ? sources.reduce((s, x) => s + x.relevanceScore, 0) / sources.length : 0
+  const metadata: RetrievalMetadata = {
+    strategy: strategy,
+    sourceCount: sources.length,
+    avgRelevanceScore: Number.isFinite(avg) ? avg : 0,
+    duration,
+    degraded,
+  }
+  return { sources, metadata }
+}
+
 export async function generateResponse(query: string, sources: Source[]): Promise<string> {
   if (sources.length === 0) {
     return "I don't have enough relevant information in the knowledge base to answer your question. Please try uploading more documents or rephrasing your query."
   }
 
-  // Try Azure OpenAI first if configured
-  if (azureServiceManager.isConfigured()) {
+  // Try Azure OpenAI first if available (does not require Search)
+  if (azureServiceManager.hasOpenAI()) {
     try {
       return await azureServiceManager.generateResponseWithAzure(query, sources)
     } catch (error) {

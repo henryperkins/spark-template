@@ -195,6 +195,74 @@ export class AzureOpenAIService {
     }
   }
 
+  /**
+   * Non-streaming completion that returns both text and Azure usage metadata when present.
+   */
+  async generateCompletionWithUsage(
+    messages: Array<{ role: string; content: string }> | string,
+    options?: {
+      maxTokens?: number
+      temperature?: number
+      topP?: number
+      responseFormat?: 'text' | 'json_object'
+    }
+  ): Promise<{ text: string; usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number } }>
+  {
+    // Delegate to generateCompletion for request build and error handling, but reissue to capture JSON body
+    try {
+      const messageArray = typeof messages === 'string'
+        ? [{ role: 'user', content: messages }]
+        : messages
+
+      const requestBody: Record<string, unknown> = {
+        messages: messageArray,
+        max_tokens: options?.maxTokens ?? 2000,
+        temperature: options?.temperature ?? 0.7,
+        top_p: options?.topP ?? 0.95,
+        frequency_penalty: 0,
+        presence_penalty: 0,
+        stream: false
+      }
+
+      if (options?.responseFormat === 'json_object') {
+        requestBody.response_format = { type: 'json_object' }
+      }
+
+      if (this.config.enableStoredCompletions) {
+        requestBody.store = true
+      }
+
+      const response = await fetch(
+        `${this.config.endpoint}/openai/deployments/${this.config.deploymentName}/chat/completions?api-version=${this.config.apiVersion}`,
+        {
+          method: 'POST',
+          headers: {
+            'api-key': this.config.apiKey,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(requestBody)
+        }
+      )
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`Completion generation failed: ${response.status} ${errorText}`)
+      }
+
+      const data = await response.json()
+      const text: string = data?.choices?.[0]?.message?.content ?? ''
+      const usage = data?.usage ? {
+        promptTokens: data.usage.prompt_tokens as number | undefined,
+        completionTokens: data.usage.completion_tokens as number | undefined,
+        totalTokens: data.usage.total_tokens as number | undefined
+      } : undefined
+      return { text, usage }
+    } catch (error) {
+      console.error('Error generating completion (with usage):', error)
+      throw error
+    }
+  }
+
   private async handleStreamingResponse(
     body: ReadableStream<Uint8Array>,
     onChunk?: (chunk: string) => void

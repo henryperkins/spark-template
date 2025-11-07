@@ -3,6 +3,7 @@ import { Source } from '@/types'
 import { llmService } from '../services/llm-service'
 import { appConfig } from '../config'
 import { truncateContext, sanitizeQueryForPrompt, JSON_OUTPUT_REQUIREMENTS } from '../prompt-utils'
+import type { KBContext } from './agent-context'
 
 export interface ValidationResult {
   isValid: boolean
@@ -23,10 +24,16 @@ const validationResultSchema: z.ZodType<ValidationResult> = z.object({
 })
 
 export class CriticAgent {
+  /**
+   * Validate response with KB-calibrated thresholds.
+   * When KB context is provided, adjusts validation thresholds based on
+   * content type (technical docs have higher faithfulness expectations).
+   */
   async validateResponse(
     query: string,
     response: string,
-    sources: Source[]
+    sources: Source[],
+    kb?: KBContext
   ): Promise<ValidationResult> {
     // Limit and sort sources for efficient, high-signal validation context
     const limitedSources = [...sources]
@@ -41,6 +48,24 @@ export class CriticAgent {
       notice: '[Context truncated for validation]'
     })
 
+    // Build KB-aware validation guidelines
+    let kbGuidelines = ''
+    if (kb) {
+      const isTechnical = kb.contentTypes.technical > 0.5 || kb.contentTypes.code > 0.5
+      const faithfulnessThreshold = isTechnical ? 0.8 : 0.7
+
+      kbGuidelines = `
+
+Knowledge Base Context:
+- Content type: ${kb.contentTypes.code > 0.5 ? 'code-heavy' : kb.contentTypes.technical > 0.5 ? 'technical documentation' : 'prose/documentation'}
+- Validation standards: ${isTechnical ? 'High precision required for technical content' : 'Standard validation for prose'}
+
+Calibrated Thresholds:
+- Faithfulness threshold: ${faithfulnessThreshold} (${isTechnical ? 'higher for technical content' : 'standard'})
+- Technical content requires exact terminology and precise citations
+- Prose content allows more paraphrasing while maintaining faithfulness`
+    }
+
     const systemPrompt = `You are a fact-checking expert. Validate AI responses against source documents.
 
 Evaluation criteria:
@@ -54,6 +79,7 @@ Identify issues:
 - Incorrect facts
 - Missing important information from sources
 - Irrelevant content
+${kbGuidelines}
 
 Respond with JSON:
 {
@@ -87,14 +113,19 @@ Respond with JSON:
       console.warn('LLM validation failed, using fallback:', error)
     }
 
-    return this.fallbackValidation(query, response, sources)
+    return this.fallbackValidation(query, response, sources, kb)
   }
 
   private fallbackValidation(
     query: string,
     response: string,
-    sources: Source[]
+    sources: Source[],
+    kb?: KBContext
   ): ValidationResult {
+    // KB-aware threshold calibration
+    const isTechnical = kb && (kb.contentTypes.technical > 0.5 || kb.contentTypes.code > 0.5)
+    const faithfulnessThreshold = isTechnical ? 0.7 : 0.6 // Higher bar for technical content
+    const relevanceThreshold = 0.5
     const lowerResponse = response.toLowerCase()
     const lowerQuery = query.toLowerCase()
 
@@ -119,17 +150,19 @@ Respond with JSON:
       suggestions.push('Add citations to reference sources')
     }
 
-    if (faithfulnessScore < 0.5) {
-      issues.push('Response may contain unsupported claims')
+    if (faithfulnessScore < faithfulnessThreshold) {
+      issues.push(isTechnical
+        ? 'Response may contain unsupported claims (technical content requires high precision)'
+        : 'Response may contain unsupported claims')
       suggestions.push('Ensure all facts are from provided sources')
     }
 
-    if (relevanceScore < 0.4) {
+    if (relevanceScore < relevanceThreshold) {
       issues.push('Response may not fully address the query')
       suggestions.push('Focus response more directly on the question')
     }
 
-    const isValid = issues.length === 0 && faithfulnessScore > 0.6 && relevanceScore > 0.5
+    const isValid = issues.length === 0 && faithfulnessScore > faithfulnessThreshold && relevanceScore > relevanceThreshold
 
     return {
       isValid,

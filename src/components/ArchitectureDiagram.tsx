@@ -123,12 +123,14 @@ export function ArchitectureDiagram() {
     {
       id: 'orchestration',
       name: '4. Agent Orchestration Layer',
-      description: 'Coordinates multi-agent workflows and decision-making',
+      description: 'Coordinates multi-agent workflows, KB context, budgets, and telemetry',
       components: [
         'AgenticOrchestrator Engine',
+        'KB Context Propagation (all agents)',
         'Workflow Step Tracking',
+        'Budget Guards (tokens/time)',
+        'Phase Timing + Tokens/Cost Telemetry',
         'Error Recovery & Fallbacks',
-        'Execution Timing Metrics',
         'State Management'
       ],
       icon: <Brain size={20} />,
@@ -138,15 +140,15 @@ export function ArchitectureDiagram() {
     {
       id: 'agents',
       name: '5. Agent Layer',
-      description: 'Specialized AI agents for different RAG tasks',
+      description: 'Specialized AI agents for different RAG tasks (KB-aware)',
       components: [
-        'QueryClassifierAgent (complexity analysis)',
-        'QueryPlannerAgent (decomposition)',
-        'RoutingAgent (vector/keyword/hybrid)',
+        'QueryClassifierAgent (complexity analysis, KB-aware)',
+        'QueryPlannerAgent (decomposition; small-KB limits)',
+        'RoutingAgent (vector/keyword/hybrid; embeddings/content-type aware)',
         'DocumentAnalyzerAgent (chunking strategy, ingestion-only, optional)',
-        'CriticAgent (hallucination detection)',
-        'ReActAgent (iterative refinement)',
-        'QueryExpansionAgent (related questions)'
+        'CriticAgent (faithfulness thresholds by content type)',
+        'ReActAgent (iterative refinement; budget-aware)',
+        'QueryExpansionAgent (KB-aware related questions)'
       ],
       icon: <GitBranch size={20} />,
       accent: 'agents',
@@ -273,10 +275,11 @@ export function ArchitectureDiagram() {
       description: 'Monitoring, metrics, and workflow visualization',
       components: [
         'AgentWorkflowVisualizer',
-        'ScalingDashboard (metrics)',
+        'ScalingDashboard (metrics + telemetry)',
         'Cache Hit Rate Monitoring',
         'Error Tracking, Analytics Emission, UI Surfacing',
-        'Quality Metrics (faithfulness, relevance)'
+        'Quality Metrics (faithfulness, relevance)',
+        'Tokens/Cost & Phase Timing Dashboards'
       ],
       icon: <Eye size={20} />,
       accent: 'observability',
@@ -357,19 +360,19 @@ export function ArchitectureDiagram() {
     'agents': [
       {
         name: 'QueryClassifierAgent',
-        purpose: 'Analyzes query complexity to determine processing strategy (simple/moderate/complex)',
+        purpose: 'Analyzes query complexity (simple/moderate/complex) with KB context hints',
         technologies: ['Edge LLM proxy (/api/llm)', 'JSON mode', 'Complexity scoring'],
         patterns: ['Classification Pipeline', 'Strategy Pattern', 'Confidence Scoring']
       },
       {
         name: 'QueryPlannerAgent',
-        purpose: 'Decomposes complex queries into focused sub-queries for parallel retrieval',
+        purpose: 'Decomposes complex queries into focused sub-queries; limits to max 2 when KB is small (<5 docs)',
         technologies: ['LLM-based Planning', 'Dependency Analysis'],
         patterns: ['Divide and Conquer', 'Query Decomposition', 'Parallel Execution']
       },
       {
         name: 'RoutingAgent',
-        purpose: 'Selects optimal retrieval strategy (vector/keyword/hybrid) based on query characteristics',
+        purpose: 'Selects optimal retrieval strategy (vector/keyword/hybrid) using embeddings availability and content-type (code → keyword, technical → hybrid)',
         technologies: ['Decision Logic', 'Confidence Scoring'],
         patterns: ['Router Pattern', 'Strategy Selection', 'Heuristic Analysis']
       },
@@ -381,19 +384,19 @@ export function ArchitectureDiagram() {
       },
       {
         name: 'CriticAgent',
-        purpose: 'Validates response quality and identifies hallucinations with faithfulness scoring',
+        purpose: 'Validates response quality and identifies hallucinations; faithfulness thresholds tuned (technical: 0.7, prose: 0.6)',
         technologies: ['Edge LLM proxy (/api/llm)', 'Faithfulness Analysis', 'Source Verification'],
         patterns: ['Validator Pattern', 'Quality Gates', 'Dual-Agent Verification']
       },
       {
         name: 'ReActAgent',
-        purpose: 'Iteratively refines responses through Reason-Act-Observe loops',
+        purpose: 'Iteratively refines responses through Reason-Act-Observe loops; adapts iteration count to remaining token budget',
         technologies: ['ReAct Framework', 'Multi-step Reasoning'],
         patterns: ['Iterative Refinement', 'Self-Correction', 'Thought-Action-Observation']
       },
       {
         name: 'QueryExpansionAgent',
-        purpose: 'Generates 4 types of related questions (clarification/related/deeper/broader)',
+        purpose: 'Generates 4 types of related questions (clarification/related/deeper/broader) tailored to KB content type',
         technologies: ['Edge LLM proxy (/api/llm)', 'Question Generation', 'Cache Integration'],
         patterns: ['Content Discovery', 'Recommendation Engine', 'Cache-Aside']
       }
@@ -401,15 +404,27 @@ export function ArchitectureDiagram() {
     'orchestration': [
       {
         name: 'AgenticOrchestrator',
-        purpose: 'Coordinates agent execution with workflow tracking and error recovery',
-        technologies: ['TypeScript', 'Async/Await', 'Promise.all'],
-        patterns: ['Orchestration Pattern', 'Pipeline', 'Error Handling']
+        purpose: 'Coordinates agent execution; builds KB context; enforces time/token budgets; emits telemetry',
+        technologies: ['TypeScript', 'Async/Await', 'Promise.all', 'Context Store'],
+        patterns: ['Orchestration Pattern', 'Pipeline', 'Error Handling', 'Budget Guard']
       },
       {
         name: 'Workflow Step Tracking',
         purpose: 'Records each agent action with timing for visualization',
         technologies: ['Timestamp Tracking', 'Duration Calculation'],
         patterns: ['Observer Pattern', 'Event Logging', 'Timeline Generation']
+      },
+      {
+        name: 'Telemetry Enrichment',
+        purpose: 'Emits cumulative tokens/cost and agent-specific metadata (strategy, scores, iterations)',
+        technologies: ['Runtime Telemetry', 'Token Tracker'],
+        patterns: ['Structured Events', 'Cumulative Metrics']
+      },
+      {
+        name: 'Budget Guards',
+        purpose: 'Skips expansion/refinement if remaining token budget is below calibrated thresholds',
+        technologies: ['Budget Calculator'],
+        patterns: ['Fail-Fast', 'Graceful Degradation']
       }
     ],
     'retrieval': [

@@ -10,10 +10,11 @@ import { Separator } from '@/components/ui/separator'
 import { MagnifyingGlass, Flask, Database, Sparkle, ClockCounterClockwise, Trash, CaretDown, CaretRight, FileMagnifyingGlass, CloudArrowUp } from '@phosphor-icons/react'
 import { azureServiceManager } from '@/lib/azure-service-manager'
 import { RoutingAgent } from '@/lib/agents/routing-agent'
-import { Document } from '@/types'
-import { findRelevantChunks } from '@/lib/rag'
+import { AzureConfig, Document } from '@/types'
+import { findRelevantChunksWithMeta } from '@/lib/rag'
 import { queryHistoryService, QueryHistoryEntry } from '@/lib/services/query-history'
 import { toast } from 'sonner'
+import { useStorage } from '@/hooks/use-kv'
 
 interface SearchDebuggerProps {
   documents: Document[]
@@ -31,6 +32,7 @@ export function SearchDebugger({ documents }: SearchDebuggerProps) {
   const [explainResult, setExplainResult] = useState<{
     routing: { strategy: string; reasoning: string; confidence: number }
     sources: Array<{ documentName: string; chunkId: string; content: string; relevanceScore: number }>
+    metadata?: { avgRelevanceScore: number; degraded: boolean; duration: number }
   } | null>(null)
   const [explainLoading, setExplainLoading] = useState(false)
 
@@ -111,9 +113,16 @@ export function SearchDebugger({ documents }: SearchDebuggerProps) {
     setExplainLoading(true)
     try {
       const routingAgent = new RoutingAgent()
-      const routing = await routingAgent.selectStrategy(explainQuery, { totalDocuments: documents.length })
+      // Build KB context for routing (can pass undefined if not available)
+      const routing = await routingAgent.selectStrategy(explainQuery, undefined)
 
-      const sources = await findRelevantChunks(explainQuery, documents, 5, routing.strategy)
+      const { sources, metadata } = await findRelevantChunksWithMeta(
+        explainQuery,
+        documents,
+        5,
+        routing.strategy,
+        { namespaceId: (activeNamespace || azureConfig?.search?.namespace) || undefined }
+      )
 
       setExplainResult({
         routing: {
@@ -126,10 +135,17 @@ export function SearchDebugger({ documents }: SearchDebuggerProps) {
           chunkId: s.chunkId,
           content: s.content.substring(0, 200) + (s.content.length > 200 ? '...' : ''),
           relevanceScore: s.relevanceScore
-        }))
+        })),
+        metadata: {
+          avgRelevanceScore: metadata.avgRelevanceScore,
+          degraded: metadata.degraded,
+          duration: metadata.duration
+        }
       })
 
-      toast.success('Query explained', { description: `Strategy: ${routing.strategy}` })
+      toast.success('Query explained', {
+        description: `Strategy: ${routing.strategy}${metadata.degraded ? ' (degraded)' : ''}`
+      })
     } catch (error) {
       toast.error('Query explanation failed', {
         description: error instanceof Error ? error.message : 'Unknown error'
@@ -354,7 +370,12 @@ export function SearchDebugger({ documents }: SearchDebuggerProps) {
                 <div className="p-3 bg-muted rounded-lg space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-muted-foreground">Strategy</span>
-                    <Badge>{explainResult.routing.strategy}</Badge>
+                    <div className="flex items-center gap-2">
+                      <Badge>{explainResult.routing.strategy}</Badge>
+                      {explainResult.metadata?.degraded && (
+                        <Badge variant="destructive">Degraded</Badge>
+                      )}
+                    </div>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-muted-foreground">Confidence</span>
@@ -362,6 +383,18 @@ export function SearchDebugger({ documents }: SearchDebuggerProps) {
                       {(explainResult.routing.confidence * 100).toFixed(0)}%
                     </Badge>
                   </div>
+                  {explainResult.metadata && (
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">Avg. Score</span>
+                        <span className="font-mono">{explainResult.metadata.avgRelevanceScore.toFixed(3)}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">Latency</span>
+                        <span className="font-mono">{formatDuration(explainResult.metadata.duration)}</span>
+                      </div>
+                    </div>
+                  )}
                   <div className="text-sm text-muted-foreground">
                     {explainResult.routing.reasoning}
                   </div>
@@ -788,3 +821,5 @@ export function SearchDebugger({ documents }: SearchDebuggerProps) {
     </div>
   )
 }
+  const [azureConfig] = useStorage<AzureConfig | null>('azure-config', null)
+  const [activeNamespace] = useStorage<string>('active-namespace', '')

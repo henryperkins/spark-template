@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { llmService } from '../services/llm-service'
 import { appConfig } from '../config'
 import { sanitizeQueryForPrompt, JSON_OUTPUT_REQUIREMENTS } from '../prompt-utils'
+import type { KBContext } from './agent-context'
 
 export type QueryComplexity = 'simple' | 'moderate' | 'complex'
 
@@ -22,17 +23,37 @@ const queryClassificationSchema: z.ZodType<QueryClassification> = z.object({
 })
 
 export class QueryClassifierAgent {
-  async classifyQuery(query: string): Promise<QueryClassification> {
+  /**
+   * Classify query complexity with optional KB-aware context.
+   * When KB context is provided, classification considers the knowledge base's
+   * size, content types, and topic coverage.
+   */
+  async classifyQuery(query: string, kb?: KBContext): Promise<QueryClassification> {
+    // Build KB-aware context for prompt if available
+    let kbContext = ''
+    if (kb) {
+      kbContext = `
+
+Knowledge Base Context:
+- Documents: ${kb.documentCount} documents with ${kb.chunkCount} chunks
+- Embedding coverage: ${(kb.embeddingCoverage * 100).toFixed(0)}%
+- Content type: ${kb.contentTypes.code > 0.5 ? 'primarily code' : kb.contentTypes.technical > 0.5 ? 'primarily technical docs' : 'primarily prose'}
+${kb.topics && kb.topics.length > 0 ? `- Main topics: ${kb.topics.slice(0, 5).join(', ')}` : ''}
+
+When classifying, consider whether the query scope matches the KB's coverage.`
+    }
+
     const systemPrompt = `You are a query classification expert. Analyze the user's query and determine its complexity.
 
 Classification criteria:
-- SIMPLE: Single fact retrieval, specific information lookup, yes/no questions
-- MODERATE: Requires comparing 2-3 concepts, summarization of a topic, questions with some analysis
-- COMPLEX: Multi-faceted questions, requires synthesis from multiple sources, comparative analysis across many items, "how" and "why" questions requiring reasoning
+- SIMPLE: Single fact retrieval, specific information lookup, yes/no questions${kb ? ', query scope is narrow relative to KB size' : ''}
+- MODERATE: Requires comparing 2-3 concepts, summarization of a topic, questions with some analysis${kb ? ', query scope spans multiple documents' : ''}
+- COMPLEX: Multi-faceted questions, requires synthesis from multiple sources, comparative analysis across many items, "how" and "why" questions requiring reasoning${kb ? ', query scope requires deep KB traversal' : ''}
+${kbContext}
 
 Respond with a JSON object containing:
 - complexity: "simple" | "moderate" | "complex"
-- reasoning: Brief explanation of classification
+- reasoning: Brief explanation of classification (consider KB context if provided)
 - recommendedStrategy: "direct" (simple lookup) | "planned" (decompose into sub-queries) | "iterative" (refine through multiple passes)
 - requiresDecomposition: boolean
 - estimatedSubQueries: number (if decomposition needed)

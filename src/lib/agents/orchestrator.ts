@@ -7,10 +7,21 @@ import { ReActAgent, ReActResult } from './react-agent'
 import { QueryExpansionAgent, QueryExpansion } from './query-expansion'
 import { findRelevantChunks, findRelevantChunksLocal, generateResponse } from '../rag'
 import { azureServiceManager } from '../azure-service-manager'
-import { AgentStepEvent, telemetry } from '../services/telemetry'
+import { AgentStepEvent, telemetry, type AgentStepMetadata } from '../services/telemetry'
+import { setActiveQueryContext } from './context-registry'
 import { agentAnalytics } from '../services/agent-analytics'
 import { errorTracking } from '../services/error-tracker'
 import { queryHistoryService } from '../services/query-history'
+import { tokenTracker } from '../services/token-tracker'
+import {
+  type QueryExecutionContext,
+  buildKBContext,
+  createQueryExecutionContext,
+  recordPhaseTime,
+  getExecutionSummary,
+  canAffordTokens,
+  addWarning
+} from './agent-context'
 
 export interface AgentWorkflowStep {
   agent: string
@@ -33,6 +44,19 @@ export interface AgenticRAGResult {
   workflow: AgentWorkflowStep[]
   totalDuration: number
   azureFallback: boolean
+
+  // Enriched context data (Gap #1 & #2)
+  executionSummary?: {
+    totalTokens: number
+    totalCost: number
+    llmCallCount: number
+    warningCount: number
+    budgetUtilization: {
+      tokens: number
+      time: number
+    }
+    phaseBreakdown: Record<string, number>
+  }
 }
 
 export interface ProcessQueryOptions {
@@ -55,52 +79,117 @@ export class AgenticOrchestrator {
     options: ProcessQueryOptions = {}
   ): Promise<AgenticRAGResult> {
     const startTime = Date.now()
+    const runId = options.runId ?? this.generateRunId()
+
+    try {
+      // Gap #1: Initialize execution context with KB awareness
+      const kb = buildKBContext(documents)
+      const context = createQueryExecutionContext(runId, query, kb, {
+        tokenBudget: 50000, // 50k token budget
+        timeBudgetMs: 60000 // 60s time budget
+      })
+      // Expose context to lower-level services (e.g., LLMService) for per-call recording
+      setActiveQueryContext(context)
+    // Track baseline usage so we can approximate per-run consumption
+    const baselineUsage = tokenTracker.getTotalUsage()
+    const syncTokenBudget = () => {
+      const current = tokenTracker.getTotalUsage()
+      const consumedTokens = Math.max(0, current.tokens - baselineUsage.tokens)
+      const consumedCost = Math.max(0, current.cost - baselineUsage.cost)
+      context.tokenBudget.consumed = consumedTokens
+      context.tokenBudget.costConsumed = consumedCost
+      context.tokenBudget.remaining = Math.max(0, context.tokenBudget.total - context.tokenBudget.consumed)
+      context.tokenBudget.exhausted = context.tokenBudget.remaining === 0
+    }
+
     let azureFallback = false
     const workflow: AgentWorkflowStep[] = []
-    const runId = options.runId ?? this.generateRunId()
+
     const emitWorkflowUpdate = () => {
       if (options.onWorkflowUpdate) {
         options.onWorkflowUpdate(workflow.map(step => ({ ...step })))
       }
     }
+
+    // Gap #2: Enriched telemetry emission with tokens/cost
     const emitStepEvent = (
-      event: Omit<AgentStepEvent, 'type' | 'runId' | 'query' | 'timestamp'> & { timestamp?: string }
+      event: Omit<AgentStepEvent, 'type' | 'runId' | 'query' | 'timestamp'> & {
+        timestamp?: string
+        metadata?: AgentStepMetadata
+      }
     ) => {
+      // Update budget from token tracker before emitting
+      syncTokenBudget()
       const enriched: AgentStepEvent = {
         type: 'agent_step_status',
         runId,
         query,
         timestamp: event.timestamp ?? new Date().toISOString(),
-        ...event
+        ...event,
+        // Add cumulative token/cost from context
+        cumulativeTokens: context.tokenBudget.consumed,
+        cumulativeCost: context.tokenBudget.costConsumed
       }
       telemetry.trackAgentStep(enriched)
       agentAnalytics.recordStepEvent(enriched)
       options.onStepEvent?.(enriched)
     }
 
+    // Classification phase with timing and KB-aware classification (Gap #1)
+    const classificationStart = Date.now()
     const classification = await this.executeStep(
       workflow,
       'Classifier',
       'Classify query complexity',
-      () => this.classifierAgent.classifyQuery(query),
+      () => this.classifierAgent.classifyQuery(query, kb), // Pass KB context
       emitWorkflowUpdate,
-      emitStepEvent
+      (event) => {
+        // Enrich with classification metadata (Gap #2)
+        emitStepEvent({
+          ...event,
+          metadata: {
+            complexity: (event as { result?: QueryClassification }).result?.complexity,
+            requiresDecomposition: (event as { result?: QueryClassification }).result?.requiresDecomposition
+          }
+        })
+      }
     )
+    const classificationDuration = Date.now() - classificationStart
+    recordPhaseTime(context, 'classification', classificationDuration)
+
+    // Store classification in context
+    context.classification = classification
 
     let allSources: Source[] = []
     let plan: QueryPlan | undefined
     let routing: RoutingDecision | undefined
+    let retrievalDurationMs = 0
 
     if (classification.requiresDecomposition) {
+      // Planning phase with timing
+      const planningStart = Date.now()
       plan = await this.executeStep(
       workflow,
       'Planner',
       'Create query plan',
-      () => this.plannerAgent.createPlan(query, classification.estimatedSubQueries),
+      () => this.plannerAgent.createPlan(query, classification.estimatedSubQueries, kb), // Pass KB
       emitWorkflowUpdate,
-      emitStepEvent
+      (event) => {
+        emitStepEvent({
+          ...event,
+          metadata: {
+            subQueryCount: (event as { result?: QueryPlan }).result?.subQueries.length,
+            executionStrategy: (event as { result?: QueryPlan }).result?.executionStrategy
+          }
+        })
+      }
     )
+      const planningDuration = Date.now() - planningStart
+      recordPhaseTime(context, 'planning', planningDuration)
+      context.plan = plan
 
+      // Retrieval phase (sub-queries)
+      const retrievalStart = Date.now()
       allSources = await this.executeSubQueries(
         plan,
         documents,
@@ -109,18 +198,37 @@ export class AgenticOrchestrator {
         emitStepEvent,
         () => {
           azureFallback = true
-        }
+        },
+        kb // Pass KB to sub-queries
       )
+      const retrievalDuration = Date.now() - retrievalStart
+      retrievalDurationMs = retrievalDuration
+      recordPhaseTime(context, 'retrieval', retrievalDuration)
     } else {
+      // Routing phase with timing
+      const routingStart = Date.now()
       routing = await this.executeStep(
       workflow,
       'Router',
       'Select retrieval strategy',
-      () => this.routingAgent.selectStrategy(query, { totalDocuments: documents.length }),
+      () => this.routingAgent.selectStrategy(query, kb), // Pass KB
       emitWorkflowUpdate,
-      emitStepEvent
+      (event) => {
+        emitStepEvent({
+          ...event,
+          metadata: {
+            strategy: (event as { result?: RoutingDecision }).result?.strategy,
+            routingConfidence: (event as { result?: RoutingDecision }).result?.confidence
+          }
+        })
+      }
     )
+      const routingDuration = Date.now() - routingStart
+      recordPhaseTime(context, 'routing', routingDuration)
+      context.routing = routing
 
+      // Retrieval phase
+      const retrievalStart = Date.now()
       allSources = await this.executeStep(
       workflow,
       'Retrieval',
@@ -129,10 +237,26 @@ export class AgenticOrchestrator {
         azureFallback = true
       }),
       emitWorkflowUpdate,
-      emitStepEvent
+      (event) => {
+        emitStepEvent({
+          ...event,
+          metadata: {
+            sourceCount: (event as { result?: Source[] }).result?.length,
+            avgRelevanceScore: (event as { result?: Source[] }).result
+              ? (event as { result?: Source[] }).result!.reduce((sum, s) => sum + s.relevanceScore, 0) / (event as { result?: Source[] }).result!.length
+              : 0,
+            degraded: azureFallback
+          }
+        })
+      }
     )
+      const retrievalDuration = Date.now() - retrievalStart
+      retrievalDurationMs = retrievalDuration
+      recordPhaseTime(context, 'retrieval', retrievalDuration)
     }
 
+    // Generation phase with timing
+    const generationStart = Date.now()
     let response = await this.executeStep(
       workflow,
       'Generator',
@@ -143,22 +267,44 @@ export class AgenticOrchestrator {
       emitWorkflowUpdate,
       emitStepEvent
     )
+    const generationDuration = Date.now() - generationStart
+    recordPhaseTime(context, 'generation', generationDuration)
 
+    // Validation phase with timing
     let validation: ValidationResult | undefined
     if (allSources.length > 0) {
+      const validationStart = Date.now()
       validation = await this.executeStep(
         workflow,
         'Critic',
         'Validate response quality',
-        () => this.criticAgent.validateResponse(query, response, allSources),
+        () => this.criticAgent.validateResponse(query, response, allSources, kb), // Pass KB
         emitWorkflowUpdate,
-        emitStepEvent
+        (event) => {
+          emitStepEvent({
+            ...event,
+            metadata: {
+              faithfulnessScore: (event as { result?: ValidationResult }).result?.faithfulnessScore,
+              relevanceScore: (event as { result?: ValidationResult }).result?.relevanceScore,
+              validationPassed: (event as { result?: ValidationResult }).result?.isValid,
+              issueCount: (event as { result?: ValidationResult }).result?.issues.length
+            }
+          })
+        }
       )
+      const validationDuration = Date.now() - validationStart
+      recordPhaseTime(context, 'validation', validationDuration)
+      context.validation = validation
     }
 
+    // Refinement phase with timing
     let refinement: ReActResult | undefined
-
     if (validation && (!validation.isValid || validation.faithfulnessScore < 0.7)) {
+      // If we cannot afford at least ~1000 tokens, skip refinement gracefully
+      if (!canAffordTokens(context, 1000)) {
+        addWarning(context, 'refinement', 'budget_exceeded', 'Skipped refinement due to token budget')
+      } else {
+      const refinementStart = Date.now()
       refinement = await this.executeStep(
         workflow,
         'ReAct',
@@ -167,27 +313,87 @@ export class AgenticOrchestrator {
           query,
           response,
           allSources,
-          validation!.issues
+          validation!.issues,
+          {
+            remainingTokenBudget: context.tokenBudget.remaining,
+            minTokensPerIteration: 1500
+          },
+          kb
         ),
         emitWorkflowUpdate,
-        emitStepEvent
+        (event) => {
+          emitStepEvent({
+            ...event,
+            metadata: {
+              iterations: (event as { result?: ReActResult }).result?.iterations,
+              improved: (event as { result?: ReActResult }).result?.improved
+            }
+          })
+        }
       )
+      const refinementDuration = Date.now() - refinementStart
+      recordPhaseTime(context, 'refinement', refinementDuration)
+      context.refinement = refinement
 
       if (refinement.improved) {
         response = refinement.finalResponse
       }
+      }
     }
 
-    const expansion = await this.executeStep(
-      workflow,
-      'Expansion',
-      'Generate related questions',
-      () => this.expansionAgent.expandQuery(query, documents, allSources),
-      emitWorkflowUpdate,
-      emitStepEvent
-    )
+    // Expansion phase with timing
+    let expansion: QueryExpansion
+    if (!canAffordTokens(context, 5000)) {
+      // Budget guard: skip expansion
+      addWarning(context, 'expansion', 'budget_exceeded', 'Skipped expansion due to token budget')
+      const stepStart = Date.now()
+      // Emit a degraded step so UI/telemetry reflect the skip
+      const skippedStep = {
+        agent: 'Expansion',
+        action: 'Generate related questions (skipped: token budget)',
+        result: { skipped: true, reason: 'token budget' },
+        timestamp: new Date().toISOString(),
+        duration: 0,
+        status: 'completed' as const
+      }
+      workflow.push(skippedStep)
+      emitWorkflowUpdate?.()
+      emitStepEvent({
+        agent: 'Expansion',
+        action: 'Generate related questions',
+        status: 'degraded',
+        stepIndex: workflow.length - 1,
+        duration: Date.now() - stepStart,
+        failureReason: 'Budget guard: insufficient tokens'
+      })
+      expansion = {
+        originalQuery: query,
+        suggestedQuestions: [],
+        documentTopics: [],
+        expansionStrategy: documents.length > 0 ? 'document-based' : 'hybrid',
+        cached: false
+      }
+      recordPhaseTime(context, 'expansion', 0)
+      context.expansion = expansion
+    } else {
+      const expansionStart = Date.now()
+      expansion = await this.executeStep(
+        workflow,
+        'Expansion',
+        'Generate related questions',
+        () => this.expansionAgent.expandQuery(query, documents, allSources, kb), // Pass KB
+        emitWorkflowUpdate,
+        emitStepEvent
+      )
+      const expansionDuration = Date.now() - expansionStart
+      recordPhaseTime(context, 'expansion', expansionDuration)
+      context.expansion = expansion
+    }
 
     const totalDuration = Date.now() - startTime
+
+    // Generate execution summary from context
+    const executionSummary = getExecutionSummary(context)
 
     const result = {
       response,
@@ -200,7 +406,8 @@ export class AgenticOrchestrator {
       expansion,
       workflow,
       totalDuration,
-      azureFallback
+      azureFallback,
+      executionSummary
     }
 
     // Log to query history (async, don't block return)
@@ -222,6 +429,8 @@ export class AgenticOrchestrator {
       azureUsed: azureServiceManager.isConfigured(),
       azureFallback,
       totalDuration,
+      retrievalDuration: retrievalDurationMs,
+      retrievalAvgScore: allSources.length > 0 ? allSources.reduce((s, x) => s + x.relevanceScore, 0) / allSources.length : 0,
       workflow: workflow.map(s => ({
         agent: s.agent,
         action: s.action,
@@ -234,14 +443,19 @@ export class AgenticOrchestrator {
         faithfulnessScore: validation.faithfulnessScore,
         relevanceScore: validation.relevanceScore,
         isValid: validation.isValid
-      } : undefined
+      } : undefined,
+      executionSummary: executionSummary
     }).catch(error => {
       console.error('Failed to log query to history:', error)
     })
 
     return result
+  } finally {
+    // Ensure active context is cleared to avoid cross-run leakage
+    setActiveQueryContext(null)
   }
 
+  }
   private async executeStep<T>(
     workflow: AgentWorkflowStep[],
     agent: string,
@@ -249,7 +463,11 @@ export class AgenticOrchestrator {
     fn: () => Promise<T>,
     emitWorkflowUpdate?: () => void,
     emitStepEvent?: (
-      event: Omit<AgentStepEvent, 'type' | 'runId' | 'query' | 'timestamp'> & { timestamp?: string }
+      event: Omit<AgentStepEvent, 'type' | 'runId' | 'query' | 'timestamp'> & {
+        timestamp?: string
+        result?: T
+        metadata?: AgentStepMetadata
+      }
     ) => void
   ): Promise<T> {
     const stepStart = Date.now()
@@ -287,7 +505,8 @@ export class AgenticOrchestrator {
         action,
         status: 'completed',
         stepIndex,
-        duration
+        duration,
+        result // Pass result for metadata extraction in caller
       })
 
       return result
@@ -343,7 +562,8 @@ export class AgenticOrchestrator {
     emitStepEvent?: (
       event: Omit<AgentStepEvent, 'type' | 'runId' | 'query' | 'timestamp'> & { timestamp?: string }
     ) => void,
-    onAzureFallback?: () => void
+    onAzureFallback?: () => void,
+    kb?: import('./agent-context').KBContext
   ): Promise<Source[]> {
     const allSources: Source[] = []
     const sortedSubQueries = [...plan.subQueries].sort((a, b) => a.priority - b.priority)
@@ -360,7 +580,7 @@ export class AgenticOrchestrator {
                 workflow,
                 'Router',
                 `Select strategy for sub-query: ${sq.id}`,
-                () => this.routingAgent.selectStrategy(sq.query, { totalDocuments: documents.length }),
+                () => this.routingAgent.selectStrategy(sq.query, kb), // Pass KB
                 emitWorkflowUpdate,
                 emitStepEvent
               )
@@ -388,7 +608,7 @@ export class AgenticOrchestrator {
           workflow,
           'Router',
           `Select strategy for sub-query: ${sq.id}`,
-          () => this.routingAgent.selectStrategy(sq.query, { totalDocuments: documents.length }),
+          () => this.routingAgent.selectStrategy(sq.query, kb), // Pass KB
           emitWorkflowUpdate,
           emitStepEvent
         )
@@ -428,6 +648,7 @@ export class AgenticOrchestrator {
     try {
       return await findRelevantChunks(query, documents, 5, strategy, {
         onAzureFallback,
+        namespaceId: azureServiceManager.getNamespaceId()
       })
     } catch (error) {
       console.warn('Primary retrieval path failed, using local fallback:', error)
@@ -442,7 +663,9 @@ export class AgenticOrchestrator {
 
       onAzureFallback?.()
 
-      return findRelevantChunksLocal(query, documents, 5)
+      return findRelevantChunksLocal(query, documents, 5, strategy, {
+        namespaceId: azureServiceManager.getNamespaceId()
+      })
     }
   }
 

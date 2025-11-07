@@ -1,5 +1,51 @@
 export type AgentStepStatus = 'running' | 'completed' | 'failed' | 'pending' | 'degraded'
 
+/**
+ * LLM metadata for cost tracking in telemetry.
+ */
+export interface LLMMetadata {
+  model: string
+  provider: 'azure' | 'worker'
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+  estimatedCost: number
+  temperature?: number
+  maxTokens?: number
+}
+
+/**
+ * Agent-specific metadata for telemetry enrichment.
+ */
+export interface AgentStepMetadata {
+  // Classifier metadata
+  complexity?: 'simple' | 'moderate' | 'complex'
+  requiresDecomposition?: boolean
+
+  // Router metadata
+  strategy?: 'vector' | 'keyword' | 'hybrid'
+  routingConfidence?: number
+
+  // Planner metadata
+  subQueryCount?: number
+  executionStrategy?: 'sequential' | 'parallel'
+
+  // Retrieval metadata
+  sourceCount?: number
+  avgRelevanceScore?: number
+  degraded?: boolean
+
+  // Validation metadata
+  faithfulnessScore?: number
+  relevanceScore?: number
+  validationPassed?: boolean
+  issueCount?: number
+
+  // Refinement metadata
+  iterations?: number
+  improved?: boolean
+}
+
 export interface AgentStepEvent {
   type: 'agent_step_status'
   runId: string
@@ -11,6 +57,12 @@ export interface AgentStepEvent {
   duration?: number
   failureReason?: string
   timestamp: string
+
+  // Enriched fields for Gap #2
+  llm?: LLMMetadata
+  metadata?: AgentStepMetadata
+  cumulativeTokens?: number
+  cumulativeCost?: number
 }
 
 export type AgentAlertCode = 'long_running_step' | 'step_failure'

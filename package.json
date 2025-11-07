@@ -8,6 +8,7 @@
         "kill": "fuser -k 5000/tcp",
         "build": "tsc --noEmit && vite build",
         "lint": "eslint .",
+        "test": "vitest run",
         "optimize": "vite optimize",
         "preview": "vite preview",
         "cf:dev": "npm run build && wrangler dev",
@@ -94,6 +95,7 @@
         "vite": "^6.3.5",
         "vite-plugin-top-level-await": "^1.6.0",
         "vite-plugin-wasm": "^3.5.0",
+        "vitest": "^2.1.4",
         "wrangler": "^4.45.3"
     }
 }

@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { llmService } from '../services/llm-service'
 import { appConfig } from '../config'
 import { sanitizeQueryForPrompt, JSON_OUTPUT_REQUIREMENTS } from '../prompt-utils'
+import type { KBContext } from './agent-context'
 
 export interface SubQuery {
   id: string
@@ -31,7 +32,29 @@ const planSchema = z.object({
 })
 
 export class QueryPlannerAgent {
-  async createPlan(query: string, estimatedSubQueries: number = 2): Promise<QueryPlan> {
+  /**
+   * Create query plan with KB-aware decomposition.
+   * When KB context is provided, biases sub-queries toward KB topics and
+   * considers document coverage for better decomposition.
+   */
+  async createPlan(query: string, estimatedSubQueries: number = 2, kb?: KBContext): Promise<QueryPlan> {
+    // Build KB-aware context for prompt if available
+    let kbContext = ''
+    if (kb) {
+      kbContext = `
+
+Knowledge Base Context:
+- Documents: ${kb.documentCount} documents with ${kb.chunkCount} chunks
+${kb.topics && kb.topics.length > 0 ? `- Main topics covered: ${kb.topics.slice(0, 8).join(', ')}` : ''}
+- Content type: ${kb.contentTypes.code > 0.5 ? 'code-heavy' : kb.contentTypes.technical > 0.5 ? 'technical documentation' : 'prose/documentation'}
+
+When decomposing:
+- Bias sub-queries toward topics that exist in the KB
+- If KB is small (< 5 docs), prefer fewer, broader sub-queries
+- If KB is large (> 20 docs), more specific sub-queries are appropriate
+- Consider whether KB likely contains information for each sub-query`
+    }
+
     const systemPrompt = `You are a query planning expert. Break down complex queries into focused, non-overlapping sub-queries.
 
 Decomposition rules:
@@ -40,6 +63,8 @@ Decomposition rules:
 - Minimize redundancy; merge overlapping sub-queries
 - Order by dependency: prerequisites first; choose "sequential" if dependencies exist, else "parallel"
 - Provide a brief "purpose" for each sub-query
+${kb && kb.documentCount < 5 ? '- Keep sub-queries broad; small KB may not support narrow queries' : ''}
+${kbContext}
 
 Respond with JSON:
 {
@@ -76,11 +101,15 @@ Create a query plan as JSON:`
       console.warn('LLM query planning failed, using fallback:', error)
     }
 
-    return this.fallbackPlan(query, estimatedSubQueries)
+    return this.fallbackPlan(query, estimatedSubQueries, kb)
   }
 
-  private fallbackPlan(query: string, count: number): QueryPlan {
-    const desiredCount = Math.max(count, 1)
+  private fallbackPlan(query: string, count: number, kb?: KBContext): QueryPlan {
+    // KB-aware fallback: limit sub-queries for small KBs
+    const adjustedCount = kb && kb.documentCount < 5
+      ? Math.min(count, 2)
+      : count
+    const desiredCount = Math.max(adjustedCount, 1)
     const normalizedQuery = query.trim()
 
     let candidateClauses = this.segmentByPunctuation(normalizedQuery)

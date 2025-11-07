@@ -173,3 +173,61 @@ Recommend chunking strategy as JSON:`
     }
   }
 }
+
+// --- Content type classification helpers (ingestion/KB analysis) ---
+export type ContentTypeBreakdown = {
+  code: number
+  prose: number
+  technical: number
+}
+
+/**
+ * Classify content types for a set of chunk texts using lightweight heuristics.
+ * Returns normalized percentages (0-1) for { code, prose, technical }.
+ */
+export function classifyContentTypesForChunks(chunks: string[]): ContentTypeBreakdown {
+  if (!chunks || chunks.length === 0) {
+    return { code: 0, prose: 0, technical: 0 }
+  }
+
+  let code = 0
+  let prose = 0
+  let technical = 0
+
+  const codePatterns = [
+    /\bfunction\s+\w+\s*\(/,
+    /\bclass\s+\w+/,
+    /\bconst\s+\w+\s*=/,
+    /\bimport\s+.*\bfrom\b/,
+    /\{[\s\S]*\}/,
+    /;[\s\n]/,
+    /```[\s\S]*?```/
+  ]
+  const technicalTerms = [
+    'api', 'http', 'parameter', 'configuration', 'endpoint',
+    'authentication', 'token', 'request', 'response', 'schema',
+    'json', 'yaml', 'kubernetes', 'docker', 'terraform', 'spec'
+  ]
+
+  for (const raw of chunks) {
+    const content = (raw || '').toLowerCase()
+    const isCode = codePatterns.some(re => re.test(content))
+    if (isCode) {
+      code++
+      continue
+    }
+    const isTechnical = technicalTerms.some(term => content.includes(term))
+    if (isTechnical) {
+      technical++
+    } else {
+      prose++
+    }
+  }
+
+  const total = Math.max(1, code + prose + technical)
+  return {
+    code: code / total,
+    prose: prose / total,
+    technical: technical / total
+  }
+}

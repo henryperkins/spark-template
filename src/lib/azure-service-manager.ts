@@ -58,6 +58,99 @@ export class AzureServiceManager {
     return this.searchService
   }
 
+  getNamespaceId(): string | undefined {
+    return this.config?.search?.namespace
+  }
+
+  /**
+   * Stream chat completions from Azure OpenAI.
+   * Returns an async iterable of text chunks. Uses the AzureOpenAIService streaming mode
+   * and bridges onChunk callbacks into an async generator.
+   */
+  generateStream(
+    messages: Array<{ role: string; content: string }> | string,
+    options?: {
+      maxTokens?: number
+      temperature?: number
+      topP?: number
+      responseFormat?: 'text' | 'json_object'
+    }
+  ): AsyncIterable<string> {
+    if (!this.openaiService) {
+      throw new Error('Azure OpenAI service not configured')
+    }
+
+    const self = this
+    // Simple async queue to bridge callback -> async iterable
+    const queue: string[] = []
+    let done = false
+    let errState: unknown | null = null
+    let notify: (() => void) | null = null
+
+    const enqueue = (chunk: string) => {
+      if (typeof chunk === 'string' && chunk.length > 0) {
+        queue.push(chunk)
+        const n = notify
+        if (n) n()
+        notify = null
+      }
+    }
+
+    // Kick off the streaming request (fire and forget; completion sets done flag)
+    ;(async () => {
+      try {
+        await self.openaiService!.generateCompletion(messages, {
+          maxTokens: options?.maxTokens,
+          temperature: options?.temperature,
+          topP: options?.topP,
+          responseFormat: options?.responseFormat,
+          stream: true,
+          onChunk: (c: string) => enqueue(c),
+        })
+      } catch (err) {
+        // Capture error to propagate through the async iterator
+        errState = err
+        console.error('Azure streaming error:', err)
+      } finally {
+        done = true
+        const fn = notify as unknown as (() => void) | null
+        if (typeof fn === 'function') fn()
+        notify = null
+      }
+    })()
+
+    // The async iterator that yields chunks as they arrive
+    const iterator: AsyncIterable<string> = {
+      [Symbol.asyncIterator](): AsyncIterator<string> {
+        return {
+          async next(): Promise<IteratorResult<string>> {
+            while (true) {
+              // If an error occurred, surface it to the consumer
+              if (errState) {
+                throw errState
+              }
+              // yield queued chunks first
+              if (queue.length > 0) {
+                const value = queue.shift() as string
+                return { value, done: false }
+              }
+              // if no more chunks will arrive, finish
+              if (done) {
+                return { value: undefined as unknown as string, done: true }
+              }
+              // wait for next chunk or completion
+              await new Promise<void>((resolve) => {
+                notify = resolve
+              })
+              // loop to re-check conditions
+            }
+          },
+        }
+      },
+    }
+    return iterator
+  }
+
   async tryGenerateQueryEmbedding(query: string): Promise<number[] | null> {
     if (!this.openaiService) {
       return null
@@ -206,8 +299,8 @@ export class AzureServiceManager {
   }
 
   async generateResponseWithAzure(query: string, sources: Source[]): Promise<string> {
-    if (!this.isConfigured()) {
-      throw new Error('Azure services not configured')
+    if (!this.hasOpenAI()) {
+      throw new Error('Azure OpenAI service not configured')
     }
 
     try {
@@ -285,6 +378,35 @@ export class AzureServiceManager {
     }
 
     return this.openaiService.generateCompletion(messages, options)
+  }
+
+  /**
+   * Generate a completion and return usage metadata when available.
+   * Falls back to text-only if the underlying service does not return usage.
+   */
+  async generateCompletionWithUsage(
+    messages: Array<{ role: string; content: string }> | string,
+    options?: {
+      maxTokens?: number
+      temperature?: number
+      topP?: number
+      responseFormat?: 'text' | 'json_object'
+    }
+  ): Promise<{ text: string; usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number } }>
+  {
+    if (!this.openaiService) {
+      throw new Error('Azure OpenAI service not configured')
+    }
+    if (options && (options as any).stream) {
+      // streaming path does not yield usage reliably; delegate to standard method
+      const text = await this.openaiService.generateCompletion(messages, options)
+      return { text }
+    }
+    if (typeof (this.openaiService as any).generateCompletionWithUsage === 'function') {
+      return (this.openaiService as any).generateCompletionWithUsage(messages, options)
+    }
+    const text = await this.openaiService.generateCompletion(messages, options)
+    return { text }
   }
 }
 

@@ -107,14 +107,19 @@ class TokenTracker {
   private maxMetricsRetention = 1000
 
   private readonly modelPricing: Record<string, ModelPricing> = {
+    // Costs per 1K tokens (USD). Aligned with agent-context per-1M table.
     'gpt-4': { promptCostPer1k: 0.03, completionCostPer1k: 0.06 },
     'gpt-4-turbo': { promptCostPer1k: 0.01, completionCostPer1k: 0.03 },
+    'gpt-4o': { promptCostPer1k: 0.005, completionCostPer1k: 0.015 },
+    'gpt-4o-mini': { promptCostPer1k: 0.00015, completionCostPer1k: 0.0006 },
     'gpt-3.5-turbo': { promptCostPer1k: 0.0005, completionCostPer1k: 0.0015 },
     'default': { promptCostPer1k: 0.01, completionCostPer1k: 0.03 }
   }
 
   private getPricingForModel(model: string): ModelPricing {
     const normalized = (model || '').toLowerCase()
+    if (normalized.includes('gpt-4o-mini')) return this.modelPricing['gpt-4o-mini']
+    if (normalized.includes('gpt-4o')) return this.modelPricing['gpt-4o']
     if (normalized.includes('gpt-4-turbo')) return this.modelPricing['gpt-4-turbo']
     if (normalized.includes('gpt-4')) return this.modelPricing['gpt-4']
     if (normalized.includes('gpt-3.5')) return this.modelPricing['gpt-3.5-turbo']

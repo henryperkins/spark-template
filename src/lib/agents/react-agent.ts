@@ -18,6 +18,23 @@ export interface ReActResult {
   improved: boolean
 }
 
+export interface ReActOptions {
+  /**
+   * Remaining token budget available to refinement.
+   * Used to adapt the number of iterations.
+   */
+  remainingTokenBudget?: number
+  /**
+   * Minimum tokens we expect to consume per refinement iteration
+   * (prompt + completion). Defaults to 1500.
+   */
+  minTokensPerIteration?: number
+  /**
+   * Optional hard cap on iterations for this call.
+   */
+  maxIterations?: number
+}
+
 export class ReActAgent {
   private maxIterations = 3
   private criticAgent = new CriticAgent()
@@ -26,12 +43,33 @@ export class ReActAgent {
     query: string,
     initialResponse: string,
     initialSources: Source[],
-    validationIssues: string[]
+    validationIssues: string[],
+    options?: ReActOptions,
+    kb?: { contentTypes: { code: number; prose: number; technical: number }; embeddingCoverage?: number }
   ): Promise<ReActResult> {
     const steps: ReActStep[] = []
     let currentResponse = initialResponse
     let iteration = 0
     let issues = [...validationIssues]
+
+    // Dynamically adapt iteration cap based on remaining token budget
+    const minTokens = Math.max(500, options?.minTokensPerIteration ?? 1500)
+    const budget = options?.remainingTokenBudget ?? Number.POSITIVE_INFINITY
+    const budgetBasedCap = Number.isFinite(budget)
+      ? Math.max(0, Math.floor(budget / minTokens))
+      : this.maxIterations
+    const hardCap = options?.maxIterations ?? this.maxIterations
+    let iterationsLimit = Math.max(0, Math.min(this.maxIterations, budgetBasedCap, hardCap))
+    // Content-aware iteration limits: code-heavy or low-embedding KBs get fewer passes
+    if (kb) {
+      const codeHeavy = (kb.contentTypes?.code ?? 0) > 0.5
+      const lowEmbedding = (kb as any).embeddingCoverage !== undefined && (kb as any).embeddingCoverage < 0.5
+      if (lowEmbedding) {
+        iterationsLimit = Math.min(iterationsLimit, 1)
+      } else if (codeHeavy) {
+        iterationsLimit = Math.min(iterationsLimit, 2)
+      }
+    }
 
     if (validationIssues.length === 0) {
       return {
@@ -42,7 +80,17 @@ export class ReActAgent {
       }
     }
 
-    while (iteration < this.maxIterations && issues.length > 0) {
+    // If budget does not allow even a single pass, skip gracefully.
+    if (iterationsLimit === 0) {
+      return {
+        finalResponse: initialResponse,
+        steps: [],
+        iterations: 0,
+        improved: false
+      }
+    }
+
+    while (iteration < iterationsLimit && issues.length > 0) {
       iteration++
 
       const thought = await this.generateThought(
@@ -52,7 +100,7 @@ export class ReActAgent {
         iteration
       )
 
-      const action = this.determineAction(iteration, issues)
+      const action = this.determineAction(iteration, issues, iterationsLimit)
 
       if (action === 'complete') {
         steps.push({
@@ -152,9 +200,11 @@ What should be the next step?`
 
   private determineAction(
     iteration: number,
-    issues: string[]
+    issues: string[],
+    iterationsLimit?: number
   ): ReActStep['action'] {
-    if (iteration >= this.maxIterations) {
+    const cap = iterationsLimit ?? this.maxIterations
+    if (iteration >= cap) {
       return 'complete'
     }
 

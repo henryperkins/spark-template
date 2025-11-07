@@ -18,6 +18,7 @@ export interface QueryHistoryEntry {
 
   totalDuration: number
   retrievalDuration?: number
+  retrievalAvgScore?: number
 
   workflow?: Array<{
     agent: string
@@ -33,6 +34,20 @@ export interface QueryHistoryEntry {
     faithfulnessScore: number
     relevanceScore: number
     isValid: boolean
+  }
+
+  // Optional enriched execution summary from orchestrator context
+  executionSummary?: {
+    totalDuration: number
+    totalTokens: number
+    totalCost: number
+    llmCallCount: number
+    warningCount: number
+    budgetUtilization: {
+      tokens: number
+      time: number
+    }
+    phaseBreakdown: Record<string, number>
   }
 }
 

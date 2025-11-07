@@ -3,6 +3,8 @@ import { azureServiceManager } from '../azure-service-manager'
 import { appConfig } from '../config'
 import { estimateTokens } from '../prompt-utils'
 import { tokenTracker } from './token-tracker'
+import { getActiveQueryContext } from '../agents/context-registry'
+import { recordLLMCall, calculateCost } from '../agents/agent-context'
 
 export type LLMErrorCode = 'ETIMEDOUT' | 'ERATELIMIT' | 'EPARSE' | 'EREMOTE'
 
@@ -50,6 +52,56 @@ export class LLMService {
 
   private sleep(ms: number): Promise<void> {
     return new Promise(res => setTimeout(res, ms))
+  }
+
+  // Centralized recording of LLM usage: context + telemetry
+  private recordLLMOutcome(
+    provider: 'azure' | 'worker',
+    model: string | undefined,
+    promptTokens: number,
+    resultText: string,
+    options: CompletionOptions,
+    startedAt: number,
+    usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number }
+  ): void {
+    const resolvedModel = model || appConfig.model.defaultModel
+    const measuredPrompt = usage?.promptTokens
+    const measuredCompletion = usage?.completionTokens
+    const measuredTotal = usage?.totalTokens
+    const completionTokens = typeof measuredCompletion === 'number'
+      ? measuredCompletion
+      : estimateTokens(resultText, resolvedModel)
+    const effectivePrompt = typeof measuredPrompt === 'number' ? measuredPrompt : promptTokens
+    const effectiveTotal = typeof measuredTotal === 'number' ? measuredTotal : effectivePrompt + completionTokens
+    const cost = calculateCost(resolvedModel, effectivePrompt, effectiveTotal - effectivePrompt)
+
+    const ctx = getActiveQueryContext()
+    if (ctx) {
+      try {
+        recordLLMCall(ctx, {
+          model: resolvedModel,
+          provider,
+          promptTokens: effectivePrompt,
+          completionTokens,
+          totalTokens: effectiveTotal,
+          estimatedCost: cost,
+          temperature: options.temperature,
+          maxTokens: options.maxTokens,
+          duration: Date.now() - startedAt
+        })
+      } catch { /* non-fatal */ }
+    }
+
+    try {
+      tokenTracker.recordUsage({
+        promptTokens: effectivePrompt,
+        completionTokens,
+        totalTokens: effectiveTotal,
+        modelUsed: resolvedModel,
+        provider,
+        timestamp: new Date().toISOString()
+      })
+    } catch { /* best-effort */ }
   }
 
   private async acquireToken(): Promise<void> {
@@ -112,32 +164,35 @@ export class LLMService {
     const promptTokens = estimateTokens(promptText, options.model || appConfig.model.defaultModel)
 
     const call = async () => {
+      const start = Date.now()
       // Priority 1: Azure OpenAI (production)
-      if (azureServiceManager.isConfigured()) {
-        const p = azureServiceManager.generateCompletion(prompt, {
+      if (azureServiceManager.hasOpenAI()) {
+        // Prefer path that returns usage metadata when available
+        const p = azureServiceManager.generateCompletionWithUsage?.(prompt, {
           maxTokens: options.maxTokens,
           temperature: options.temperature,
           topP: options.topP
-        })
-        return this.withTimeout(p, timeoutMs)
+        }) ?? azureServiceManager.generateCompletion(prompt, {
+          maxTokens: options.maxTokens,
+          temperature: options.temperature,
+          topP: options.topP
+        }).then(text => ({ text }))
+        const res = await this.withTimeout(p, timeoutMs)
+        // Centralized recording (context + telemetry)
+        this.recordLLMOutcome('azure', options.model, promptTokens, res.text, options, start, res.usage)
+        return res.text
       }
 
       // Priority 2: Fallback to Worker proxy (or stubbed responder)
+      const startWorker = Date.now()
       const p = this.callWorkerLLM(prompt, options.model, false)
-      return this.withTimeout(p, timeoutMs)
+      const res = await this.withTimeout(p, timeoutMs)
+      this.recordLLMOutcome('worker', options.model, promptTokens, res, options, startWorker)
+      return res
     }
     try {
       const result = await this.retry(call)
-
-      // Track token usage
-      const completionTokens = estimateTokens(result, options.model || appConfig.model.defaultModel)
-      this.trackTokenUsage(
-        promptTokens,
-        completionTokens,
-        options.model || appConfig.model.defaultModel,
-        azureServiceManager.isConfigured() ? 'azure' : 'worker'
-      )
-
+      // Note: usage and context already recorded per-branch
       return result
     } catch (err) {
       if (err instanceof LLMError) throw err
@@ -184,38 +239,42 @@ export class LLMService {
     const promptTokens = estimateTokens(promptText, options.model || appConfig.model.defaultModel)
 
     const call = async () => {
-      if (azureServiceManager.isConfigured()) {
+      const start = Date.now()
+      if (azureServiceManager.hasOpenAI()) {
         const response = await this.withTimeout(
-          azureServiceManager.generateCompletion(prompt, {
-            maxTokens: options.maxTokens,
-            temperature: options.temperature,
-            topP: options.topP,
-            responseFormat: 'json_object'
-          }),
+          (async () => {
+            const r = await (azureServiceManager.generateCompletionWithUsage?.(prompt, {
+              maxTokens: options.maxTokens,
+              temperature: options.temperature,
+              topP: options.topP,
+              responseFormat: 'json_object'
+            }) ?? azureServiceManager.generateCompletion(prompt, {
+              maxTokens: options.maxTokens,
+              temperature: options.temperature,
+              topP: options.topP,
+              responseFormat: 'json_object'
+            }).then(text => ({ text })))
+            return r
+          })(),
           timeoutMs
         )
-        return this.parseJson(response)
+        const parsed = this.parseJson(response.text)
+        this.recordLLMOutcome('azure', options.model, promptTokens, JSON.stringify(parsed), options, start, response.usage)
+        return parsed
       } else {
+        const startWorker = Date.now()
         const response = await this.withTimeout(
           this.callWorkerLLM(prompt, options.model, true),
           timeoutMs
         )
-        return this.parseJson(response)
+        const parsed = this.parseJson(response)
+        this.recordLLMOutcome('worker', options.model, promptTokens, JSON.stringify(parsed), options, startWorker)
+        return parsed
       }
     }
     try {
       const result = await this.retry(call)
-      const resultText = JSON.stringify(result)
-
-      // Track token usage
-      const completionTokens = estimateTokens(resultText, options.model || appConfig.model.defaultModel)
-      this.trackTokenUsage(
-        promptTokens,
-        completionTokens,
-        options.model || appConfig.model.defaultModel,
-        azureServiceManager.isConfigured() ? 'azure' : 'worker'
-      )
-
+      // Note: usage and context already recorded per-branch
       return result
     } catch (err) {
       if (err instanceof LLMError) throw err
@@ -323,20 +382,27 @@ export class LLMService {
 
     await this.acquireToken()
     const timeoutMs = Math.max(1000, appConfig.llm.timeoutMs)
+    const promptText = typeof prompt === 'string' ? prompt : prompt.map(m => m.content).join('\n')
+    const promptTokens = estimateTokens(promptText, options.model || appConfig.model.defaultModel)
 
     try {
-      if (azureServiceManager.isConfigured() && (azureServiceManager as {generateStream?: unknown}).generateStream) {
-        const stream = await (azureServiceManager as unknown as { generateStream: (prompt: CompletionPayload, options: unknown) => Promise<unknown> }).generateStream(prompt, {
+      if (azureServiceManager.hasOpenAI()) {
+        const start = Date.now()
+        const stream = azureServiceManager.generateStream(prompt, {
           maxTokens: options.maxTokens,
           temperature: options.temperature,
           topP: options.topP
         })
-        for await (const chunk of stream as AsyncIterable<string>) {
+        let collected = ''
+        for await (const chunk of stream) {
           // basic timeout guard by chunk pacing
           if (typeof chunk === 'string' && chunk.length > 0) {
+            collected += chunk
             yield chunk
           }
         }
+        // After streaming completes, record usage
+        this.recordLLMOutcome('azure', options.model, promptTokens, collected, options, start)
       } else {
         // Fallback to single chunk
         yield await this.withTimeout(this.generateText(prompt, options), timeoutMs)

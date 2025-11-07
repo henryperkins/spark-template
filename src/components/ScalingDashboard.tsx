@@ -2,6 +2,8 @@ import React, { useState, useEffect, useMemo } from 'react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Progress } from '@/components/ui/progress'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Separator } from '@/components/ui/separator'
@@ -27,6 +29,8 @@ import { errorTracking, type ErrorMetrics, type ErrorEvent } from '@/lib/service
 import { AlertPanel } from './AlertPanel'
 import { SearchDebugger } from './SearchDebugger'
 import { toast } from 'sonner'
+import { queryHistoryService, type QueryHistoryEntry } from '@/lib/services/query-history'
+import { useStorage } from '@/hooks/use-kv'
 
 interface ScalingDashboardProps {
   documents: Document[]
@@ -49,6 +53,8 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
   const [lastRefreshResult, setLastRefreshResult] = useState<RefreshResult | null>(null)
   const [tokenMetrics, setTokenMetrics] = useState<TokenDashboardMetrics | null>(null)
   const [errorMetrics, setErrorMetrics] = useState<ErrorMetrics | null>(null)
+  const [recentHistory, setRecentHistory] = useState<QueryHistoryEntry[]>([])
+  const [activeNamespace, setActiveNamespace] = useStorage<string>('active-namespace', '')
   const documentsWithErrors = useMemo(
     () =>
       documents.filter((document) => {
@@ -69,12 +75,14 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
 
   const loadMetrics = async () => {
     try {
-      const [refresh, cache] = await Promise.all([
+      const [refresh, cache, history] = await Promise.all([
         embeddingManager.getRefreshMetrics(),
-        cacheManager.getMetrics()
+        cacheManager.getMetrics(),
+        queryHistoryService.getRecent(25)
       ])
       setRefreshMetrics(refresh)
       setCacheMetrics(cache)
+      setRecentHistory(history)
 
       // Get token metrics (some async for Spark KV)
       const dailyUsage = tokenTracker.getDailyUsage()
@@ -183,6 +191,74 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
 
   const tabTriggerClass = 'text-xs sm:text-sm min-h-[2.75rem] flex-shrink-0 basis-[140px] px-3 sm:basis-auto sm:w-full whitespace-nowrap'
 
+  // Derived telemetry analytics from recent history
+  const telemetryAvailable = recentHistory.some(h => !!h.executionSummary || (h.workflow && h.workflow.length > 0))
+  const averagePhaseDurations = useMemo(() => {
+    const accum: Record<string, { sum: number; count: number }> = {}
+    const push = (phase: string, value: number) => {
+      if (!Number.isFinite(value) || value <= 0) return
+      const k = phase
+      const slot = accum[k] || { sum: 0, count: 0 }
+      slot.sum += value
+      slot.count += 1
+      accum[k] = slot
+    }
+    for (const h of recentHistory) {
+      if (h.executionSummary?.phaseBreakdown) {
+        for (const [phase, ms] of Object.entries(h.executionSummary.phaseBreakdown)) {
+          push(phase, ms)
+        }
+      } else if (h.workflow && h.workflow.length > 0) {
+        // Infer from workflow agents
+        const map: Record<string, string> = {
+          'Classifier': 'classification',
+          'Planner': 'planning',
+          'Router': 'routing',
+          'Retrieval': 'retrieval',
+          'Generator': 'generation',
+          'Critic': 'validation',
+          'ReAct': 'refinement',
+          'Expansion': 'expansion'
+        }
+        for (const step of h.workflow) {
+          const phase = map[step.agent]
+          if (phase) push(phase, step.duration || 0)
+        }
+      }
+    }
+    const out: Record<string, number> = {}
+    for (const [phase, { sum, count }] of Object.entries(accum)) {
+      out[phase] = count > 0 ? Math.round(sum / count) : 0
+    }
+    return out
+  }, [recentHistory])
+
+  const averageBudgetUtilization = useMemo(() => {
+    const entries = recentHistory.filter(h => !!h.executionSummary)
+    if (entries.length === 0) return { tokens: 0, time: 0 }
+    const tokens = entries.reduce((s, h) => s + (h.executionSummary?.budgetUtilization.tokens || 0), 0) / entries.length
+    const time = entries.reduce((s, h) => s + (h.executionSummary?.budgetUtilization.time || 0), 0) / entries.length
+    return { tokens, time }
+  }, [recentHistory])
+
+  const recentRuns = useMemo(() => recentHistory.slice(0, 5), [recentHistory])
+  const retrievalMetrics = useMemo(() => {
+    const entries = recentHistory
+    if (entries.length === 0) {
+      return { avgScore: 0, avgLatency: 0, degradedRate: 0 }
+    }
+    const withScore = entries.filter(e => typeof e.retrievalAvgScore === 'number')
+    const avgScore = withScore.length > 0
+      ? withScore.reduce((s, e) => s + (e.retrievalAvgScore || 0), 0) / withScore.length
+      : 0
+    const withLatency = entries.filter(e => typeof e.retrievalDuration === 'number')
+    const avgLatency = withLatency.length > 0
+      ? withLatency.reduce((s, e) => s + (e.retrievalDuration || 0), 0) / withLatency.length
+      : 0
+    const degradedRate = entries.reduce((s, e) => s + (e.azureFallback ? 1 : 0), 0) / entries.length
+    return { avgScore, avgLatency, degradedRate }
+  }, [recentHistory])
+
   return (
     <div className="space-y-6">
       <div>
@@ -216,6 +292,10 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
           <TabsTrigger value="metrics" className={tabTriggerClass}>
             <ChartBar size={16} className="mr-2" />
             Metrics
+          </TabsTrigger>
+          <TabsTrigger value="telemetry" className={tabTriggerClass}>
+            <ChartBar size={16} className="mr-2" />
+            Telemetry
           </TabsTrigger>
           <TabsTrigger value="debug" className={tabTriggerClass}>
             <Bug size={16} className="mr-2" />
@@ -704,6 +784,28 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
         </TabsContent>
 
         <TabsContent value="metrics" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center justify-between">
+                <span>Retrieval Metrics</span>
+              </CardTitle>
+              <CardDescription>Recent runs: average relevance (0–1), latency, degraded rate</CardDescription>
+            </CardHeader>
+            <CardContent className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="space-y-1">
+                <div className="text-sm text-muted-foreground">Avg. Relevance</div>
+                <div className="text-2xl font-bold">{retrievalMetrics.avgScore.toFixed(3)}</div>
+              </div>
+              <div className="space-y-1">
+                <div className="text-sm text-muted-foreground">Avg. Retrieval Latency</div>
+                <div className="text-2xl font-bold">{formatDuration(retrievalMetrics.avgLatency)}</div>
+              </div>
+              <div className="space-y-1">
+                <div className="text-sm text-muted-foreground">Degraded Rate</div>
+                <div className="text-2xl font-bold text-orange-11">{(retrievalMetrics.degradedRate * 100).toFixed(1)}%</div>
+              </div>
+            </CardContent>
+          </Card>
           <div className="grid gap-4">
             <Card>
               <CardHeader>
@@ -762,7 +864,113 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
           </div>
         </TabsContent>
 
+        <TabsContent value="telemetry" className="space-y-4">
+          {!telemetryAvailable ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Agent Telemetry</CardTitle>
+                <CardDescription>Run some queries to populate telemetry.</CardDescription>
+              </CardHeader>
+            </Card>
+          ) : (
+            <>
+              <Card>
+                <CardHeader>
+                  <CardTitle>Phase Averages (last {recentHistory.length})</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                  {Object.keys(averagePhaseDurations).length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No phase timing available.</p>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                      {Object.entries(averagePhaseDurations).map(([phase, ms]) => (
+                        <div key={phase} className="p-2 bg-muted rounded text-xs flex items-center justify-between">
+                          <span className="capitalize">{phase}</span>
+                          <Badge variant="outline">{formatDuration(ms)}</Badge>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Budget Utilization</CardTitle>
+                  <CardDescription>Average utilization across recent runs</CardDescription>
+                </CardHeader>
+                <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <div className="text-sm text-muted-foreground">Token Budget</div>
+                    <Progress value={Math.min(100, averageBudgetUtilization.tokens * 100)} />
+                    <div className="text-xs text-muted-foreground">
+                      {(averageBudgetUtilization.tokens * 100).toFixed(1)}% average used
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-sm text-muted-foreground">Time Budget</div>
+                    <Progress value={Math.min(100, averageBudgetUtilization.time * 100)} />
+                    <div className="text-xs text-muted-foreground">
+                      {(averageBudgetUtilization.time * 100).toFixed(1)}% average used
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Recent Runs</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                  {recentRuns.map(run => (
+                    <div key={run.id} className="p-2 bg-muted rounded text-xs">
+                      <div className="flex items-center justify-between">
+                        <div className="font-medium">{run.query}</div>
+                        <div className="flex items-center gap-2">
+                          {run.azureFallback && <Badge variant="destructive">fallback</Badge>}
+                          <Badge variant="outline">{formatDuration(run.totalDuration)}</Badge>
+                        </div>
+                      </div>
+                      {run.executionSummary ? (
+                        <div className="flex gap-3 mt-1 text-muted-foreground">
+                          <div>tokens: <strong>{run.executionSummary.totalTokens}</strong></div>
+                          <div>cost: <strong>${run.executionSummary.totalCost.toFixed(3)}</strong></div>
+                          <div>calls: <strong>{run.executionSummary.llmCallCount}</strong></div>
+                        </div>
+                      ) : (
+                        <div className="text-muted-foreground mt-1">
+                          No token/cost summary available.
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            </>
+          )}
+        </TabsContent>
+
         <TabsContent value="debug" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center justify-between">
+                <span>Namespace</span>
+              </CardTitle>
+              <CardDescription>Scope retrieval to a namespace (local and Azure)</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <Label htmlFor="active-namespace">Active Namespace</Label>
+              <Input
+                id="active-namespace"
+                placeholder="e.g., team-a-prod"
+                value={activeNamespace || ''}
+                onChange={(e) => setActiveNamespace(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Leave empty to query across all locally loaded chunks. If Azure config sets a namespace, both will apply.
+              </p>
+            </CardContent>
+          </Card>
           <SearchDebugger documents={documents} />
         </TabsContent>
       </Tabs>

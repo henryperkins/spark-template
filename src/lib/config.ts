@@ -28,6 +28,8 @@ export interface AppConfig {
     perDocLimit: number
     dedupeByDocument: boolean
     minRelevance: number
+    rrfK: number
+    normalizeScores: boolean
   }
   prompts: {
     enforceJsonOnly: boolean
@@ -129,7 +131,9 @@ export function getAppConfig(): AppConfig {
       maxResults: envInt('VITE_RETRIEVAL_MAX_RESULTS', 5),
       perDocLimit: envInt('VITE_RETRIEVAL_PER_DOC_LIMIT', 2),
       dedupeByDocument: envBool('VITE_RETRIEVAL_DEDUPE_BY_DOC', true),
-      minRelevance: envFloat('VITE_RETRIEVAL_MIN_RELEVANCE', 0.1)
+      minRelevance: envFloat('VITE_RETRIEVAL_MIN_RELEVANCE', 0.1),
+      rrfK: envInt('VITE_RRF_K', 60),
+      normalizeScores: envBool('VITE_NORMALIZE_SCORES', true)
     },
     prompts: {
       enforceJsonOnly: envBool('VITE_ENFORCE_JSON_ONLY', true)

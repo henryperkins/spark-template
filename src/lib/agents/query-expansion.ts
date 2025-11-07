@@ -4,6 +4,7 @@ import { cacheManager } from '@/lib/cache-manager'
 import { llmService } from '../services/llm-service'
 import { appConfig } from '../config'
 import { truncateContext, sanitizeQueryForPrompt, JSON_OUTPUT_REQUIREMENTS } from '../prompt-utils'
+import type { KBContext } from './agent-context'
 
 export interface SuggestedQuestion {
   question: string
@@ -38,10 +39,16 @@ const suggestionResponseSchema = z.object({
 export class QueryExpansionAgent {
   private readonly CACHE_TTL = 30 * 60 * 1000
 
+  /**
+   * Expand query with KB and content-type awareness.
+   * When KB context is provided, tailors suggestions based on content type
+   * (code-heavy KBs get more technical questions, etc.).
+   */
   async expandQuery(
     query: string,
     documents: Document[],
-    sources?: Source[]
+    sources?: Source[],
+    kb?: KBContext
   ): Promise<QueryExpansion> {
     const cacheKey = this.buildCacheKey(query, documents, sources)
 
@@ -63,7 +70,8 @@ export class QueryExpansionAgent {
       documents,
       sources,
       documentTopics,
-      strategy
+      strategy,
+      kb
     )
 
     const expansion: QueryExpansion = {
@@ -128,8 +136,26 @@ Example: {"topics": ["machine learning", "data processing", "model training"]}`
     documents: Document[],
     sources: Source[] | undefined,
     topics: string[],
-    strategy: 'document-based' | 'context-based' | 'hybrid'
+    strategy: 'document-based' | 'context-based' | 'hybrid',
+    kb?: KBContext
   ): Promise<SuggestedQuestion[]> {
+    // Build KB-aware context for prompts
+    let kbGuidance = ''
+    if (kb) {
+      const contentType = kb.contentTypes.code > 0.5 ? 'code-focused'
+        : kb.contentTypes.technical > 0.5 ? 'technical'
+        : 'general documentation'
+
+      kbGuidance = `\n\nKnowledge Base: ${contentType} content. Tailor suggestions accordingly.`
+
+      if (kb.contentTypes.code > 0.5) {
+        kbGuidance += '\n- Include questions about implementation, APIs, code examples'
+      } else if (kb.contentTypes.technical > 0.5) {
+        kbGuidance += '\n- Include questions about technical specifications, configurations, architecture'
+      } else {
+        kbGuidance += '\n- Include conceptual questions and practical applications'
+      }
+    }
     const rawContext = sources
       ?.slice(0, 3)
       .map(s => s.content)
@@ -152,7 +178,7 @@ ${JSON_OUTPUT_REQUIREMENTS}
 User's question: ${sanitizeQueryForPrompt(query)}
 
 Retrieved context:
-${contextContent}${topicsText}
+${contextContent}${topicsText}${kbGuidance}
 
 Generate questions that:
 1. Ask for clarification or more details (category: "clarification")
@@ -170,7 +196,7 @@ ${JSON_OUTPUT_REQUIREMENTS}
 
 User's question: ${sanitizeQueryForPrompt(query)}
 
-Knowledge base topics: ${topics.join(', ')}
+Knowledge base topics: ${topics.join(', ')}${kbGuidance}
 
 Generate questions that:
 1. Ask for clarification about concepts (category: "clarification")
@@ -186,7 +212,7 @@ Example: {"questions": [{"question": "What are the main components?", "reasoning
       prompt = `Based on the user's question, suggest 4 related questions that would help them explore the topic more thoroughly.
 ${JSON_OUTPUT_REQUIREMENTS}
 
-User's question: ${sanitizeQueryForPrompt(query)}
+User's question: ${sanitizeQueryForPrompt(query)}${kbGuidance}
 
 Generate questions that:
 1. Ask for clarification (category: "clarification")
