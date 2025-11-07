@@ -90,11 +90,20 @@ export interface CreateResponseOptions {
   store?: boolean
   background?: boolean
 
+  // Response chaining and instructions
+  previousResponseId?: string
+  instructions?: string
+
+  // Reasoning configuration (for o-series models)
+  reasoning?: {
+    effort?: 'low' | 'medium' | 'high'
+  }
+
   // Tools (function calling, MCP, etc.) - passed through opaquely
   tools?: any[]
   toolChoice?: any
 
-  // Additional raw fields if needed (e.g. metadata, reasoning, include, etc.)
+  // Additional raw fields if needed (e.g. metadata, include, etc.)
   extraBody?: Record<string, unknown>
 }
 
@@ -236,6 +245,30 @@ export class ResponsesClient {
     return {
       id: json.id,
       status: json.status,
+      raw: json
+    }
+  }
+
+  /**
+   * Cancel a background response by ID.
+   * Returns the final status of the response.
+   */
+  async cancelResponse(
+    id: string
+  ): Promise<{ id: string; status: string; raw: any }> {
+    const res = await this.fetchWithAuth(`/responses/${encodeURIComponent(id)}/cancel`, {
+      method: 'POST',
+      headers: this.jsonHeaders()
+    })
+
+    if (!res.ok) {
+      throw await this.buildError(res)
+    }
+
+    const json = await res.json()
+    return {
+      id: json.id || id,
+      status: json.status || 'cancelled',
       raw: json
     }
   }
@@ -388,6 +421,21 @@ export class ResponsesClient {
     }
     if (options.toolChoice !== undefined) {
       body.tool_choice = options.toolChoice
+    }
+
+    // Response chaining
+    if (options.previousResponseId) {
+      body.previous_response_id = options.previousResponseId
+    }
+
+    // System instructions
+    if (options.instructions) {
+      body.instructions = options.instructions
+    }
+
+    // Reasoning configuration
+    if (options.reasoning) {
+      body.reasoning = options.reasoning
     }
 
     if (options.extraBody) {

@@ -354,44 +354,54 @@ export class AzureOpenAIService {
   /**
    * Core chat completion call with robust validation, no invalid-parameter retries,
    * and structured error reporting. Streaming path delegates to handleStreamingResponse.
+   *
+   * RESPONSES API FIRST: When useResponsesApi is enabled, this method exclusively uses
+   * the v1 Responses API for all chat/RAG interactions. Falls back to /chat/completions
+   * only when useResponsesApi is false.
    */
   async generateCompletion(
     messages: Array<{ role: string; content: string }> | string,
     options?: SafeChatOptions
   ): Promise<string> {
-    // Prefer Responses API when configured; fall back to legacy /chat/completions.
-    if (this.responsesClient && !options?.stream) {
-      const result = await this.responsesClient.createResponse({
-        messages: this.toResponseMessages(messages),
-        maxOutputTokens: options?.maxTokens,
-        temperature: options?.temperature,
-        topP: options?.topP,
-        extraBody:
-          options?.responseFormat === 'json_object'
-            ? { response_format: { type: 'json_object' } }
-            : undefined
-      })
-      return result.outputText
-    }
+    // Extract system instructions for Responses API
+    const { systemInstructions, userMessages } = this.extractSystemInstructions(messages)
 
-    if (this.responsesClient && options?.stream && options.onChunk) {
-      // Bridge Responses streaming into onChunk callback.
-      for await (const delta of this.responsesClient.streamText({
-        messages: this.toResponseMessages(messages),
-        maxOutputTokens: options.maxTokens,
-        temperature: options.temperature,
-        topP: options.topP,
-        extraBody:
-          options.responseFormat === 'json_object'
-            ? { response_format: { type: 'json_object' } }
-            : undefined
-      })) {
-        options.onChunk?.(delta)
+    // RESPONSES API PATH: Use exclusively when configured
+    if (this.responsesClient) {
+      if (options?.stream && options.onChunk) {
+        // Streaming path
+        for await (const delta of this.responsesClient.streamText({
+          messages: this.toResponseMessages(userMessages),
+          instructions: systemInstructions,
+          maxOutputTokens: options.maxTokens,
+          temperature: options.temperature,
+          topP: options.topP,
+          extraBody:
+            options.responseFormat === 'json_object'
+              ? { response_format: { type: 'json_object' } }
+              : undefined
+        })) {
+          options.onChunk?.(delta)
+        }
+        return ''
+      } else {
+        // Non-streaming path
+        const result = await this.responsesClient.createResponse({
+          messages: this.toResponseMessages(userMessages),
+          instructions: systemInstructions,
+          maxOutputTokens: options?.maxTokens,
+          temperature: options?.temperature,
+          topP: options?.topP,
+          extraBody:
+            options?.responseFormat === 'json_object'
+              ? { response_format: { type: 'json_object' } }
+              : undefined
+        })
+        return result.outputText
       }
-      // For streaming path, caller typically doesn't need the full text; return empty string.
-      return ''
     }
 
+    // FALLBACK PATH: /chat/completions when Responses API is not configured
     const url = `${this.config.endpoint}/openai/deployments/${this.config.deploymentName}/chat/completions?api-version=${this.config.apiVersion}`
     const body = this.buildChatRequestBody(messages, options)
 
@@ -418,7 +428,7 @@ export class AzureOpenAIService {
 
   /**
    * Non-streaming completion returning text + usage.
-   * Uses Responses API when enabled; otherwise falls back to legacy /chat/completions.
+   * RESPONSES API FIRST: Uses Responses API when enabled; otherwise falls back to /chat/completions.
    */
   async generateCompletionWithUsage(
     messages: Array<{ role: string; content: string }> | string,
@@ -427,9 +437,14 @@ export class AzureOpenAIService {
     text: string
     usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number }
   }> {
+    // Extract system instructions for Responses API
+    const { systemInstructions, userMessages } = this.extractSystemInstructions(messages)
+
+    // RESPONSES API PATH
     if (this.responsesClient) {
       const result = await this.responsesClient.createResponse({
-        messages: this.toResponseMessages(messages),
+        messages: this.toResponseMessages(userMessages),
+        instructions: systemInstructions,
         maxOutputTokens: options?.maxTokens,
         temperature: options?.temperature,
         topP: options?.topP,
@@ -530,21 +545,69 @@ export class AzureOpenAIService {
   }
 
   async generateRAGResponse(query: string, context: string): Promise<string> {
-    const messages = [
-      {
-        role: 'system',
-        content: `You are a helpful research assistant. Answer the user's question based on the provided context from documents. Be accurate and cite your sources using the numbers in brackets when applicable.
+    const result = await this.generateRAGResponseWithMetadata(query, context)
+    return result.text
+  }
+
+  /**
+   * Generate RAG response with full metadata (usage, responseId, etc.).
+   * RESPONSES API FIRST: Returns enhanced metadata when Responses API is enabled.
+   */
+  async generateRAGResponseWithMetadata(
+    query: string,
+    context: string
+  ): Promise<{
+    text: string
+    usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number }
+    responseId?: string
+    messages?: any[]
+    raw?: any
+  }> {
+    const systemInstructions = `You are a helpful research assistant. Answer the user's question based on the provided context from documents. Be accurate and cite your sources using the numbers in brackets when applicable.
 
 Context from documents:
 ${context}`
-      },
+
+    const userMessages = [
       {
         role: 'user',
         content: query
       }
     ]
 
-    return this.generateCompletion(messages)
+    // Use Responses API when available for enhanced metadata
+    if (this.responsesClient) {
+      const result = await this.responsesClient.createResponse({
+        messages: this.toResponseMessages(userMessages),
+        instructions: systemInstructions
+      })
+
+      return {
+        text: result.outputText,
+        usage: result.usage
+          ? {
+              promptTokens: result.usage.inputTokens,
+              completionTokens: result.usage.outputTokens,
+              totalTokens: result.usage.totalTokens
+            }
+          : undefined,
+        responseId: result.id,
+        messages: result.messages,
+        raw: result.raw
+      }
+    }
+
+    // Fallback to generateCompletionWithUsage for /chat/completions
+    const messages = [
+      {
+        role: 'system',
+        content: systemInstructions
+      },
+      ...userMessages
+    ]
+
+    const { text, usage } = await this.generateCompletionWithUsage(messages)
+    return { text, usage }
   }
 
   /**
@@ -640,6 +703,28 @@ ${context}`
   }
 
   /**
+   * Extract system instructions from message array.
+   * Returns { systemInstructions, userMessages } where system messages
+   * are combined into instructions string and removed from message array.
+   */
+  private extractSystemInstructions(
+    messages: Array<{ role: string; content: string }> | string
+  ): { systemInstructions?: string; userMessages: Array<{ role: string; content: string }> | string } {
+    if (typeof messages === 'string') {
+      return { userMessages: messages }
+    }
+
+    const systemMessages = messages.filter(m => m.role === 'system')
+    const userMessages = messages.filter(m => m.role !== 'system')
+
+    const systemInstructions = systemMessages.length > 0
+      ? systemMessages.map(m => m.content).join('\n\n')
+      : undefined
+
+    return { systemInstructions, userMessages }
+  }
+
+  /**
    * Map legacy chat-style messages into Responses API message format.
    * This keeps AzureServiceManager / callers unchanged while switching transport.
    */
@@ -660,5 +745,213 @@ ${context}`
         }
       ]
     }))
+  }
+
+  // ===== ADVANCED RESPONSES API METHODS =====
+
+  /**
+   * Generate with function/tool calling support.
+   * Requires Responses API to be enabled.
+   */
+  async generateWithTools(options: {
+    messages: Array<{ role: string; content: string }> | string
+    tools: any[]
+    toolChoice?: any
+    maxTokens?: number
+    temperature?: number
+    extraBody?: Record<string, unknown>
+  }) {
+    if (!this.responsesClient) {
+      throw new Error('Responses API not enabled. Set useResponsesApi=true in config.')
+    }
+
+    const { systemInstructions, userMessages } = this.extractSystemInstructions(options.messages)
+
+    return this.responsesClient.createResponse({
+      messages: this.toResponseMessages(userMessages),
+      instructions: systemInstructions,
+      tools: options.tools,
+      toolChoice: options.toolChoice,
+      maxOutputTokens: options.maxTokens,
+      temperature: options.temperature,
+      extraBody: options.extraBody
+    })
+  }
+
+  /**
+   * Generate with MCP (Model Context Protocol) integration.
+   * Requires Responses API to be enabled.
+   */
+  async generateWithMcp(options: {
+    messages: Array<{ role: string; content: string }> | string
+    mcpServerUrl: string
+    mcpServerLabel: string
+    requireApproval?: 'always' | 'never'
+    headers?: Record<string, string>
+    maxTokens?: number
+    temperature?: number
+  }) {
+    if (!this.responsesClient) {
+      throw new Error('Responses API not enabled. Set useResponsesApi=true in config.')
+    }
+
+    const { systemInstructions, userMessages } = this.extractSystemInstructions(options.messages)
+
+    const mcpTool: any = {
+      type: 'mcp',
+      server_url: options.mcpServerUrl,
+      server_label: options.mcpServerLabel,
+      require_approval: options.requireApproval ?? 'always'
+    }
+
+    if (options.headers) {
+      mcpTool.headers = options.headers
+    }
+
+    return this.responsesClient.createResponse({
+      messages: this.toResponseMessages(userMessages),
+      instructions: systemInstructions,
+      tools: [mcpTool],
+      maxOutputTokens: options.maxTokens,
+      temperature: options.temperature
+    })
+  }
+
+  /**
+   * Generate with Code Interpreter (sandboxed Python execution).
+   * Requires Responses API to be enabled.
+   */
+  async generateWithCodeInterpreter(options: {
+    messages: Array<{ role: string; content: string }> | string
+    instructions?: string
+    fileIds?: string[]
+    maxTokens?: number
+    temperature?: number
+  }) {
+    if (!this.responsesClient) {
+      throw new Error('Responses API not enabled. Set useResponsesApi=true in config.')
+    }
+
+    const { systemInstructions, userMessages } = this.extractSystemInstructions(options.messages)
+    const finalInstructions = options.instructions || systemInstructions
+
+    const codeInterpreterTool: any = {
+      type: 'code_interpreter',
+      container: { type: 'auto' }
+    }
+
+    if (options.fileIds && options.fileIds.length > 0) {
+      codeInterpreterTool.container.file_ids = options.fileIds
+    }
+
+    return this.responsesClient.createResponse({
+      messages: this.toResponseMessages(userMessages),
+      instructions: finalInstructions,
+      tools: [codeInterpreterTool],
+      maxOutputTokens: options.maxTokens,
+      temperature: options.temperature
+    })
+  }
+
+  /**
+   * Generate image using gpt-image-1 via Responses API.
+   * Requires Responses API to be enabled.
+   */
+  async generateImageWithResponses(options: {
+    prompt: string
+    model?: string
+    maxTokens?: number
+  }) {
+    if (!this.responsesClient) {
+      throw new Error('Responses API not enabled. Set useResponsesApi=true in config.')
+    }
+
+    return this.responsesClient.createResponse({
+      model: options.model,
+      messages: [
+        {
+          role: 'user',
+          content: [{ type: 'input_text', text: options.prompt }]
+        }
+      ],
+      tools: [{ type: 'image_generation' }],
+      maxOutputTokens: options.maxTokens
+    })
+  }
+
+  /**
+   * Create a background task (async processing).
+   * Requires Responses API to be enabled.
+   */
+  async createBackgroundTask(
+    messages: Array<{ role: string; content: string }> | string,
+    options?: {
+      maxTokens?: number
+      temperature?: number
+      reasoning?: { effort?: 'low' | 'medium' | 'high' }
+    }
+  ): Promise<{ id: string; status: string; raw: any }> {
+    if (!this.responsesClient) {
+      throw new Error('Responses API not enabled. Set useResponsesApi=true in config.')
+    }
+
+    const { systemInstructions, userMessages } = this.extractSystemInstructions(messages)
+
+    return this.responsesClient.createBackgroundResponse({
+      messages: this.toResponseMessages(userMessages),
+      instructions: systemInstructions,
+      maxOutputTokens: options?.maxTokens,
+      temperature: options?.temperature,
+      reasoning: options?.reasoning
+    })
+  }
+
+  /**
+   * Get the result of a background task by ID.
+   * Requires Responses API to be enabled.
+   */
+  async getBackgroundTask(id: string) {
+    if (!this.responsesClient) {
+      throw new Error('Responses API not enabled. Set useResponsesApi=true in config.')
+    }
+
+    return this.responsesClient.retrieveResponse(id)
+  }
+
+  /**
+   * Cancel a background task by ID.
+   * Requires Responses API to be enabled.
+   */
+  async cancelBackgroundTask(id: string) {
+    if (!this.responsesClient) {
+      throw new Error('Responses API not enabled. Set useResponsesApi=true in config.')
+    }
+
+    return this.responsesClient.cancelResponse(id)
+  }
+
+  /**
+   * Chain responses using previous_response_id.
+   * Requires Responses API to be enabled.
+   */
+  async chainResponse(options: {
+    previousResponseId: string
+    messages: Array<{ role: string; content: string }> | string
+    maxTokens?: number
+    temperature?: number
+  }) {
+    if (!this.responsesClient) {
+      throw new Error('Responses API not enabled. Set useResponsesApi=true in config.')
+    }
+
+    const { systemInstructions, userMessages } = this.extractSystemInstructions(options.messages)
+
+    return this.responsesClient.createResponse({
+      previousResponseId: options.previousResponseId,
+      messages: this.toResponseMessages(userMessages),
+      instructions: systemInstructions,
+      maxOutputTokens: options.maxTokens,
+      temperature: options.temperature
+    })
   }
 }
