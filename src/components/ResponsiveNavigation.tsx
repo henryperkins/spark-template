@@ -42,7 +42,7 @@ export function ResponsiveNavigation({
             aria-label={tab.label}
           >
             {tab.icon}
-            <span className="hidden lg:inline">{tab.label}</span>
+            <span className="hidden md:inline">{tab.label}</span>
           </TabsTrigger>
         ))}
       </TabsList>

@@ -268,7 +268,7 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
                   </Alert>
                 )}
                 
-                <div className="prose prose-sm max-w-none">
+                <div className="prose prose-sm max-w-none dark:prose-invert">
                   <p className="whitespace-pre-wrap leading-relaxed">
                     {message.content}
                   </p>
