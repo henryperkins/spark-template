@@ -470,7 +470,8 @@ export class AzureOpenAIService {
     options?: Omit<SafeChatOptions, 'stream' | 'onChunk'>
   ): Promise<{
     text: string
-    usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number }
+    usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number; reasoningTokens?: number }
+    reasoningPreview?: string
   }> {
     // Extract system instructions for Responses API
     const { systemInstructions, userMessages } = this.extractSystemInstructions(messages)
@@ -496,11 +497,12 @@ export class AzureOpenAIService {
           ? {
               promptTokens: result.usage.inputTokens,
               completionTokens: result.usage.outputTokens,
-              totalTokens: result.usage.totalTokens
+              totalTokens: result.usage.totalTokens,
+              reasoningTokens: result.usage.reasoningTokens
             }
           : undefined
 
-        return { text: result.outputText, usage }
+        return { text: result.outputText, usage, reasoningPreview: result.reasoningPreview }
       } catch (error) {
         this.logResponsesClient400(error, options?.responseFormat === 'json_object')
         const status = (error as any)?.status as number | undefined

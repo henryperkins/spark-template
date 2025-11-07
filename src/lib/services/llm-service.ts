@@ -106,7 +106,8 @@ export class LLMService {
     resultText: string,
     options: CompletionOptions,
     startedAt: number,
-    usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number }
+    usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number; reasoningTokens?: number },
+    reasoningPreview?: string
   ): void {
     const resolvedModel = model || appConfig.model.defaultModel
 
@@ -166,7 +167,9 @@ export class LLMService {
           estimatedCost: cost,
           temperature: options.temperature,
           maxTokens: options.maxTokens,
-          duration
+          duration,
+          reasoningTokens: typeof usage?.reasoningTokens === 'number' ? usage.reasoningTokens : undefined,
+          reasoningPreview
         })
       } catch {
         // non-fatal
@@ -259,7 +262,7 @@ export class LLMService {
           ?? azureServiceManager.generateCompletion(prompt, azureOptions).then(text => ({ text }))
         const res = await this.withTimeout(p, timeoutMs)
         // Centralized recording (context + telemetry)
-        this.recordLLMOutcome('azure', options.model, promptTokens, res.text, options, start, res.usage)
+        this.recordLLMOutcome('azure', options.model, promptTokens, res.text, options, start, res.usage, (res as any).reasoningPreview)
         return res.text
       }
 
@@ -367,7 +370,8 @@ export class LLMService {
           JSON.stringify(parsed),
           options,
           start,
-          (response as any).usage
+          (response as any).usage,
+          (response as any).reasoningPreview
         )
         return parsed
       }

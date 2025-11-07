@@ -588,7 +588,11 @@ export class AzureServiceManager {
       topP?: number
       responseFormat?: 'text' | 'json_object'
     }
-  ): Promise<{ text: string; usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number } }>
+  ): Promise<{
+    text: string
+    usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number; reasoningTokens?: number }
+    reasoningPreview?: string
+  }>
   {
     if (!this.openaiService) {
       throw new Error('Azure OpenAI service not configured')

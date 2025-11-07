@@ -117,6 +117,12 @@ export interface LLMCallMetadata {
 
   /** Call duration in ms */
   duration: number
+
+  /** Reasoning tokens (for models with extended thinking) */
+  reasoningTokens?: number
+
+  /** Redacted preview of reasoning content */
+  reasoningPreview?: string
 }
 
 /**

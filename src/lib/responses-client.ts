@@ -68,6 +68,7 @@ export interface ResponsesResult {
   messages: ResponseMessage[]
   usage?: ResponsesUsage
   raw: any
+  reasoningPreview?: string
 }
 
 /**
@@ -717,6 +718,74 @@ export class ResponsesClient {
     return err
   }
 
+  private redactSensitiveData(text: string): string {
+    return (text || '')
+      // OpenAI-style keys
+      .replace(/\bsk-[A-Za-z0-9-_]{20,}\b/g, '[REDACTED_API_KEY]')
+      // long tokens (alnum, -, _, with optional padding)
+      .replace(/\b[A-Za-z0-9\-_]{32,}={0,2}\b/g, '[REDACTED_TOKEN]')
+      // generic 32+ alphanumeric
+      .replace(/\b[A-Za-z0-9]{32,}\b/g, '[REDACTED_TOKEN]')
+  }
+
+  private extractReasoningPreview(json: any, maxLength = 2000): string | undefined {
+    const candidates: string[] = []
+
+    // Top-level reasoning fields
+    if (typeof (json as any)?.reasoning_summary_text === 'string') {
+      candidates.push((json as any).reasoning_summary_text)
+    }
+    if (typeof (json as any)?.reasoning_content === 'string') {
+      candidates.push((json as any).reasoning_content)
+    }
+    if ((json as any)?.reasoning && typeof (json as any).reasoning === 'object') {
+      const rr = (json as any).reasoning
+      if (typeof rr.summary_text === 'string') candidates.push(rr.summary_text)
+      if (typeof rr.text === 'string') candidates.push(rr.text)
+      if (typeof rr.content === 'string') candidates.push(rr.content as string)
+    }
+
+    // Nested under response
+    if (json?.response && typeof json.response === 'object') {
+      const r = json.response
+      if (typeof (r as any)?.reasoning_summary_text === 'string') {
+        candidates.push((r as any).reasoning_summary_text)
+      }
+      if (typeof (r as any)?.reasoning_content === 'string') {
+        candidates.push((r as any).reasoning_content)
+      }
+      if ((r as any)?.reasoning && typeof (r as any).reasoning === 'object') {
+        const rr = (r as any).reasoning
+        if (typeof rr.summary_text === 'string') candidates.push(rr.summary_text)
+        if (typeof rr.text === 'string') candidates.push(rr.text)
+        if (typeof rr.content === 'string') candidates.push(rr.content as string)
+      }
+    }
+
+    // From output content items
+    if (Array.isArray(json?.output)) {
+      for (const item of json.output) {
+        if (!item || !Array.isArray(item.content)) continue
+        for (const c of item.content || []) {
+          const isReasoningType =
+            c?.type === 'reasoning' ||
+            c?.type === 'reasoning_summary' ||
+            c?.type === 'reasoning_content'
+          if (isReasoningType && typeof c?.text === 'string') {
+            candidates.push(c.text)
+          }
+        }
+      }
+    }
+
+    if (!candidates.length) return undefined
+    const combined = candidates.join('\n---\n')
+    const truncated = combined.length > maxLength
+      ? combined.slice(0, maxLength) + '...[truncated]'
+      : combined
+    return this.redactSensitiveData(truncated)
+  }
+
   private toResult(json: any, overrideText?: string): ResponsesResult {
     const outputText =
       overrideText ??
@@ -752,6 +821,8 @@ export class ResponsesClient {
         }
       : undefined
 
+    const reasoningPreview = this.extractReasoningPreview(json)
+
     return {
       id: json.id,
       status: json.status ?? 'completed',
@@ -759,7 +830,8 @@ export class ResponsesClient {
       outputText,
       messages,
       usage,
-      raw: json
+      raw: json,
+      reasoningPreview
     }
 
     function numberOrUndefined(v: any): number | undefined {
@@ -770,20 +842,18 @@ export class ResponsesClient {
   private extractFirstOutputText(json: any): string | undefined {
     if (!json) return undefined
 
+    // Be resilient on incomplete responses: still attempt extraction
+    if (json.status === 'incomplete') {
+      try {
+        console.warn('[ResponsesClient] Incomplete response; attempting to extract partial output', { id: json.id })
+      } catch {}
+    }
+
     // 1) Simple top-level fields
-    if (typeof json.text === 'string') {
-      return json.text
-    }
-    if (typeof json.output_text === 'string') {
-      return json.output_text
-    }
-
-    // 1b) Azure-specific extension: reasoning_content at top level
-    if (typeof (json as any).reasoning_content === 'string') {
-      return (json as any).reasoning_content
-    }
-
-    // 1c) Azure: top-level reasoning container
+    if (typeof json.text === 'string') return json.text
+    if (typeof json.output_text === 'string') return json.output_text
+    if (typeof (json as any).reasoning_summary_text === 'string') return (json as any).reasoning_summary_text
+    if (typeof (json as any).reasoning_content === 'string') return (json as any).reasoning_content
     if ((json as any).reasoning && typeof (json as any).reasoning === 'object') {
       const rr = (json as any).reasoning
       if (typeof rr.summary_text === 'string') return rr.summary_text
@@ -795,6 +865,7 @@ export class ResponsesClient {
       const r = json.response
       if (typeof r.output_text === 'string') return r.output_text
       if (typeof r.text === 'string') return r.text
+      if (typeof (r as any).reasoning_summary_text === 'string') return (r as any).reasoning_summary_text
       if (typeof (r as any).reasoning_content === 'string') return (r as any).reasoning_content
       if ((r as any).reasoning && typeof (r as any).reasoning === 'object') {
         const rr = (r as any).reasoning
@@ -803,24 +874,35 @@ export class ResponsesClient {
       }
     }
 
-    // 3) Walk output -> assistant message -> content and assemble text
+    // 3) From output: pass 0 — prefer reasoning items explicitly
+    if (Array.isArray(json.output)) {
+      const reasoningChunks: string[] = []
+      for (const item of json.output) {
+        if (!item || !Array.isArray(item.content)) continue
+        for (const c of item.content || []) {
+          const isReasoningType =
+            c?.type === 'reasoning' ||
+            c?.type === 'reasoning_summary' ||
+            c?.type === 'reasoning_content'
+          if (isReasoningType && typeof c?.text === 'string') {
+            reasoningChunks.push(c.text)
+          }
+        }
+      }
+      if (reasoningChunks.length) {
+        return reasoningChunks.join('')
+      }
+    }
+
+    // 4) From output: pass 1 — assistant message text/json
     if (Array.isArray(json.output)) {
       const chunks: string[] = []
-
-      // Pass 1: assistant messages only (preferred)
       for (const item of json.output) {
         if (!item || item.type !== 'message' || !Array.isArray(item.content)) continue
-
         for (const c of item.content || []) {
-          // Prefer known text-like types
-          if (
-            (c.type === 'output_text' || c.type === 'text') &&
-            typeof c.text === 'string'
-          ) {
+          if ((c.type === 'output_text' || c.type === 'text') && typeof c.text === 'string') {
             chunks.push(c.text)
-          }
-          // Structured JSON content: stringify as a last resort
-          else if (
+          } else if (
             (c.type === 'output_json' || c.type === 'json') &&
             (typeof (c as any).json === 'string' || typeof (c as any).json === 'object')
           ) {
@@ -829,19 +911,16 @@ export class ResponsesClient {
           }
         }
       }
+      if (chunks.length) return chunks.join('')
+    }
 
-      if (chunks.length) {
-        return chunks.join('')
-      }
-
-      // Pass 2: tolerate non-message output items (e.g., reasoning summaries)
+    // 5) From output: pass 2 — tolerant non-message (skip input_text)
+    if (Array.isArray(json.output)) {
+      const chunks: string[] = []
       for (const item of json.output) {
         if (!item || !Array.isArray(item.content)) continue
-
         for (const c of item.content || []) {
-          // Avoid echoing inputs; skip input_text
           if (c.type === 'input_text') continue
-
           if (typeof c?.text === 'string') {
             chunks.push(c.text)
           } else if (
@@ -853,16 +932,11 @@ export class ResponsesClient {
           }
         }
       }
-
-      if (chunks.length) {
-        return chunks.join('')
-      }
+      if (chunks.length) return chunks.join('')
     }
 
-    // 4) Final fallback: some APIs put a human-readable message here
-    if (typeof (json as any).message === 'string') {
-      return (json as any).message
-    }
+    // 6) Final fallback: some APIs put a human-readable message here
+    if (typeof (json as any).message === 'string') return (json as any).message
 
     // Log when we can't extract text to help diagnose API response structure issues
     console.warn('[ResponsesClient] Failed to extract output text. Response structure:', {
@@ -884,29 +958,24 @@ export class ResponsesClient {
     // Different implementations may emit specialized event types; we treat
     // any `output_text.delta`-like payloads as text.
     try {
-      // Common shape (per docs examples): event.type == 'response.output_text.delta'
-      if (
-        typeof parsed === 'object' &&
-        parsed !== null &&
-        typeof parsed.type === 'string'
-      ) {
-        if (
-          parsed.type === 'response.output_text.delta' &&
-          typeof parsed.delta === 'string'
-        ) {
+      if (typeof parsed === 'object' && parsed !== null && typeof parsed.type === 'string') {
+        if (parsed.type === 'response.output_text.delta' && typeof parsed.delta === 'string') {
           return parsed.delta
         }
-        // Also tolerate reasoning summary deltas when output_text isn't emitted
-        if (
-          parsed.type === 'response.reasoning_summary_text.delta' &&
-          typeof parsed.delta === 'string'
-        ) {
+        // Reasoning summary text delta
+        if (parsed.type === 'response.reasoning_summary_text.delta' && typeof parsed.delta === 'string') {
+          return parsed.delta
+        }
+        // Reasoning delta (model emits incremental reasoning content)
+        if (parsed.type === 'response.reasoning.delta' && typeof parsed.delta === 'string') {
+          return parsed.delta
+        }
+        // Some variants use "response.reasoning_summary.delta"
+        if (parsed.type === 'response.reasoning_summary.delta' && typeof parsed.delta === 'string') {
           return parsed.delta
         }
       }
-    } catch {
-      // ignore
-    }
+    } catch {}
     return null
   }
 }
