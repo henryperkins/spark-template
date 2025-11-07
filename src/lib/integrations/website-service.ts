@@ -1,4 +1,4 @@
-import { WebsiteConfig, Document, DocumentChunk } from '@/types'
+import { WebsiteConfig, Document } from '@/types'
 import { intelligentChunkDocument } from '@/lib/rag'
 import { azureServiceManager } from '@/lib/azure-service-manager'
 import { embeddingManager } from '@/lib/embedding-manager'

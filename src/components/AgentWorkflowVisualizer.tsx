@@ -48,16 +48,16 @@ type StatusMeta = {
 const STATUS_META: Record<AgentWorkflowStep['status'], StatusMeta> = {
   completed: {
     label: 'Completed',
-    indicatorClass: 'border-emerald-500 bg-emerald-500/10 text-emerald-600',
-    connectorClass: 'bg-emerald-400/70',
-    badgeClass: 'border-emerald-300 text-emerald-700',
+    indicatorClass: 'border-green-9 bg-green-2 text-green-11',
+    connectorClass: 'bg-green-9/70',
+    badgeClass: 'border-green-9 text-green-11',
     icon: <CheckCircle size={14} />
   },
   running: {
     label: 'In progress',
-    indicatorClass: 'border-amber-500 bg-amber-500/10 text-amber-600 animate-pulse',
-    connectorClass: 'bg-amber-400/70 animate-pulse',
-    badgeClass: 'border-amber-300 text-amber-700',
+    indicatorClass: 'border-amber-9 bg-amber-2 text-amber-11 animate-pulse',
+    connectorClass: 'bg-amber-9/70 animate-pulse',
+    badgeClass: 'border-amber-9 text-amber-11',
     icon: <PlayCircle size={14} />
   },
   failed: {
@@ -179,21 +179,21 @@ export function AgentWorkflowVisualizer({ steps, className, isLive = false }: Ag
   const getAgentAccent = (agentName: string) => {
     switch (agentName.toLowerCase()) {
       case 'classifier':
-        return 'bg-blue-500/30'
+        return 'bg-blue-3'
       case 'planner':
-        return 'bg-purple-500/30'
+        return 'bg-purple-3'
       case 'router':
-        return 'bg-green-500/30'
+        return 'bg-green-3'
       case 'retrieval':
-        return 'bg-yellow-600/30'
+        return 'bg-yellow-3'
       case 'generator':
-        return 'bg-pink-500/30'
+        return 'bg-pink-3'
       case 'critic':
-        return 'bg-red-500/30'
+        return 'bg-red-3'
       case 'react':
-        return 'bg-indigo-500/30'
+        return 'bg-indigo-3'
       default:
-        return 'bg-gray-400/30'
+        return 'bg-neutral-3'
     }
   }
 

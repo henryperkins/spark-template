@@ -9,6 +9,8 @@ import { findRelevantChunks, findRelevantChunksLocal, generateResponse } from '.
 import { azureServiceManager } from '../azure-service-manager'
 import { AgentStepEvent, telemetry } from '../services/telemetry'
 import { agentAnalytics } from '../services/agent-analytics'
+import { errorTracking } from '../services/error-tracker'
+import { queryHistoryService } from '../services/query-history'
 
 export interface AgentWorkflowStep {
   agent: string
@@ -30,6 +32,7 @@ export interface AgenticRAGResult {
   expansion?: QueryExpansion
   workflow: AgentWorkflowStep[]
   totalDuration: number
+  azureFallback: boolean
 }
 
 export interface ProcessQueryOptions {
@@ -52,6 +55,7 @@ export class AgenticOrchestrator {
     options: ProcessQueryOptions = {}
   ): Promise<AgenticRAGResult> {
     const startTime = Date.now()
+    let azureFallback = false
     const workflow: AgentWorkflowStep[] = []
     const runId = options.runId ?? this.generateRunId()
     const emitWorkflowUpdate = () => {
@@ -102,14 +106,17 @@ export class AgenticOrchestrator {
         documents,
         workflow,
         emitWorkflowUpdate,
-        emitStepEvent
+        emitStepEvent,
+        () => {
+          azureFallback = true
+        }
       )
     } else {
       routing = await this.executeStep(
       workflow,
       'Router',
       'Select retrieval strategy',
-      () => this.routingAgent.selectStrategy(query),
+      () => this.routingAgent.selectStrategy(query, { totalDocuments: documents.length }),
       emitWorkflowUpdate,
       emitStepEvent
     )
@@ -118,7 +125,9 @@ export class AgenticOrchestrator {
       workflow,
       'Retrieval',
       `Execute ${routing.strategy} search`,
-      () => this.executeRetrieval(query, documents, routing!.strategy),
+      () => this.executeRetrieval(query, documents, routing!.strategy, () => {
+        azureFallback = true
+      }),
       emitWorkflowUpdate,
       emitStepEvent
     )
@@ -127,24 +136,29 @@ export class AgenticOrchestrator {
     let response = await this.executeStep(
       workflow,
       'Generator',
-      'Generate initial response',
-      () => generateResponse(query, allSources),
+      allSources.length > 0 ? 'Generate initial response' : 'Generate diagnostic message (no sources)',
+      () => (allSources.length > 0
+        ? generateResponse(query, allSources)
+        : Promise.resolve(this.buildNoSourcesMessage(query, documents, routing?.strategy))),
       emitWorkflowUpdate,
       emitStepEvent
     )
 
-    const validation = await this.executeStep(
-      workflow,
-      'Critic',
-      'Validate response quality',
-      () => this.criticAgent.validateResponse(query, response, allSources),
-      emitWorkflowUpdate,
-      emitStepEvent
-    )
+    let validation: ValidationResult | undefined
+    if (allSources.length > 0) {
+      validation = await this.executeStep(
+        workflow,
+        'Critic',
+        'Validate response quality',
+        () => this.criticAgent.validateResponse(query, response, allSources),
+        emitWorkflowUpdate,
+        emitStepEvent
+      )
+    }
 
     let refinement: ReActResult | undefined
 
-    if (!validation.isValid || validation.faithfulnessScore < 0.7) {
+    if (validation && (!validation.isValid || validation.faithfulnessScore < 0.7)) {
       refinement = await this.executeStep(
         workflow,
         'ReAct',
@@ -153,7 +167,7 @@ export class AgenticOrchestrator {
           query,
           response,
           allSources,
-          validation.issues
+          validation!.issues
         ),
         emitWorkflowUpdate,
         emitStepEvent
@@ -175,7 +189,7 @@ export class AgenticOrchestrator {
 
     const totalDuration = Date.now() - startTime
 
-    return {
+    const result = {
       response,
       sources: allSources,
       classification,
@@ -185,8 +199,47 @@ export class AgenticOrchestrator {
       refinement,
       expansion,
       workflow,
-      totalDuration
+      totalDuration,
+      azureFallback
     }
+
+    // Log to query history (async, don't block return)
+    queryHistoryService.add({
+      id: runId,
+      timestamp: new Date().toISOString(),
+      query,
+      routing: routing ? {
+        strategy: routing.strategy,
+        reasoning: routing.reasoning,
+        confidence: routing.confidence
+      } : {
+        strategy: 'hybrid',
+        reasoning: 'Query decomposed into sub-queries',
+        confidence: 1.0
+      },
+      resultCount: allSources.length,
+      topScore: allSources[0]?.relevanceScore || 0,
+      azureUsed: azureServiceManager.isConfigured(),
+      azureFallback,
+      totalDuration,
+      workflow: workflow.map(s => ({
+        agent: s.agent,
+        action: s.action,
+        duration: s.duration || 0,
+        status: s.status
+      })),
+      complexity: classification.complexity,
+      requiresDecomposition: classification.requiresDecomposition,
+      validation: validation ? {
+        faithfulnessScore: validation.faithfulnessScore,
+        relevanceScore: validation.relevanceScore,
+        isValid: validation.isValid
+      } : undefined
+    }).catch(error => {
+      console.error('Failed to log query to history:', error)
+    })
+
+    return result
   }
 
   private async executeStep<T>(
@@ -240,7 +293,16 @@ export class AgenticOrchestrator {
       return result
     } catch (error) {
       const duration = Date.now() - stepStart
-      
+
+      // Track error
+      if (error instanceof Error) {
+        errorTracking.record(error, {
+          agent,
+          type: this.getErrorTypeForAgent(agent),
+          code: error.name
+        })
+      }
+
       workflow[stepIndex] = {
         ...runningStep,
         action: `${action} (failed)`,
@@ -263,6 +325,16 @@ export class AgenticOrchestrator {
     }
   }
 
+  private getErrorTypeForAgent(agent: string): 'retrieval' | 'llm' | 'unknown' {
+    if (agent === 'Retrieval' || agent === 'Router') {
+      return 'retrieval'
+    }
+    if (agent === 'Generator' || agent === 'Classifier' || agent === 'Planner' || agent === 'Critic' || agent === 'ReAct' || agent === 'Expansion') {
+      return 'llm'
+    }
+    return 'unknown'
+  }
+
   private async executeSubQueries(
     plan: QueryPlan,
     documents: Document[],
@@ -270,7 +342,8 @@ export class AgenticOrchestrator {
     emitWorkflowUpdate?: () => void,
     emitStepEvent?: (
       event: Omit<AgentStepEvent, 'type' | 'runId' | 'query' | 'timestamp'> & { timestamp?: string }
-    ) => void
+    ) => void,
+    onAzureFallback?: () => void
   ): Promise<Source[]> {
     const allSources: Source[] = []
     const sortedSubQueries = [...plan.subQueries].sort((a, b) => a.priority - b.priority)
@@ -287,12 +360,14 @@ export class AgenticOrchestrator {
                 workflow,
                 'Router',
                 `Select strategy for sub-query: ${sq.id}`,
-                () => this.routingAgent.selectStrategy(sq.query),
+                () => this.routingAgent.selectStrategy(sq.query, { totalDocuments: documents.length }),
                 emitWorkflowUpdate,
                 emitStepEvent
               )
 
-              return findRelevantChunks(sq.query, documents, 3, routingDecision.strategy)
+              return findRelevantChunks(sq.query, documents, 3, routingDecision.strategy, {
+                onAzureFallback,
+              })
             },
             emitWorkflowUpdate,
             emitStepEvent
@@ -313,7 +388,7 @@ export class AgenticOrchestrator {
           workflow,
           'Router',
           `Select strategy for sub-query: ${sq.id}`,
-          () => this.routingAgent.selectStrategy(sq.query),
+          () => this.routingAgent.selectStrategy(sq.query, { totalDocuments: documents.length }),
           emitWorkflowUpdate,
           emitStepEvent
         )
@@ -322,7 +397,9 @@ export class AgenticOrchestrator {
           workflow,
           'Retrieval',
           `Execute sub-query: ${sq.query.substring(0, 40)}...`,
-          () => findRelevantChunks(sq.query, documents, 3, routingDecision.strategy),
+          () => findRelevantChunks(sq.query, documents, 3, routingDecision.strategy, {
+            onAzureFallback,
+          }),
           emitWorkflowUpdate,
           emitStepEvent
         )
@@ -341,18 +418,44 @@ export class AgenticOrchestrator {
   private async executeRetrieval(
     query: string,
     documents: Document[],
-    strategy: RetrievalStrategy
+    strategy: RetrievalStrategy,
+    onAzureFallback?: () => void
   ): Promise<Source[]> {
     if (!azureServiceManager.isConfigured()) {
       return findRelevantChunks(query, documents, 5, strategy)
     }
 
     try {
-      return await findRelevantChunks(query, documents, 5, strategy)
+      return await findRelevantChunks(query, documents, 5, strategy, {
+        onAzureFallback,
+      })
     } catch (error) {
       console.warn('Primary retrieval path failed, using local fallback:', error)
+
+      // Track retrieval error
+      if (error instanceof Error) {
+        errorTracking.record(error, {
+          type: 'retrieval',
+          code: 'RETRIEVAL_FALLBACK'
+        })
+      }
+
+      onAzureFallback?.()
+
       return findRelevantChunksLocal(query, documents, 5)
     }
+  }
+
+  private buildNoSourcesMessage(query: string, documents: Document[], strategy?: RetrievalStrategy): string {
+    const totalDocs = documents.length
+    const totalChunks = documents.reduce((acc, d) => acc + (d.chunks?.length || 0), 0)
+    const strat = strategy ?? 'hybrid'
+    return [
+      `I could not retrieve any sources for "${query}".`,
+      `Detected ${totalDocs} documents with ${totalChunks} chunks in the knowledge base.`,
+      `This indicates a retrieval issue (strategy=${strat}).`,
+      `Try re-running or refining the query; if the issue persists, check indexing and hybrid search settings.`
+    ].join(' ')
   }
 
   private generateRunId(): string {

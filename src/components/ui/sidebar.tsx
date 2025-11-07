@@ -607,9 +607,8 @@ function SidebarMenuSkeleton({
   showIcon?: boolean
 }) {
   // Random width between 50 to 90%.
-  const width = useMemo(() => {
-    return `${Math.floor(Math.random() * 40) + 50}%`
-  }, [])
+  // Use useState with function initializer to avoid calling Math.random during render
+  const [width] = useState(() => `${Math.floor(Math.random() * 40) + 50}%`)
 
   return (
     <div
@@ -722,5 +721,4 @@ export {
   SidebarRail,
   SidebarSeparator,
   SidebarTrigger,
-  useSidebar,
 }

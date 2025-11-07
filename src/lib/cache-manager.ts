@@ -1,4 +1,6 @@
-export interface CacheEntry<T = any> {
+// No need to redefine Window.spark - it's already defined by @github/spark/spark import in main.tsx
+
+export interface CacheEntry<T = unknown> {
   data: T
   timestamp: string
   version: string
@@ -50,7 +52,7 @@ export class CacheManager {
 
   async set<T>(key: string, data: T, customTTL?: number): Promise<void> {
     const ttl = customTTL || this.getTTLByContentType(key)
-    
+
     const entry: CacheEntry<T> = {
       data,
       timestamp: new Date().toISOString(),
@@ -61,12 +63,13 @@ export class CacheManager {
     }
 
     const cacheKey = this.buildCacheKey(key)
-    await (window as any).spark.kv.set(cacheKey, entry)
+    await (window.spark!.kv)!.set(cacheKey, entry)
   }
 
   async get<T>(key: string): Promise<T | null> {
     const cacheKey = this.buildCacheKey(key)
-    const entry = await (window as any).spark.kv.get(cacheKey) as CacheEntry<T> | null
+    const rawEntry = await (window.spark!.kv)!.get(cacheKey)
+    const entry = rawEntry as CacheEntry<T> | undefined
 
     if (!entry) {
       this.misses++
@@ -87,7 +90,7 @@ export class CacheManager {
 
     entry.accessCount++
     entry.lastAccessed = new Date().toISOString()
-    await (window as any).spark.kv.set(cacheKey, entry)
+    await (window.spark!.kv)!.set(cacheKey, entry)
 
     this.hits++
     return entry.data
@@ -100,7 +103,7 @@ export class CacheManager {
   ): Promise<void> {
     for (const key of keys) {
       const cacheKey = this.buildCacheKey(key)
-      await (window as any).spark.kv.delete(cacheKey)
+      await (window.spark!.kv)!.delete(cacheKey)
     }
 
     const event: CacheInvalidationEvent = {
@@ -118,7 +121,7 @@ export class CacheManager {
   }
 
   async invalidateByPrefix(prefix: string, reason?: string): Promise<number> {
-    const allKeys = await (window as any).spark.kv.keys()
+    const allKeys = await (window.spark!.kv)!.keys()
     const cachePrefix = this.buildCacheKey(prefix)
     const matchingKeys = allKeys.filter(key => key.startsWith(cachePrefix))
 
@@ -147,7 +150,7 @@ export class CacheManager {
     customTTL?: number
   ): Promise<void> {
     const ttl = customTTL || this.getTTLByContentType(key)
-    
+
     const entry: CacheEntry<T> = {
       data,
       timestamp: new Date().toISOString(),
@@ -159,7 +162,7 @@ export class CacheManager {
     }
 
     const cacheKey = this.buildCacheKey(key)
-    await (window as any).spark.kv.set(cacheKey, entry)
+    await (window.spark!.kv)!.set(cacheKey, entry)
   }
 
   async checkSemanticDrift(
@@ -168,7 +171,8 @@ export class CacheManager {
     threshold: number = 0.9
   ): Promise<boolean> {
     const cacheKey = this.buildCacheKey(key)
-    const entry = await (window as any).spark.kv.get(cacheKey) as CacheEntry | null
+    const rawEntry = await (window.spark!.kv)!.get(cacheKey)
+    const entry = rawEntry as CacheEntry | undefined
 
     if (!entry || !entry.semanticHash) {
       return false
@@ -199,7 +203,8 @@ export class CacheManager {
 
   async adaptiveTTL(key: string): Promise<number> {
     const cacheKey = this.buildCacheKey(key)
-    const entry = await (window as any).spark.kv.get(cacheKey) as CacheEntry | null
+    const rawEntry = await (window.spark!.kv)!.get(cacheKey)
+    const entry = rawEntry as CacheEntry | undefined
 
     if (!entry) {
       return this.DEFAULT_TTL_MS
@@ -220,18 +225,18 @@ export class CacheManager {
   }
 
   async cleanStaleEntries(): Promise<number> {
-    const allKeys = await (window as any).spark.kv.keys()
+    const allKeys = await (window.spark!.kv)!.keys()
     const cacheKeys = allKeys.filter(key => key.startsWith('cache:'))
-    
+
     let cleaned = 0
 
     for (const cacheKey of cacheKeys) {
-      const entry = await (window as any).spark.kv.get(cacheKey) as CacheEntry | null
+      const rawEntry = await (window.spark!.kv)!.get(cacheKey); const entry = rawEntry as CacheEntry | undefined
 
       if (!entry) continue
 
       if (this.isStale(entry) || entry.version !== this.CACHE_VERSION) {
-        await (window as any).spark.kv.delete(cacheKey)
+        await (window.spark!.kv)!.delete(cacheKey)
         cleaned++
       }
     }
@@ -250,15 +255,15 @@ export class CacheManager {
   }
 
   async getMetrics(): Promise<CacheMetrics> {
-    const allKeys = await (window as any).spark.kv.keys()
+    const allKeys = await (window.spark!.kv)!.keys()
     const cacheKeys = allKeys.filter(key => key.startsWith('cache:'))
-    
+
     const byTTL: Record<string, number> = {}
     let totalAge = 0
     let staleEntries = 0
 
     for (const cacheKey of cacheKeys) {
-      const entry = await (window as any).spark.kv.get(cacheKey) as CacheEntry | null
+      const rawEntry = await (window.spark!.kv)!.get(cacheKey); const entry = rawEntry as CacheEntry | undefined
 
       if (!entry) continue
 

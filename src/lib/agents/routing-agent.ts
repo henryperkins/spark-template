@@ -1,5 +1,7 @@
 import { z } from 'zod'
 import { llmService } from '../services/llm-service'
+import { appConfig } from '../config'
+import { sanitizeQueryForPrompt, JSON_OUTPUT_REQUIREMENTS } from '../prompt-utils'
 
 export type RetrievalStrategy = 'vector' | 'keyword' | 'hybrid'
 
@@ -16,7 +18,7 @@ const routingDecisionSchema: z.ZodType<RoutingDecision> = z.object({
 })
 
 export class RoutingAgent {
-  async selectStrategy(query: string): Promise<RoutingDecision> {
+  async selectStrategy(query: string, kb?: { totalDocuments?: number }): Promise<RoutingDecision> {
     const systemPrompt = `You are a retrieval strategy expert. Analyze queries and select the best search approach.
 
 Strategy guidelines:
@@ -32,15 +34,17 @@ Respond with JSON:
 }`
 
     try {
-      const prompt = (window as any).spark.llmPrompt`${systemPrompt}
+      const prompt = `${systemPrompt}
+${JSON_OUTPUT_REQUIREMENTS}
+${kb?.totalDocuments !== undefined ? `Knowledge base: Total documents: ${kb.totalDocuments}` : ''}
 
-User query: ${query}
+User query: ${sanitizeQueryForPrompt(query)}
 
 Select retrieval strategy as JSON:`
 
       return await llmService.generateJson(prompt, routingDecisionSchema, {
-        maxTokens: 200,
-        temperature: 0.2
+        maxTokens: appConfig.truncation.routerMaxTokens,
+        temperature: appConfig.temps.router
       })
     } catch (error) {
       console.warn('LLM routing failed, using fallback:', error)
@@ -51,12 +55,12 @@ Select retrieval strategy as JSON:`
 
   private fallbackRouting(query: string): RoutingDecision {
     const lowerQuery = query.toLowerCase()
-    
+
     const hasQuotes = /["']/.test(query)
     const hasCodes = /[A-Z]{2,}[0-9]|[0-9]{3,}/.test(query)
     const technicalTerms = ['api', 'code', 'function', 'class', 'method', 'error', 'id', 'key']
     const hasTechnical = technicalTerms.some(term => lowerQuery.includes(term))
-    
+
     const conceptualWords = ['how', 'why', 'explain', 'understand', 'concept', 'idea', 'meaning']
     const isConceptual = conceptualWords.some(word => lowerQuery.includes(word))
 

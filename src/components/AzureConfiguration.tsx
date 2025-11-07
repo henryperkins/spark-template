@@ -10,14 +10,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Switch } from '@/components/ui/switch'
 import { Slider } from '@/components/ui/slider'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { CloudArrowUp, CloudCheck, CloudX, Eye, EyeSlash, TestTube, Sparkle, Lightning } from '@phosphor-icons/react'
-import { AzureConfig, AzureConnectionStatus } from '@/types'
+import { CloudArrowUp, CloudCheck, CloudX, Eye, EyeSlash, TestTube, Sparkle, Lightning, FloppyDisk, Trash, FolderOpen } from '@phosphor-icons/react'
+import { AzureConfig, AzureConnectionStatus, SavedAzureConfig } from '@/types'
 import { azureServiceManager } from '@/lib/azure-service-manager'
-import { cn } from '@/lib/utils'
 
 export function AzureConfiguration() {
   const [config, setConfig] = useSparkKV<AzureConfig | null>('azure-config', null)
   const [status, setStatus] = useSparkKV<AzureConnectionStatus | null>('azure-status', null)
+  const [savedConfigs, setSavedConfigs] = useSparkKV<SavedAzureConfig[]>('azure-saved-configs', [])
   const [formData, setFormData] = useState<AzureConfig>({
     openai: {
       endpoint: '',
@@ -31,6 +31,7 @@ export function AzureConfiguration() {
       apiKey: '',
       indexName: 'documents',
       apiVersion: '2024-05-01-preview',
+      vectorDimensions: 1536,
       semanticConfiguration: {
         enabled: true,
         configName: 'semantic-config',
@@ -51,12 +52,88 @@ export function AzureConfiguration() {
   })
   const [testing, setTesting] = useState(false)
   const [showKeys, setShowKeys] = useState({ openai: false, search: false })
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false)
+  const [configName, setConfigName] = useState('')
+  const [configDescription, setConfigDescription] = useState('')
+  const [selectedConfigId, setSelectedConfigId] = useState<string>('')
+  const [rebuildingIndex, setRebuildingIndex] = useState(false)
+  const [rebuildResult, setRebuildResult] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
+
+  const inferDimensionsFromDeployment = (deploymentName: string | undefined): number => {
+    const normalized = deploymentName?.toLowerCase() ?? ''
+    if (normalized.includes('text-embedding-3-large')) {
+      return 3072
+    }
+    return 1536
+  }
 
   useEffect(() => {
     if (config) {
-      setFormData(config)
+      setFormData({
+        ...config,
+        search: {
+          ...config.search,
+          vectorDimensions:
+            config.search.vectorDimensions ?? inferDimensionsFromDeployment(config.openai.embeddingDeploymentName)
+        }
+      })
     }
   }, [config])
+
+  // Save current configuration
+  const handleSaveConfig = () => {
+    if (!configName.trim()) return
+
+    const newConfig: SavedAzureConfig = {
+      id: Date.now().toString(),
+      name: configName.trim(),
+      description: configDescription.trim() || undefined,
+      config: formData,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    }
+
+    setSavedConfigs([...(savedConfigs || []), newConfig])
+    setConfigName('')
+    setConfigDescription('')
+    setSaveDialogOpen(false)
+  }
+
+  // Load a saved configuration
+  const handleLoadConfig = (configId: string) => {
+    const savedConfig = savedConfigs?.find(c => c.id === configId)
+    if (savedConfig) {
+      setFormData({
+        ...savedConfig.config,
+        search: {
+          ...savedConfig.config.search,
+          vectorDimensions:
+            savedConfig.config.search.vectorDimensions ??
+            inferDimensionsFromDeployment(savedConfig.config.openai.embeddingDeploymentName)
+        }
+      })
+      setSelectedConfigId(configId)
+      setRebuildResult(null)
+    }
+  }
+
+  // Delete a saved configuration
+  const handleDeleteConfig = (configId: string) => {
+    setSavedConfigs((savedConfigs || []).filter(c => c.id !== configId))
+    if (selectedConfigId === configId) {
+      setSelectedConfigId('')
+    }
+  }
+
+  // Update an existing saved configuration
+  const handleUpdateConfig = (configId: string) => {
+    const updatedConfigs = (savedConfigs || []).map(c =>
+      c.id === configId
+        ? { ...c, config: formData, updatedAt: new Date().toISOString() }
+        : c
+    )
+    setSavedConfigs(updatedConfigs)
+  }
 
   const handleInputChange = (service: 'openai' | 'search', field: string, value: string) => {
     setFormData(prev => ({
@@ -68,8 +145,36 @@ export function AzureConfiguration() {
     }))
   }
 
+  const handleVectorDimensionsChange = (value: string) => {
+    setFormData(prev => {
+      if (!value) {
+        const updatedSearch = { ...prev.search }
+        delete (updatedSearch as { vectorDimensions?: number }).vectorDimensions
+        return { ...prev, search: updatedSearch }
+      }
+
+      const parsed = Number(value)
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        return prev
+      }
+
+      return {
+        ...prev,
+        search: {
+          ...prev.search,
+          vectorDimensions: Math.floor(parsed)
+        }
+      }
+    })
+  }
+
+  const searchConfigReady = Boolean(formData.search.endpoint && formData.search.apiKey && formData.search.indexName)
+  const effectiveVectorDimensions =
+    formData.search.vectorDimensions ?? inferDimensionsFromDeployment(formData.openai.embeddingDeploymentName)
+
   const testConnection = async () => {
     setTesting(true)
+    setRebuildResult(null)
     try {
       const newStatus = await azureServiceManager.initialize(formData)
       setStatus(newStatus)
@@ -88,21 +193,61 @@ export function AzureConfiguration() {
     }
   }
 
+  const rebuildIndex = async () => {
+    if (!searchConfigReady) {
+      setRebuildResult({
+        type: 'error',
+        message: 'Provide your search endpoint, index name, and admin key before rebuilding.'
+      })
+      return
+    }
+
+    setRebuildingIndex(true)
+    setRebuildResult(null)
+    try {
+      const result = await azureServiceManager.rebuildSearchIndex(formData, effectiveVectorDimensions)
+      if (result.success) {
+        setRebuildResult({
+          type: 'success',
+          message: `Index '${formData.search.indexName}' rebuilt with ${effectiveVectorDimensions} vector dimensions.`
+        })
+      } else {
+        const errorMessage = result.error ?? 'Index rebuild failed for an unknown reason.'
+        const enhancedMessage = errorMessage.includes("Existing field 'contentVector' cannot be changed")
+          ? `${errorMessage} Azure may still be removing the previous index. Wait a few seconds and try again.`
+          : errorMessage
+        setRebuildResult({
+          type: 'error',
+          message: enhancedMessage
+        })
+      }
+    } catch (error) {
+      setRebuildResult({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'Index rebuild failed due to an unknown error.'
+      })
+    } finally {
+      setRebuildingIndex(false)
+    }
+  }
+
   const saveConfiguration = async () => {
     await testConnection()
     setConfig(formData)
   }
 
+  const STATUS_ICON_SIZE = 18
+
   const getStatusIcon = (serviceStatus: string) => {
     switch (serviceStatus) {
       case 'connected':
-        return <CloudCheck className="text-green-500" size={16} />
+        return <CloudCheck className="text-status-success" size={STATUS_ICON_SIZE} />
       case 'error':
-        return <CloudX className="text-red-500" size={16} />
+        return <CloudX className="text-status-error" size={STATUS_ICON_SIZE} />
       case 'testing':
-        return <TestTube className="text-blue-500 animate-pulse" size={16} />
+        return <TestTube className="text-status-info animate-pulse" size={STATUS_ICON_SIZE} />
       default:
-        return <CloudArrowUp className="text-muted-foreground" size={16} />
+        return <CloudArrowUp className="text-muted-foreground" size={STATUS_ICON_SIZE} />
     }
   }
 
@@ -145,6 +290,133 @@ export function AzureConfiguration() {
           </p>
         </CardHeader>
         <CardContent>
+          {/* Saved Configurations Section */}
+          <div className="mb-6 p-4 border rounded-lg space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="font-medium flex items-center gap-2">
+                  <FolderOpen size={16} />
+                  Saved Configurations
+                </h4>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Save and load different Azure configurations
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Load Configuration */}
+              <div className="space-y-2">
+                <Label htmlFor="load-config">Load Configuration</Label>
+                <Select value={selectedConfigId} onValueChange={handleLoadConfig}>
+                  <SelectTrigger id="load-config">
+                    <SelectValue placeholder="Select a saved configuration" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {savedConfigs && savedConfigs.length > 0 ? (
+                      savedConfigs.map((cfg) => (
+                        <SelectItem key={cfg.id} value={cfg.id}>
+                          <div className="flex flex-col">
+                            <span>{cfg.name}</span>
+                            {cfg.description && (
+                              <span className="text-xs text-muted-foreground">{cfg.description}</span>
+                            )}
+                          </div>
+                        </SelectItem>
+                      ))
+                    ) : (
+                      <SelectItem value="none" disabled>
+                        No saved configurations
+                      </SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="space-y-2">
+                <Label>Actions</Label>
+                <div className="flex gap-2">
+                  <Button
+                    onClick={() => setSaveDialogOpen(true)}
+                    disabled={!isFormValid()}
+                    variant="outline"
+                    className="flex-1"
+                  >
+                    <FloppyDisk size={16} className="mr-2" />
+                    Save Current
+                  </Button>
+                  {selectedConfigId && (
+                    <>
+                      <Button
+                        onClick={() => handleUpdateConfig(selectedConfigId)}
+                        disabled={!isFormValid()}
+                        variant="outline"
+                        size="icon"
+                        title="Update selected config"
+                      >
+                        <FloppyDisk size={16} />
+                      </Button>
+                      <Button
+                        onClick={() => handleDeleteConfig(selectedConfigId)}
+                        variant="destructive"
+                        size="icon"
+                        title="Delete selected config"
+                      >
+                        <Trash size={16} />
+                      </Button>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Save Dialog */}
+            {saveDialogOpen && (
+              <div className="mt-4 p-4 border rounded-lg bg-muted/50 space-y-3">
+                <h5 className="font-medium text-sm">Save Configuration</h5>
+                <div className="space-y-2">
+                  <Label htmlFor="config-name">Configuration Name *</Label>
+                  <Input
+                    id="config-name"
+                    placeholder="e.g., Production, Development, Staging"
+                    value={configName}
+                    onChange={(e) => setConfigName(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="config-description">Description (Optional)</Label>
+                  <Input
+                    id="config-description"
+                    placeholder="Brief description of this configuration"
+                    value={configDescription}
+                    onChange={(e) => setConfigDescription(e.target.value)}
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    onClick={handleSaveConfig}
+                    disabled={!configName.trim()}
+                    size="sm"
+                  >
+                    Save
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      setSaveDialogOpen(false)
+                      setConfigName('')
+                      setConfigDescription('')
+                    }}
+                    variant="outline"
+                    size="sm"
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+
           {status && (
             <div className="mb-6 p-4 bg-muted rounded-lg">
               <div className="flex items-center justify-between mb-3">
@@ -308,6 +580,20 @@ export function AzureConfiguration() {
                     {showKeys.search ? <EyeSlash size={16} /> : <Eye size={16} />}
                   </Button>
                 </div>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="vector-dimensions">Vector Dimensions</Label>
+                <Input
+                  id="vector-dimensions"
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={effectiveVectorDimensions}
+                  onChange={(e) => handleVectorDimensionsChange(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Use 3,072 for <code>text-embedding-3-large</code>, 1,536 for most other Azure OpenAI embedding models.
+                </p>
               </div>
             </TabsContent>
 
@@ -618,6 +904,42 @@ export function AzureConfiguration() {
               <CloudCheck className="mr-2" size={16} />
               Save Configuration
             </Button>
+          </div>
+
+          <div className="mt-4 p-4 border rounded-lg bg-muted/40 space-y-3">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Sparkle size={16} className="text-primary" />
+                  <h4 className="font-medium">Index Maintenance</h4>
+                </div>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Drop and recreate the Azure AI Search index when switching embedding models or vector dimensions.
+                </p>
+              </div>
+              <Button
+                onClick={rebuildIndex}
+                disabled={!searchConfigReady || rebuildingIndex}
+                variant="outline"
+              >
+                {rebuildingIndex ? (
+                  <div className="animate-spin w-4 h-4 border-2 border-current border-t-transparent rounded-full mr-2" />
+                ) : (
+                  <Sparkle className="mr-2" size={16} />
+                )}
+                Rebuild Index
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Target vector dimensions: {effectiveVectorDimensions}. Update the value above before rebuilding if your embedding model changes.
+            </p>
+            {rebuildResult && (
+              <Alert variant={rebuildResult.type === 'success' ? 'default' : 'destructive'}>
+                <AlertDescription className="text-sm">
+                  {rebuildResult.message}
+                </AlertDescription>
+              </Alert>
+            )}
           </div>
 
           <Alert className="mt-4">

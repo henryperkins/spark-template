@@ -3,7 +3,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
-import { FileText, Trash, Clock, CloudArrowUp, CheckCircle, XCircle, CircleNotch, GithubLogo, Globe, DropboxLogo, MicrosoftOutlookLogo, Upload } from '@phosphor-icons/react'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { FileText, Trash, Clock, CloudArrowUp, XCircle, CircleNotch, GithubLogo, Globe, DropboxLogo, MicrosoftOutlookLogo, Upload } from '@phosphor-icons/react'
 import { Document } from '@/types'
 import { formatFileSize, formatDate } from '@/lib/rag'
 import { azureServiceManager } from '@/lib/azure-service-manager'
@@ -14,6 +15,19 @@ interface DocumentListProps {
 }
 
 export function DocumentList({ documents, onDeleteDocument }: DocumentListProps) {
+  const getErrorSummary = (errorMessage: string) => {
+    if (errorMessage.includes('400') || errorMessage.includes('request is invalid')) {
+      return 'Azure Search API error - Invalid request format'
+    }
+    if (errorMessage.includes('Indexing failed')) {
+      return 'Failed to index document to Azure Search'
+    }
+    if (errorMessage.includes('Load failed')) {
+      return 'Failed to load document data'
+    }
+    return 'An error occurred during processing'
+  }
+
   const getSourceIcon = (source?: string) => {
     switch (source) {
       case 'github':
@@ -102,9 +116,9 @@ export function DocumentList({ documents, onDeleteDocument }: DocumentListProps)
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
         <h2 className="text-xl font-semibold">Knowledge Base</h2>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {azureServiceManager.isConfigured() && (
             <Badge variant="outline" className="text-xs">
               <CloudArrowUp size={12} className="mr-1" />
@@ -125,20 +139,22 @@ export function DocumentList({ documents, onDeleteDocument }: DocumentListProps)
                 <FileText size={20} className="text-primary mt-0.5" />
                 <div>
                   <CardTitle className="text-base">{document.name}</CardTitle>
-                  <div className="flex items-center gap-4 text-sm text-muted-foreground mt-1">
-                    <span>{formatFileSize(document.size)}</span>
-                    <span className="flex items-center gap-1">
+                  <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground mt-1.5">
+                    <span className="whitespace-nowrap">{formatFileSize(document.size)}</span>
+                    <span className="flex items-center gap-1 whitespace-nowrap">
                       <Clock size={14} />
                       {formatDate(document.uploadedAt)}
                     </span>
-                    <Badge variant="outline" className="text-xs">
-                      {document.chunks.length} chunk{document.chunks.length !== 1 ? 's' : ''}
-                    </Badge>
-                    <Badge variant="secondary" className="text-xs flex items-center gap-1">
-                      {getSourceIcon(document.source)}
-                      {getSourceLabel(document.source)}
-                    </Badge>
-                    {getProcessingStatusBadge(document)}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="outline" className="text-xs">
+                        {document.chunks.length} chunk{document.chunks.length !== 1 ? 's' : ''}
+                      </Badge>
+                      <Badge variant="secondary" className="text-xs flex items-center gap-1">
+                        {getSourceIcon(document.source)}
+                        {getSourceLabel(document.source)}
+                      </Badge>
+                      {getProcessingStatusBadge(document)}
+                    </div>
                   </div>
                   {document.sourceUrl && (
                     <a 
@@ -151,9 +167,17 @@ export function DocumentList({ documents, onDeleteDocument }: DocumentListProps)
                     </a>
                   )}
                   {document.errorMessage && (
-                    <p className="text-xs text-red-500 mt-1">
-                      Error: {document.errorMessage}
-                    </p>
+                    <Collapsible className="mt-2">
+                      <CollapsibleTrigger className="flex items-center gap-1.5 text-xs text-status-error hover:underline cursor-pointer">
+                        <XCircle size={14} weight="fill" />
+                        <span className="font-medium">{getErrorSummary(document.errorMessage)}</span>
+                      </CollapsibleTrigger>
+                      <CollapsibleContent className="mt-1.5">
+                        <pre className="error-details">
+                          {document.errorMessage}
+                        </pre>
+                      </CollapsibleContent>
+                    </Collapsible>
                   )}
                 </div>
               </div>

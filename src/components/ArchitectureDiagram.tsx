@@ -4,16 +4,15 @@ import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Separator } from '@/components/ui/separator'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { 
-  Users, 
-  Globe, 
-  ShieldCheck, 
-  Brain, 
+import {
+  Users,
+  Globe,
+  ShieldCheck,
+  Brain,
   GitBranch,
   Database,
   CloudArrowUp,
   ChartBar,
-  Bug,
   ArrowsDownUp,
   Gear,
   TreeStructure,
@@ -28,13 +27,29 @@ import {
 } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 
+type ArchitectureLayerAccent =
+  | 'presentation'
+  | 'runtime'
+  | 'security'
+  | 'orchestration'
+  | 'agents'
+  | 'llm-services'
+  | 'retrieval'
+  | 'vector-store'
+  | 'embedding'
+  | 'document-processing'
+  | 'document-store'
+  | 'cache'
+  | 'observability'
+  | 'infrastructure'
+
 interface ArchitectureLayer {
   id: string
   name: string
   description: string
   components: string[]
   icon: React.ReactNode
-  color: string
+  accent: ArchitectureLayerAccent
   interactions: string[]
 }
 
@@ -44,6 +59,11 @@ interface ComponentDetail {
   technologies: string[]
   patterns: string[]
 }
+
+const getLayerAccentStyles = (accent: ArchitectureLayerAccent): React.CSSProperties => ({
+  backgroundColor: `var(--layer-${accent})`,
+  color: `var(--layer-${accent}-foreground)`
+})
 
 export function ArchitectureDiagram() {
   const [selectedLayer, setSelectedLayer] = useState<string | null>(null)
@@ -65,24 +85,24 @@ export function ArchitectureDiagram() {
         'ArchitectureDiagram'
       ],
       icon: <Users size={20} />,
-      color: 'bg-blue-500',
+      accent: 'presentation',
       interactions: ['Spark Runtime SDK', 'Agent Orchestration', 'Browser KV Store']
     },
     {
       id: 'runtime',
-      name: '2. Spark Runtime Layer',
-      description: 'Browser-based runtime with LLM and persistence APIs',
+      name: '2. Edge Runtime Layer',
+      description: 'Cloudflare Worker edge runtime exposing hardened APIs for storage, logs, and migration.',
       components: [
-        'spark.llm() API (GPT-4o, GPT-4o-mini)',
-        'spark.kv persistence (get/set/delete/keys)',
-        'useKV React hook',
-        'spark.user() authentication',
-        'JSON mode for structured outputs',
-        'Client-side execution'
+        'Cloudflare Worker API gateway (/api/*)',
+        'RAG_KV namespace bridge with typed bindings',
+        'Bearer-gated /api/logs with R2 Logpush access',
+        'Secure /api/kv CRUD with CORS enforcement',
+        'One-shot /api/migrate for legacy KV backfill',
+        'Static asset delivery for Vite SPA'
       ],
       icon: <Globe size={20} />,
-      color: 'bg-cyan-500',
-      interactions: ['Presentation Layer', 'LLM Services', 'Document Store']
+      accent: 'runtime',
+      interactions: ['Presentation Layer', 'Security Layer', 'Observability Layer', 'Document Store']
     },
     {
       id: 'security',
@@ -97,7 +117,7 @@ export function ArchitectureDiagram() {
         'Cross-Origin Security'
       ],
       icon: <ShieldCheck size={20} />,
-      color: 'bg-red-500',
+      accent: 'security',
       interactions: ['Azure Services', 'Integration APIs', 'Browser Storage']
     },
     {
@@ -107,14 +127,13 @@ export function ArchitectureDiagram() {
       components: [
         'AgenticOrchestrator Engine',
         'Workflow Step Tracking',
-        'Agent Communication Pipeline',
         'Error Recovery & Fallbacks',
         'Execution Timing Metrics',
         'State Management'
       ],
       icon: <Brain size={20} />,
-      color: 'bg-purple-500',
-      interactions: ['Agent Layer', 'Retrieval Layer', 'LLM Services']
+      accent: 'orchestration',
+      interactions: ['Agent Layer', 'Retrieval Layer', 'LLM Services', 'Observability Layer', 'Cache Layer']
     },
     {
       id: 'agents',
@@ -124,14 +143,14 @@ export function ArchitectureDiagram() {
         'QueryClassifierAgent (complexity analysis)',
         'QueryPlannerAgent (decomposition)',
         'RoutingAgent (vector/keyword/hybrid)',
-        'DocumentAnalyzerAgent (chunking strategy)',
+        'DocumentAnalyzerAgent (chunking strategy, ingestion-only, optional)',
         'CriticAgent (hallucination detection)',
         'ReActAgent (iterative refinement)',
         'QueryExpansionAgent (related questions)'
       ],
       icon: <GitBranch size={20} />,
-      color: 'bg-pink-500',
-      interactions: ['LLM Services', 'Retrieval Layer', 'Cache Layer']
+      accent: 'agents',
+      interactions: ['LLM Services', 'Retrieval Layer', 'Cache Layer', 'Observability Layer']
     },
     {
       id: 'llm-services',
@@ -146,7 +165,7 @@ export function ArchitectureDiagram() {
         'Token Management'
       ],
       icon: <Cube size={20} />,
-      color: 'bg-indigo-500',
+      accent: 'llm-services',
       interactions: ['Spark Runtime', 'Agent Layer', 'Azure OpenAI']
     },
     {
@@ -162,7 +181,7 @@ export function ArchitectureDiagram() {
         'Relevance Filtering'
       ],
       icon: <Database size={20} />,
-      color: 'bg-yellow-500',
+      accent: 'retrieval',
       interactions: ['Vector Store', 'Azure AI Search', 'Cache Layer']
     },
     {
@@ -178,7 +197,7 @@ export function ArchitectureDiagram() {
         'Namespace Isolation'
       ],
       icon: <CloudArrowUp size={20} />,
-      color: 'bg-green-500',
+      accent: 'vector-store',
       interactions: ['Embedding Service', 'Azure AI Search', 'Document Store']
     },
     {
@@ -194,7 +213,7 @@ export function ArchitectureDiagram() {
         'Version Control'
       ],
       icon: <Lightning size={20} />,
-      color: 'bg-amber-500',
+      accent: 'embedding',
       interactions: ['Azure OpenAI', 'Vector Store', 'Cache Layer']
     },
     {
@@ -212,7 +231,7 @@ export function ArchitectureDiagram() {
         'Deduplication'
       ],
       icon: <TreeStructure size={20} />,
-      color: 'bg-teal-500',
+      accent: 'document-processing',
       interactions: ['Document Store', 'Embedding Service', 'Integration APIs']
     },
     {
@@ -228,7 +247,7 @@ export function ArchitectureDiagram() {
         'Version Tracking'
       ],
       icon: <HardDrives size={20} />,
-      color: 'bg-emerald-500',
+      accent: 'document-store',
       interactions: ['Spark Runtime KV', 'Document Processing', 'Vector Store']
     },
     {
@@ -245,7 +264,7 @@ export function ArchitectureDiagram() {
         'Cache Metrics Tracking'
       ],
       icon: <ArrowsDownUp size={20} />,
-      color: 'bg-sky-500',
+      accent: 'cache',
       interactions: ['Spark KV Store', 'All Service Layers', 'Scaling Dashboard']
     },
     {
@@ -255,22 +274,20 @@ export function ArchitectureDiagram() {
       components: [
         'AgentWorkflowVisualizer',
         'ScalingDashboard (metrics)',
-        'Workflow Step Tracking',
-        'Performance Timing',
         'Cache Hit Rate Monitoring',
-        'Error Logging (console)',
+        'Error Tracking, Analytics Emission, UI Surfacing',
         'Quality Metrics (faithfulness, relevance)'
       ],
       icon: <Eye size={20} />,
-      color: 'bg-violet-500',
-      interactions: ['Orchestration Layer', 'Cache Layer', 'UI Components']
+      accent: 'observability',
+      interactions: ['Orchestration Layer', 'Cache Layer', 'Document Processing Layer', 'LLM Services Layer', 'UI Components']
     },
     {
       id: 'infrastructure',
       name: '14. Infrastructure Layer',
       description: 'Runtime environment and external services',
       components: [
-        'Spark Browser Runtime',
+        'Cloudflare Workers Edge Runtime',
         'Vite Build System',
         'Azure OpenAI Services (optional)',
         'Azure AI Search (optional)',
@@ -279,7 +296,7 @@ export function ArchitectureDiagram() {
         'Browser APIs (File, Fetch, Storage)'
       ],
       icon: <Gear size={20} />,
-      color: 'bg-slate-500',
+      accent: 'infrastructure',
       interactions: ['All Layers - Foundation']
     }
   ]
@@ -313,16 +330,28 @@ export function ArchitectureDiagram() {
     ],
     'runtime': [
       {
-        name: 'Spark LLM API',
-        purpose: 'Browser-based access to GPT-4o and GPT-4o-mini with JSON mode support',
-        technologies: ['spark.llm()', 'spark.llmPrompt', 'Async/Await'],
-        patterns: ['API Abstraction', 'Prompt Templates', 'Type Safety']
+        name: 'Edge API Gateway',
+        purpose: 'Cloudflare Worker entry point serving the SPA and enforcing CORS, auth, and error handling for every /api/* route.',
+        technologies: ['Cloudflare Workers', 'TypeScript', 'CORS Middleware'],
+        patterns: ['API Gateway', 'Zero-Trust Edge', 'Structured Logging']
       },
       {
-        name: 'Spark KV Store',
-        purpose: 'Persistent browser-based key-value storage with React hooks',
-        technologies: ['spark.kv API', 'useKV hook', 'Browser Storage'],
-        patterns: ['Key-Value Store', 'React Hooks', 'Reactive State']
+        name: 'KV Bridge & Migration',
+        purpose: 'Bridges RAG_KV and optional LEGACY_KV namespaces with batched pagination, prefix filters, and dry-run support.',
+        technologies: ['Cloudflare KV', 'Cursor Pagination', 'JSON Serialization'],
+        patterns: ['Data Migration', 'Idempotent Writes', 'Batch Processing']
+      },
+      {
+        name: 'Log & Telemetry Surface',
+        purpose: 'Bearer-protected /api/logs endpoint exposing R2 Logpush data with list/get/recent actions.',
+        technologies: ['Cloudflare R2', 'Logpush', 'Bearer Auth'],
+        patterns: ['Observability', 'Audit Logging', 'Secure Telemetry']
+      },
+      {
+        name: 'Static Asset Delivery',
+        purpose: 'Serves Vite build artifacts through the ASSETS binding with cache-friendly SPA routing.',
+        technologies: ['Cloudflare Asset Binding', 'Vite Build Output', 'HTTP Caching'],
+        patterns: ['Static Hosting', 'Edge Caching', 'SPA Delivery']
       }
     ],
     'agents': [
@@ -438,12 +467,139 @@ export function ArchitectureDiagram() {
         technologies: ['File API', 'GitHub API', 'Web Scraping', 'OAuth'],
         patterns: ['Adapter Pattern', 'Source Attribution', 'Metadata Preservation']
       }
+    ],
+    'security': [
+      {
+        name: 'Client-side KV Storage',
+        purpose: 'Browser-based storage for Azure API keys using Spark KV with localStorage fallback',
+        technologies: ['Spark KV API', 'localStorage', 'Cloudflare KV REST API'],
+        patterns: ['Secure Storage', 'Runtime Detection', 'Fallback Strategy']
+      },
+      {
+        name: 'OAuth Token Management',
+        purpose: 'Manages access tokens for GitHub, Dropbox, OneDrive integrations',
+        technologies: ['Bearer Tokens', 'OAuth 2.0', 'Token Refresh'],
+        patterns: ['Token Lifecycle', 'Secure Transmission', 'Client-side Validation']
+      },
+      {
+        name: 'Input Sanitization',
+        purpose: 'Sanitizes user queries to prevent prompt injection and jailbreak attempts',
+        technologies: ['Regex Filtering', 'PII Redaction', 'Length Enforcement'],
+        patterns: ['Input Validation', 'Prompt Safety', 'Content Filtering']
+      }
+    ],
+    'llm-services': [
+      {
+        name: 'LLMService',
+        purpose: 'Unified LLM interface with Azure OpenAI primary and Spark fallback',
+        technologies: ['Azure OpenAI', 'Spark Runtime LLM', 'Token Bucket Rate Limiting'],
+        patterns: ['Provider Abstraction', 'Retry with Backoff', 'Timeout Management']
+      },
+      {
+        name: 'Prompt Engineering',
+        purpose: 'Utilities for sanitization, tokenization, truncation, and JSON output enforcement',
+        technologies: ['tiktoken', 'Prompt Templates', 'Context Truncation'],
+        patterns: ['Template Method', 'Token Estimation', 'Safe Interpolation']
+      },
+      {
+        name: 'Response Parsing',
+        purpose: 'Parses JSON from LLM responses with fallback extraction (markdown, substring)',
+        technologies: ['JSON.parse', 'Regex Extraction', 'Error Recovery'],
+        patterns: ['Lenient Parsing', 'Fallback Chain', 'Schema Validation (Zod)']
+      }
+    ],
+    'vector-store': [
+      {
+        name: 'In-Memory Vector Store',
+        purpose: 'Browser-based vector storage with cosine similarity search',
+        technologies: ['JavaScript Arrays', 'Cosine Similarity', 'Embedding Cache'],
+        patterns: ['In-Memory Index', 'Linear Scan', 'Score Normalization']
+      },
+      {
+        name: 'Azure AI Search Integration',
+        purpose: 'Enterprise vector search with HNSW indexing, semantic ranking, and compression',
+        technologies: ['Azure AI Search API', 'HNSW Algorithm', 'Scalar/Binary Compression'],
+        patterns: ['External Index', 'Hybrid Search', 'Semantic Reranking']
+      },
+      {
+        name: 'Vector Namespace Management',
+        purpose: 'Isolates embeddings by version, tenant, and environment with namespace isolation',
+        technologies: ['Namespace Manager', 'Checksum-based Versioning'],
+        patterns: ['Multi-tenancy', 'Version Control', 'Namespace Isolation']
+      }
+    ],
+    'document-store': [
+      {
+        name: 'useSparkKV Hook',
+        purpose: 'React hook for persistent document storage with automatic sync to Cloudflare KV or localStorage',
+        technologies: ['React Hooks', 'Spark KV', 'Cloudflare KV', 'localStorage'],
+        patterns: ['Custom Hook', 'Auto-sync', 'Optimistic Updates']
+      },
+      {
+        name: 'Document Metadata Storage',
+        purpose: 'Stores document metadata including source, processing status, Azure indexing state',
+        technologies: ['JSON Serialization', 'KV Namespacing (rag-documents)'],
+        patterns: ['Metadata Schema', 'Status Tracking', 'Source Attribution']
+      },
+      {
+        name: 'Chunk Storage & Indexing',
+        purpose: 'Stores document chunks with embeddings, chunkIndex, and optional Azure vectorId',
+        technologies: ['Structured Clone', 'Embedding Arrays', 'Chunk Metadata'],
+        patterns: ['Hierarchical Storage', 'Chunk Versioning', 'ID Generation']
+      }
+    ],
+    'observability': [
+      {
+        name: 'AgentWorkflowVisualizer',
+        purpose: 'Real-time timeline visualization of agent steps with status, duration, and results',
+        technologies: ['Framer Motion', 'React State', 'Phosphor Icons'],
+        patterns: ['Timeline UI', 'Progressive Disclosure', 'Live Updates']
+      },
+      {
+        name: 'Telemetry Service',
+        purpose: 'Emits agent step events and alerts to Spark analytics with fallback console logging',
+        technologies: ['Spark Telemetry SDK', 'Structured Events'],
+        patterns: ['Event Emission', 'Telemetry Sink Abstraction', 'Dev Fallback']
+      },
+      {
+        name: 'Error Tracking Service',
+        purpose: 'Classifies, aggregates, and analyzes errors by type (LLM, retrieval, network) and agent',
+        technologies: ['In-Memory Store', 'Error Classification', 'Metrics Aggregation'],
+        patterns: ['Error Categorization', 'Retention Limit', 'Trend Analysis']
+      },
+      {
+        name: 'Token & Cost Tracker',
+        purpose: 'Tracks LLM token usage, estimates costs per model, enforces daily budgets with alerts',
+        technologies: ['Model Pricing Tables', 'Spark KV Budget Persistence'],
+        patterns: ['Usage Metering', 'Budget Enforcement', 'Cost Estimation']
+      }
+    ],
+    'infrastructure': [
+      {
+        name: 'Cloudflare Workers Runtime',
+        purpose: 'Edge API gateway serving SPA, KV bridge, logs, Azure Search proxy, and migration endpoints',
+        technologies: ['Cloudflare Workers', 'KV Bindings', 'R2 Logpush', 'CORS Middleware'],
+        patterns: ['API Gateway', 'Bearer Auth', 'Structured Logging', 'Static Asset Serving']
+      },
+      {
+        name: 'Vite Build System',
+        purpose: 'Fast builds with React SWC, Tailwind CSS 4, WASM support, and Spark plugin integration',
+        technologies: ['Vite 6', 'SWC', 'Tailwind CSS', 'WASM Plugin', 'Spark Plugin'],
+        patterns: ['Plugin Architecture', 'Phosphor Icon Proxy', 'Path Aliases (@/*)']
+      },
+      {
+        name: 'Runtime Environment Detection',
+        purpose: 'Auto-detects Cloudflare Workers, KV config, Azure config to select storage and LLM providers',
+        technologies: ['Environment Variables', 'Domain Detection (.workers.dev)'],
+        patterns: ['Runtime Abstraction', 'Auto-configuration', 'Fallback Chains']
+      },
+      {
+        name: 'Spark Fallback System',
+        purpose: 'Fetch interceptor providing localStorage and mock LLM fallbacks when Spark/Azure unavailable',
+        technologies: ['Fetch Interception', 'In-Memory KV', 'Mock LLM Responses'],
+        patterns: ['Transparent Fallback', 'Mode Switching', 'Auto-recovery']
+      }
     ]
-  }
-
-  const getLayerConnections = (layerId: string): string[] => {
-    const layer = layers.find(l => l.id === layerId)
-    return layer?.interactions || []
   }
 
   return (
@@ -474,12 +630,12 @@ export function ArchitectureDiagram() {
                   <h3 className="font-semibold text-lg">System Architecture Overview</h3>
                   <Badge variant="outline">14 Layers</Badge>
                 </div>
-                
+
                 <ScrollArea className="h-[600px] pr-4">
                   <div className="space-y-3">
                     {layers.map((layer, index) => (
                       <div key={layer.id}>
-                        <Card 
+                        <Card
                           className={cn(
                             "transition-all cursor-pointer hover:shadow-lg",
                             selectedLayer === layer.id && "ring-2 ring-primary shadow-lg",
@@ -491,10 +647,13 @@ export function ArchitectureDiagram() {
                         >
                           <CardContent className="p-4">
                             <div className="flex items-start gap-4">
-                              <div className={cn("p-3 rounded-lg text-white", layer.color)}>
+                              <div
+                                className="p-3 rounded-lg"
+                                style={getLayerAccentStyles(layer.accent)}
+                              >
                                 {layer.icon}
                               </div>
-                              
+
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-2 mb-1">
                                   <h4 className="font-semibold text-sm">{layer.name}</h4>
@@ -505,7 +664,7 @@ export function ArchitectureDiagram() {
                                 <p className="text-xs text-muted-foreground mb-3">
                                   {layer.description}
                                 </p>
-                                
+
                                 {selectedLayer === layer.id && (
                                   <div className="space-y-3 animate-in slide-in-from-top-2">
                                     <div>
@@ -515,9 +674,9 @@ export function ArchitectureDiagram() {
                                       </div>
                                       <div className="grid grid-cols-2 gap-2">
                                         {layer.components.map((component, idx) => (
-                                          <Badge 
-                                            key={idx} 
-                                            variant="secondary" 
+                                          <Badge
+                                            key={idx}
+                                            variant="secondary"
                                             className="text-xs justify-start"
                                           >
                                             <Circle size={6} className="mr-1.5 flex-shrink-0" />
@@ -526,7 +685,7 @@ export function ArchitectureDiagram() {
                                         ))}
                                       </div>
                                     </div>
-                                    
+
                                     <div>
                                       <div className="text-xs font-medium mb-2 flex items-center gap-2">
                                         <ArrowRight size={14} />
@@ -534,9 +693,9 @@ export function ArchitectureDiagram() {
                                       </div>
                                       <div className="flex flex-wrap gap-2">
                                         {layer.interactions.map((interaction, idx) => (
-                                          <Badge 
-                                            key={idx} 
-                                            variant="outline" 
+                                          <Badge
+                                            key={idx}
+                                            variant="outline"
                                             className="text-xs"
                                           >
                                             {interaction}
@@ -550,7 +709,7 @@ export function ArchitectureDiagram() {
                             </div>
                           </CardContent>
                         </Card>
-                        
+
                         {index < layers.length - 1 && (
                           <div className="flex justify-center py-2">
                             <ArrowRight size={20} className="text-muted-foreground rotate-90" />
@@ -584,7 +743,7 @@ export function ArchitectureDiagram() {
                         </Badge>
                         <Badge variant="secondary" className="justify-start">
                           <Cube size={12} className="mr-1.5" />
-                          Spark Runtime: LLM API, KV Store, User Auth
+                          Edge Runtime: Worker APIs, KV bridge, Log access
                         </Badge>
                       </div>
                     </div>
@@ -600,7 +759,10 @@ export function ArchitectureDiagram() {
                     <Card key={layer.id}>
                       <CardHeader>
                         <div className="flex items-center gap-3">
-                          <div className={cn("p-2 rounded-lg text-white", layer.color)}>
+                          <div
+                            className="p-2 rounded-lg"
+                            style={getLayerAccentStyles(layer.accent)}
+                          >
                             {layer.icon}
                           </div>
                           <div className="flex-1">
@@ -616,7 +778,7 @@ export function ArchitectureDiagram() {
                           <h4 className="font-semibold text-sm mb-2">Components</h4>
                           <div className="grid grid-cols-2 gap-2">
                             {layer.components.map((component, idx) => (
-                              <div 
+                              <div
                                 key={idx}
                                 className="flex items-start gap-2 p-2 bg-muted/50 rounded text-xs"
                               >
@@ -626,9 +788,9 @@ export function ArchitectureDiagram() {
                             ))}
                           </div>
                         </div>
-                        
+
                         <Separator />
-                        
+
                         <div>
                           <h4 className="font-semibold text-sm mb-2">Layer Interactions</h4>
                           <div className="flex flex-wrap gap-2">
@@ -657,12 +819,15 @@ export function ArchitectureDiagram() {
                     return (
                       <div key={layerId}>
                         <div className="flex items-center gap-2 mb-3">
-                          <div className={cn("p-2 rounded-lg text-white", layer.color)}>
+                          <div
+                            className="p-2 rounded-lg"
+                            style={getLayerAccentStyles(layer.accent)}
+                          >
                             {layer.icon}
                           </div>
                           <h3 className="font-semibold">{layer.name}</h3>
                         </div>
-                        
+
                         <div className="grid gap-3 ml-12">
                           {components.map((component, idx) => (
                             <Card key={idx} className="bg-muted/30">
@@ -671,7 +836,7 @@ export function ArchitectureDiagram() {
                                 <p className="text-xs text-muted-foreground mb-3">
                                   {component.purpose}
                                 </p>
-                                
+
                                 <div className="space-y-2">
                                   <div>
                                     <span className="text-xs font-medium">Technologies:</span>
@@ -683,7 +848,7 @@ export function ArchitectureDiagram() {
                                       ))}
                                     </div>
                                   </div>
-                                  
+
                                   <div>
                                     <span className="text-xs font-medium">Patterns:</span>
                                     <div className="flex flex-wrap gap-1 mt-1">
@@ -699,7 +864,7 @@ export function ArchitectureDiagram() {
                             </Card>
                           ))}
                         </div>
-                        
+
                         {entryIdx < Object.entries(componentDetails).length - 1 && (
                           <Separator className="my-6" />
                         )}
@@ -728,7 +893,7 @@ export function ArchitectureDiagram() {
                 Runs entirely in the browser using Spark Runtime for LLM access and KV persistence, with optional Azure integration for production scale
               </p>
             </div>
-            
+
             <div className="p-4 bg-primary/5 rounded-lg border border-primary/20">
               <h4 className="font-semibold text-sm mb-2 flex items-center gap-2">
                 <GitBranch size={16} className="text-primary" />
@@ -738,7 +903,7 @@ export function ArchitectureDiagram() {
                 7 specialized agents (Classifier, Planner, Router, Analyzer, Critic, ReAct, Expansion) coordinated by AgenticOrchestrator for intelligent query processing
               </p>
             </div>
-            
+
             <div className="p-4 bg-primary/5 rounded-lg border border-primary/20">
               <h4 className="font-semibold text-sm mb-2 flex items-center gap-2">
                 <ArrowsDownUp size={16} className="text-primary" />
@@ -748,7 +913,7 @@ export function ArchitectureDiagram() {
                 Multi-level caching with TTL, prefix-based invalidation, and semantic drift detection achieving 80%+ cache hit rates
               </p>
             </div>
-            
+
             <div className="p-4 bg-primary/5 rounded-lg border border-primary/20">
               <h4 className="font-semibold text-sm mb-2 flex items-center gap-2">
                 <ShieldCheck size={16} className="text-primary" />

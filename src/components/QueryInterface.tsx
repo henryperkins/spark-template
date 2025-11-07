@@ -6,12 +6,16 @@ import { Badge } from '@/components/ui/badge'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
-import { MagnifyingGlass, Brain, FileText, Link, Sparkle } from '@phosphor-icons/react'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { MagnifyingGlass, Brain, FileText, Link, Sparkle, CloudSlash } from '@phosphor-icons/react'
 import { Document, ChatMessage, Source } from '@/types'
 import { findRelevantChunks, generateResponse } from '@/lib/rag'
 import { AgenticOrchestrator, AgenticRAGResult, AgentWorkflowStep } from '@/lib/agents'
 import { AgentWorkflowVisualizer } from './AgentWorkflowVisualizer'
 import { SuggestedQuestions } from './SuggestedQuestions'
+import { queryHistoryService } from '@/lib/services/query-history'
+import { azureServiceManager } from '@/lib/azure-service-manager'
+import { cn } from '@/lib/utils'
 
 interface QueryInterfaceProps {
   documents: Document[]
@@ -19,6 +23,7 @@ interface QueryInterfaceProps {
 
 interface ExtendedChatMessage extends ChatMessage {
   agenticResult?: AgenticRAGResult
+  azureFallback?: boolean
 }
 
 export function QueryInterface({ documents }: QueryInterfaceProps) {
@@ -57,6 +62,8 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
       let sources: Source[]
       let response: string
       let agenticResult: AgenticRAGResult | undefined
+      let azureFallbackDetected = false
+      const startTime = Date.now()
 
       if (agenticMode) {
         const runId = userMessage.id
@@ -64,13 +71,48 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
           runId,
           onWorkflowUpdate: (steps) => {
             setActiveWorkflow(steps)
+          },
+          onStepEvent: (event) => {
+            if (event.status === 'failed') {
+              console.error('[agent-step failed]', event)
+            } else if (import.meta.env?.MODE !== 'production') {
+              console.debug('[agent-step]', event.agent, event.action, event.status)
+            }
           }
         })
         sources = agenticResult.sources
         response = agenticResult.response
+        azureFallbackDetected = agenticResult.azureFallback
+        // Agentic queries are logged by AgenticOrchestrator
       } else {
-        sources = await findRelevantChunks(queryText, documents)
+        // Non-agentic query: log manually
+        sources = await findRelevantChunks(queryText, documents, 5, 'hybrid', {
+          onAzureFallback: () => {
+            azureFallbackDetected = true
+          }
+        })
         response = await generateResponse(queryText, sources)
+
+        const totalDuration = Date.now() - startTime
+
+        // Log non-agentic query to history
+        queryHistoryService.add({
+          id: userMessage.id,
+          timestamp: new Date().toISOString(),
+          query: queryText,
+          routing: {
+            strategy: 'hybrid',
+            reasoning: 'Non-agentic mode: default hybrid search',
+            confidence: 1.0
+          },
+          resultCount: sources.length,
+          topScore: sources[0]?.relevanceScore || 0,
+          azureUsed: azureServiceManager.isConfigured(),
+          azureFallback: azureFallbackDetected,
+          totalDuration
+        }).catch(error => {
+          console.error('Failed to log query to history:', error)
+        })
       }
 
       const assistantMessage: ExtendedChatMessage = {
@@ -80,11 +122,12 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
         timestamp: new Date().toISOString(),
         sources: sources.length > 0 ? sources : undefined,
         azureUsed: sources.some(s => s.azureScore !== undefined),
-        agenticResult
+        agenticResult,
+        azureFallback: azureFallbackDetected
       }
 
       setMessages(prev => [...prev, assistantMessage])
-    } catch (error) {
+    } catch {
       const errorMessage: ExtendedChatMessage = {
         id: `msg-${Date.now()}-error`,
         type: 'assistant',
@@ -112,13 +155,13 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle className="flex items-center gap-2">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <CardTitle className="flex items-center gap-2 text-lg sm:text-xl">
               <Brain size={20} />
               Ask Your Knowledge Base
             </CardTitle>
-            <div className="flex items-center gap-2">
-              <Label htmlFor="agentic-mode" className="text-sm cursor-pointer">
+            <div className="flex flex-wrap items-center gap-2">
+              <Label htmlFor="agentic-mode" className="cursor-pointer text-sm">
                 Agentic Mode
               </Label>
               <Switch
@@ -136,7 +179,7 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
           </div>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleSubmit} className="flex gap-2">
+          <form onSubmit={handleSubmit} className="flex flex-col gap-2 sm:flex-row">
             <Input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -147,6 +190,7 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
             <Button
               type="submit"
               disabled={loading || !query.trim() || documents.length === 0}
+              className="w-full sm:w-auto"
             >
               {loading ? (
                 <div className="animate-spin w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full" />
@@ -183,9 +227,15 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
           )}
           
           {messages.map((message) => (
-            <Card key={message.id} className={message.type === 'user' ? 'ml-8' : 'mr-8'}>
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between mb-3">
+            <Card
+              key={message.id}
+              className={cn(
+                "max-w-full",
+                message.type === 'user' ? 'sm:ml-10' : 'sm:mr-10'
+              )}
+            >
+              <CardContent className="space-y-4 p-4 sm:p-5">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <Badge variant={message.type === 'user' ? 'default' : 'secondary'}>
                     {message.type === 'user' ? 'You' : 'Assistant'}
                   </Badge>
@@ -193,6 +243,30 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
                     {formatTime(message.timestamp)}
                   </span>
                 </div>
+
+                {message.type === 'assistant' && message.azureFallback && (
+                  <Alert variant="warning" className="mb-3">
+                    <AlertTitle className="flex flex-wrap items-center gap-2 text-sm font-semibold">
+                      <CloudSlash size={16} />
+                      Using Local Search
+                    </AlertTitle>
+                    <AlertDescription className="space-y-3 text-sm sm:text-base">
+                      <p>
+                        Azure AI Search is temporarily unavailable. Results are from local vector search and may be less comprehensive.
+                      </p>
+                      <span className="inline-flex">
+                        <a
+                          href="https://status.azure.com/en-us/status"
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 rounded px-0 text-sm font-medium text-primary underline underline-offset-4 sm:text-base"
+                        >
+                          Check Azure Status →
+                        </a>
+                      </span>
+                    </AlertDescription>
+                  </Alert>
+                )}
                 
                 <div className="prose prose-sm max-w-none">
                   <p className="whitespace-pre-wrap leading-relaxed">

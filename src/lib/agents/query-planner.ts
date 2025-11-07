@@ -1,5 +1,7 @@
 import { z } from 'zod'
 import { llmService } from '../services/llm-service'
+import { appConfig } from '../config'
+import { sanitizeQueryForPrompt, JSON_OUTPUT_REQUIREMENTS } from '../prompt-utils'
 
 export interface SubQuery {
   id: string
@@ -30,14 +32,14 @@ const planSchema = z.object({
 
 export class QueryPlannerAgent {
   async createPlan(query: string, estimatedSubQueries: number = 2): Promise<QueryPlan> {
-    const systemPrompt = `You are a query planning expert. Break down complex queries into focused sub-queries.
+    const systemPrompt = `You are a query planning expert. Break down complex queries into focused, non-overlapping sub-queries.
 
-Guidelines:
-- Create ${estimatedSubQueries} sub-queries that cover different aspects
-- Each sub-query should be specific and focused
-- Sub-queries should be answerable from document retrieval
-- Avoid redundancy between sub-queries
-- Prioritize sub-queries (1 = highest priority)
+Decomposition rules:
+- Create 2-5 sub-queries (use ${estimatedSubQueries} as a hint, not a hard limit)
+- Each sub-query must be specific and independently answerable from retrieval
+- Minimize redundancy; merge overlapping sub-queries
+- Order by dependency: prerequisites first; choose "sequential" if dependencies exist, else "parallel"
+- Provide a brief "purpose" for each sub-query
 
 Respond with JSON:
 {
@@ -54,15 +56,16 @@ Respond with JSON:
 }`
 
     try {
-      const prompt = (window as any).spark.llmPrompt`${systemPrompt}
+      const prompt = `${systemPrompt}
+${JSON_OUTPUT_REQUIREMENTS}
 
-User query: ${query}
+User query: ${sanitizeQueryForPrompt(query)}
 
 Create a query plan as JSON:`
 
       const parsed = await llmService.generateJson(prompt, planSchema, {
-        maxTokens: 500,
-        temperature: 0.4
+        maxTokens: appConfig.truncation.plannerMaxTokens,
+        temperature: appConfig.temps.planner
       })
 
       return {

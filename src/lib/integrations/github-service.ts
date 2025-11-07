@@ -1,4 +1,4 @@
-import { GitHubRepo, Document, DocumentChunk } from '@/types'
+import { GitHubRepo, Document } from '@/types'
 import { intelligentChunkDocument } from '@/lib/rag'
 import { azureServiceManager } from '@/lib/azure-service-manager'
 import { embeddingManager } from '@/lib/embedding-manager'
@@ -90,8 +90,8 @@ export class GitHubService {
     const data = await response.json()
     
     return data.tree
-      .filter((item: any) => item.type === 'blob' && this.isTextFile(item.path))
-      .map((item: any) => ({
+      .filter((item: { type: string; path: string }) => item.type === 'blob' && this.isTextFile(item.path))
+      .map((item: { path: string; sha: string; size: number }) => ({
         name: item.path.split('/').pop(),
         path: item.path,
         type: 'file',

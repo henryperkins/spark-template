@@ -1,5 +1,6 @@
 import { AgentStepEvent, AgentAlertCode, telemetry } from './telemetry'
 import { analyticsBackend } from './analytics-backend'
+import { toast } from 'sonner'
 
 interface AlertThresholds {
   longRunningMs: number
@@ -7,6 +8,16 @@ interface AlertThresholds {
 }
 
 type FailureKey = string
+
+interface SystemAlert {
+  id: string
+  severity: 'warning' | 'error'
+  code: AgentAlertCode
+  agent?: string
+  message: string
+  timestamp: string
+  acknowledged: boolean
+}
 
 class AgentAnalytics {
   private readonly thresholds: AlertThresholds = {
@@ -88,6 +99,113 @@ class AgentAnalytics {
     telemetry.trackAgentAlert({
       ...alertPayload
     })
+
+    // Show toast notification
+    this.showAlertToast(alertPayload)
+
+    // Persist alerts so AlertPanel can render them.
+    void this.persistAlert(alertPayload).catch((err) => {
+      if (import.meta.env?.MODE !== 'production') {
+        console.warn('[agent-analytics] Failed to persist alert', err)
+      }
+    })
+  }
+
+  private async persistAlert(alert: {
+    agent: string
+    action: string
+    code: AgentAlertCode
+    severity: 'warning' | 'error'
+    duration?: number
+    failureReason?: string
+    timestamp: string
+    runId: string
+    query: string
+    stepIndex: number
+  }): Promise<void> {
+    if (typeof window === 'undefined') return
+
+    const sparkKV = (window as any)?.spark?.kv
+    if (!sparkKV) return
+
+    try {
+      const existing = ((await sparkKV.get('system-alerts')) as SystemAlert[] | undefined) ?? []
+      const message = this.formatAlertMessage(alert)
+      const cutoff = Date.now() - 120000
+
+      const duplicate = existing.find((item) => {
+        if (item.code !== alert.code) return false
+        if (item.agent !== alert.agent) return false
+        if (item.message !== message) return false
+
+        const timestamp = new Date(item.timestamp).getTime()
+        return Number.isFinite(timestamp) && timestamp >= cutoff
+      })
+
+      if (duplicate) return
+
+      const systemAlert: SystemAlert = {
+        id:
+          typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+            ? crypto.randomUUID()
+            : `alert-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        severity: alert.severity,
+        code: alert.code,
+        agent: alert.agent,
+        message,
+        timestamp: alert.timestamp,
+        acknowledged: false
+      }
+
+      existing.push(systemAlert)
+
+      const trimmed = existing.slice(-100)
+      await sparkKV.set('system-alerts', trimmed)
+    } catch (error) {
+      if (import.meta.env?.MODE !== 'production') {
+        console.warn('[agent-analytics] KV persist error', error)
+      }
+    }
+  }
+
+  private showAlertToast(alert: {
+    agent: string
+    action: string
+    code: AgentAlertCode
+    severity: 'warning' | 'error'
+    duration?: number
+    failureReason?: string
+  }): void {
+    const message = this.formatAlertMessage(alert)
+
+    if (alert.severity === 'error') {
+      toast.error(`Agent Error: ${alert.agent}`, {
+        description: message,
+        duration: 5000
+      })
+    } else {
+      toast.warning(`Slow Step: ${alert.agent}`, {
+        description: message,
+        duration: 4000
+      })
+    }
+  }
+
+  private formatAlertMessage(alert: {
+    action: string
+    code: AgentAlertCode
+    duration?: number
+    failureReason?: string
+  }): string {
+    if (alert.code === 'long_running_step' && alert.duration) {
+      return `${alert.action} took ${(alert.duration / 1000).toFixed(2)}s (threshold: 15s)`
+    }
+
+    if (alert.code === 'step_failure') {
+      return alert.failureReason || `${alert.action} failed`
+    }
+
+    return alert.action
   }
 }
 

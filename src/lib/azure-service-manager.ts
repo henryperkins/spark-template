@@ -50,6 +50,25 @@ export class AzureServiceManager {
     return this.openaiService !== null && this.searchService !== null
   }
 
+  hasOpenAI(): boolean {
+    return this.openaiService !== null
+  }
+
+  getSearchService(): AzureSearchService | null {
+    return this.searchService
+  }
+
+  async tryGenerateQueryEmbedding(query: string): Promise<number[] | null> {
+    if (!this.openaiService) {
+      return null
+    }
+    try {
+      return await this.openaiService.generateEmbedding(query)
+    } catch {
+      return null
+    }
+  }
+
   async processDocumentWithAzure(document: Document): Promise<Document> {
     if (!this.isConfigured()) {
       throw new Error('Azure services not configured')
@@ -57,11 +76,11 @@ export class AzureServiceManager {
 
     try {
       const updatedDocument = { ...document, processingStatus: 'processing' as const }
-      
+
       // Generate embeddings for all chunks
       const texts = document.chunks.map(chunk => chunk.content)
       const embeddings = await this.openaiService!.generateBatchEmbeddings(texts)
-      
+
       // Update chunks with embeddings
       const updatedChunks: DocumentChunk[] = document.chunks.map((chunk, index) => ({
         ...chunk,
@@ -81,7 +100,7 @@ export class AzureServiceManager {
 
       // Index in Azure Search
       const indexResult = await this.searchService!.indexDocuments(searchDocuments)
-      
+
       if (!indexResult.success) {
         throw new Error(`Indexing failed: ${indexResult.error}`)
       }
@@ -111,17 +130,72 @@ export class AzureServiceManager {
     }
 
     try {
+      let results: Source[] = []
+
       if (strategy === 'keyword') {
-        return await this.searchService!.keywordSearch(query, 5)
+        // Primary: keyword search
+        try {
+          results = await this.searchService!.keywordSearch(query, 5)
+        } catch {
+          // continue to vector fallback
+        }
+        // Fallback: vector if no hits
+        if (results.length === 0) {
+          const queryEmbedding = await this.openaiService!.generateEmbedding(query)
+          try {
+            results = await this.searchService!.vectorSearch(queryEmbedding, 5)
+          } catch {
+            // final fallback: hybrid
+            try {
+              results = await this.searchService!.semanticHybridSearch(query, queryEmbedding, 5)
+            } catch {
+              // swallow; handled below
+            }
+          }
+        }
+        return results
       }
 
+      // For 'vector' and 'hybrid', compute embedding once
       const queryEmbedding = await this.openaiService!.generateEmbedding(query)
 
       if (strategy === 'vector') {
-        return await this.searchService!.vectorSearch(queryEmbedding, 5)
+        try {
+          results = await this.searchService!.vectorSearch(queryEmbedding, 5)
+        } catch {
+          // continue to keyword fallback
+        }
+        if (results.length === 0) {
+          try {
+            results = await this.searchService!.keywordSearch(query, 5)
+          } catch {
+            // swallow
+          }
+        }
+        return results
       }
 
-      return await this.searchService!.semanticHybridSearch(query, queryEmbedding, 5)
+      // strategy === 'hybrid'
+      try {
+        results = await this.searchService!.semanticHybridSearch(query, queryEmbedding, 5)
+      } catch {
+        // continue to keyword fallback
+      }
+      if (results.length === 0) {
+        try {
+          results = await this.searchService!.keywordSearch(query, 5)
+        } catch {
+          // continue to vector fallback
+        }
+      }
+      if (results.length === 0) {
+        try {
+          results = await this.searchService!.vectorSearch(queryEmbedding, 5)
+        } catch {
+          // swallow
+        }
+      }
+      return results
     } catch (error) {
       console.error('Error searching with Azure:', error)
       throw error
@@ -153,9 +227,31 @@ export class AzureServiceManager {
     try {
       return await this.searchService!.deleteDocumentChunks(documentId)
     } catch (error) {
-      return { 
-        success: false, 
-        error: error instanceof Error ? error.message : 'Unknown error' 
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      }
+    }
+  }
+
+  async rebuildSearchIndex(config?: AzureConfig, vectorDimensions?: number): Promise<{ success: boolean; error?: string }> {
+    try {
+      if (config) {
+        this.config = config
+        this.searchService = new AzureSearchService(config.search)
+      } else if (!this.searchService && this.config) {
+        this.searchService = new AzureSearchService(this.config.search)
+      }
+
+      if (!this.searchService) {
+        return { success: false, error: 'Azure Search service not configured' }
+      }
+
+      return await this.searchService.rebuildIndex(vectorDimensions)
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
       }
     }
   }

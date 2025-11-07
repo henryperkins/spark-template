@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react'
+import React, { useEffect } from 'react'
 import { useSparkKV } from '@/hooks/use-spark-kv'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { ResponsiveNavigation } from '@/components/ResponsiveNavigation'
 import { DocumentUpload } from '@/components/DocumentUpload'
 import { DocumentList } from '@/components/DocumentList'
 import { QueryInterface } from '@/components/QueryInterface'
@@ -47,82 +47,76 @@ function App() {
     setDocuments((prev = []) => prev.filter(doc => doc.id !== documentId))
   }
 
+  const NAV_ICON_SIZE = 18
+
+  const navigationTabs = [
+    {
+      value: 'query',
+      label: 'Query',
+      icon: <ChatCircle size={NAV_ICON_SIZE} />,
+      content: <QueryInterface documents={documents || []} />
+    },
+    {
+      value: 'upload',
+      label: 'Upload',
+      icon: <FileText size={NAV_ICON_SIZE} />,
+      content: <DocumentUpload onDocumentUploaded={handleDocumentUploaded} />
+    },
+    {
+      value: 'integrations',
+      label: 'Integrations',
+      icon: <PlugsConnected size={NAV_ICON_SIZE} />,
+      content: <Integrations onDocumentsIngested={handleDocumentsIngested} />
+    },
+    {
+      value: 'knowledge',
+      label: 'Knowledge',
+      icon: <Brain size={NAV_ICON_SIZE} />,
+      content: (
+        <DocumentList
+          documents={documents || []}
+          onDeleteDocument={handleDeleteDocument}
+        />
+      )
+    },
+    {
+      value: 'scaling',
+      label: 'Scaling',
+      icon: <ChartBar size={NAV_ICON_SIZE} />,
+      content: <ScalingDashboard documents={documents || []} />
+    },
+    {
+      value: 'azure',
+      label: 'Azure',
+      icon: <CloudArrowUp size={NAV_ICON_SIZE} />,
+      content: <AzureConfiguration />
+    },
+    {
+      value: 'architecture',
+      label: 'Architecture',
+      icon: <TreeStructure size={NAV_ICON_SIZE} />,
+      content: <ArchitectureDiagram />
+    }
+  ]
+
   return (
     <div className="min-h-screen bg-background">
-      <div className="container mx-auto py-8 px-4">
-        <div className="mb-8">
-          <div className="flex items-center gap-3 mb-4">
-            <Brain size={32} className="text-primary" />
+      <div className="mx-auto max-w-6xl px-3 py-8 sm:px-6 lg:px-12">
+        <div className="mb-10">
+          <div className="flex items-center gap-4">
+            <Brain size={28} className="text-primary" />
             <div>
-              <h1 className="text-3xl font-bold text-foreground">Agentic RAG</h1>
-              <p className="text-muted-foreground">Intelligent Knowledge Assistant</p>
+              <h1 className="text-3xl font-bold text-foreground sm:text-4xl">Agentic RAG</h1>
+              <p className="text-base text-muted-foreground sm:text-lg">Intelligent Knowledge Assistant</p>
             </div>
           </div>
         </div>
 
-        <Tabs defaultValue="query" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-7">
-            <TabsTrigger value="query" className="flex items-center gap-2">
-              <ChatCircle size={16} />
-              Query
-            </TabsTrigger>
-            <TabsTrigger value="upload" className="flex items-center gap-2">
-              <FileText size={16} />
-              Upload
-            </TabsTrigger>
-            <TabsTrigger value="integrations" className="flex items-center gap-2">
-              <PlugsConnected size={16} />
-              Integrations
-            </TabsTrigger>
-            <TabsTrigger value="knowledge" className="flex items-center gap-2">
-              <Brain size={16} />
-              Knowledge
-            </TabsTrigger>
-            <TabsTrigger value="scaling" className="flex items-center gap-2">
-              <ChartBar size={16} />
-              Scaling
-            </TabsTrigger>
-            <TabsTrigger value="azure" className="flex items-center gap-2">
-              <CloudArrowUp size={16} />
-              Azure
-            </TabsTrigger>
-            <TabsTrigger value="architecture" className="flex items-center gap-2">
-              <TreeStructure size={16} />
-              Architecture
-            </TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="query" className="space-y-6">
-            <QueryInterface documents={documents || []} />
-          </TabsContent>
-
-          <TabsContent value="upload" className="space-y-6">
-            <DocumentUpload onDocumentUploaded={handleDocumentUploaded} />
-          </TabsContent>
-
-          <TabsContent value="integrations" className="space-y-6">
-            <Integrations onDocumentsIngested={handleDocumentsIngested} />
-          </TabsContent>
-
-          <TabsContent value="knowledge" className="space-y-6">
-            <DocumentList 
-              documents={documents || []} 
-              onDeleteDocument={handleDeleteDocument}
-            />
-          </TabsContent>
-
-          <TabsContent value="scaling" className="space-y-6">
-            <ScalingDashboard documents={documents || []} />
-          </TabsContent>
-
-          <TabsContent value="azure" className="space-y-6">
-            <AzureConfiguration />
-          </TabsContent>
-
-          <TabsContent value="architecture" className="space-y-6">
-            <ArchitectureDiagram />
-          </TabsContent>
-        </Tabs>
+        <ResponsiveNavigation
+          tabs={navigationTabs}
+          defaultValue="query"
+          className="space-y-6 sm:space-y-8"
+        />
       </div>
     </div>
   )

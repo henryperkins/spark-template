@@ -5,6 +5,8 @@ export class AzureOpenAIService {
 
   constructor(config: AzureConfig['openai']) {
     this.config = config
+    // Normalize endpoint to avoid double slashes in request URLs
+    this.config.endpoint = this.config.endpoint.replace(/\/+$/, '')
   }
 
   async testConnection(): Promise<{ success: boolean; error?: string }> {
@@ -84,7 +86,7 @@ export class AzureOpenAIService {
       }
 
       const data = await response.json()
-      return data.data.map((item: any) => item.embedding)
+      return data.data.map((item: { embedding: number[] }) => item.embedding)
     } catch (error) {
       console.error('Error generating batch embeddings:', error)
       throw error
@@ -107,7 +109,7 @@ export class AzureOpenAIService {
         ? [{ role: 'user', content: messages }]
         : messages
 
-      const requestBody: any = {
+      const requestBody: Record<string, unknown> = {
         messages: messageArray,
         max_tokens: options?.maxTokens ?? 2000,
         temperature: options?.temperature ?? 0.7,

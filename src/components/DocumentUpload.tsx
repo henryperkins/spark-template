@@ -3,7 +3,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { Badge } from '@/components/ui/badge'
-import { FileText, Upload, X, CloudArrowUp, CheckCircle, XCircle } from '@phosphor-icons/react'
+import { FileText, Upload, CloudArrowUp, CheckCircle, XCircle } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 import { Document } from '@/types'
 import { intelligentChunkDocument } from '@/lib/rag'
@@ -47,7 +47,7 @@ export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
       const content = await file.text()
       updateProgress(25, 'processing')
 
-      const { chunks, strategy } = await intelligentChunkDocument(content, documentId, file.name)
+      const { chunks } = await intelligentChunkDocument(content, documentId, file.name)
       updateProgress(40, 'processing')
 
       const document: Document = {
@@ -134,12 +134,12 @@ export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
   const getStatusIcon = (status: UploadProgress['status']) => {
     switch (status) {
       case 'completed':
-        return <CheckCircle className="text-green-500" size={16} />
+        return <CheckCircle className="text-status-success" size={16} />
       case 'error':
-        return <XCircle className="text-red-500" size={16} />
+        return <XCircle className="text-status-error" size={16} />
       case 'embedding':
       case 'indexing':
-        return <CloudArrowUp className="text-blue-500" size={16} />
+        return <CloudArrowUp className="text-status-info" size={16} />
       default:
         return <FileText className="text-muted-foreground" size={16} />
     }
@@ -195,31 +195,31 @@ export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
         "border-dashed border-2 transition-colors cursor-pointer",
         dragActive ? "border-accent bg-accent/5" : "border-border hover:border-accent/50"
       )}>
-        <CardContent className="p-8">
+        <CardContent className="p-5 sm:p-8">
           <div
-            className="text-center"
+            className="text-center space-y-4"
             onDragEnter={handleDrag}
             onDragLeave={handleDrag}
             onDragOver={handleDrag}
             onDrop={handleDrop}
           >
-            <div className="mx-auto w-12 h-12 mb-4 text-muted-foreground">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center text-muted-foreground sm:h-14 sm:w-14">
               {uploading ? (
-                <div className="animate-spin w-12 h-12 border-2 border-accent border-t-transparent rounded-full" />
+                <div className="h-full w-full animate-spin rounded-full border-2 border-accent border-t-transparent" />
               ) : (
-                <Upload size={48} />
+                <Upload size={40} />
               )}
             </div>
             
-            <h3 className="text-lg font-semibold mb-2">
+            <h3 className="text-lg font-semibold sm:text-xl">
               {uploading ? 'Processing documents...' : 'Upload Documents'}
             </h3>
             
-            <p className="text-muted-foreground mb-4">
+            <p className="text-sm text-muted-foreground sm:text-base">
               Drag and drop files here, or click to select
             </p>
             
-            <p className="text-sm text-muted-foreground mb-6">
+            <p className="text-sm text-muted-foreground sm:text-base">
               Supports: .txt, .md, .pdf files
               {azureServiceManager.isConfigured() && (
                 <Badge variant="outline" className="ml-2">
@@ -239,9 +239,9 @@ export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
               disabled={uploading}
             />
             
-            <Button asChild disabled={uploading}>
-              <label htmlFor="file-upload" className="cursor-pointer">
-                <FileText className="mr-2" size={16} />
+            <Button asChild disabled={uploading} className="w-full sm:w-auto">
+              <label htmlFor="file-upload" className="flex cursor-pointer items-center justify-center gap-2">
+                <FileText className="shrink-0" size={16} />
                 Select Files
               </label>
             </Button>
@@ -256,16 +256,16 @@ export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
             <div className="space-y-4">
               {uploadProgress.map((progress) => (
                 <div key={progress.fileName} className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex items-center gap-2 min-w-0">
                       {getStatusIcon(progress.status)}
-                      <span className="text-sm font-medium">{progress.fileName}</span>
+                      <span className="truncate text-sm font-medium">{progress.fileName}</span>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span className="text-xs text-muted-foreground">
                         {getStatusText(progress.status)}
                       </span>
-                      <Badge 
+                      <Badge
                         variant={progress.status === 'completed' ? 'default' : progress.status === 'error' ? 'destructive' : 'secondary'}
                         className="text-xs"
                       >
@@ -275,7 +275,7 @@ export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
                   </div>
                   <Progress value={progress.progress} className="h-2" />
                   {progress.error && (
-                    <p className="text-xs text-red-500">{progress.error}</p>
+                    <p className="text-xs text-status-error">{progress.error}</p>
                   )}
                 </div>
               ))}

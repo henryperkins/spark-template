@@ -154,7 +154,6 @@ function FormMessage({ className, ...props }: ComponentProps<"p">) {
 }
 
 export {
-  useFormField,
   Form,
   FormItem,
   FormLabel,

@@ -1,13 +1,41 @@
+import { createCloudflareKV, type CloudflareKVAdapter } from './cloudflare-kv';
+
 const FALLBACK_LOG_PREFIX = '[spark-fallback]';
 const KV_STORE_KEY = 'spark-kv-fallback';
 const MODE_STORAGE_KEY = 'spark-kv-mode';
 
 type KvRecord = Record<string, unknown>;
-type KvMode = 'local' | 'remote';
+type KvMode = 'local' | 'remote' | 'cloudflare';
+
+interface SparkFallbackControls {
+  useLocal: () => void;
+  useRemote: () => void;
+  mode: () => KvMode;
+  clearStore: () => void;
+  originalFetch: typeof fetch;
+}
+
+export interface SparkGlobal {
+  kv?: CloudflareKVAdapter;
+  llm?: (prompt: string, model?: string, forceJson?: boolean) => Promise<string>;
+  llmPrompt?: (...args: unknown[]) => string;
+  user?: unknown;
+  sparkFallback?: SparkFallbackControls;
+  telemetry?: { track: (eventName: string, payload: unknown) => void };
+  analytics?: { track?: (eventName: string, payload: unknown) => void; capture?: (eventName: string, payload: unknown) => void };
+  analyticsClient?: { track?: (eventName: string, payload: unknown) => void; capture?: (eventName: string, payload: unknown) => void };
+}
+
+declare global {
+  interface Window {
+    sparkFallback?: SparkFallbackControls;
+  }
+}
 
 let memoryStore: KvRecord | null = null;
 let mode: KvMode | null = null;
 let fetchPatched = false;
+let cloudflareKV: CloudflareKVAdapter | null = null;
 
 const loadMode = (): KvMode => {
   if (mode) {
@@ -20,12 +48,26 @@ const loadMode = (): KvMode => {
   }
 
   const stored = window.localStorage?.getItem(MODE_STORAGE_KEY);
-  if (stored === 'remote' || stored === 'local') {
+  if (stored === 'remote' || stored === 'local' || stored === 'cloudflare') {
     mode = stored;
     return mode;
   }
 
+  // Auto-detect: Prioritize Cloudflare KV if configured
+  if (!cloudflareKV) {
+    cloudflareKV = createCloudflareKV();
+  }
+
+  if (cloudflareKV) {
+    mode = 'cloudflare';
+    persistMode(mode);
+    console.info(`${FALLBACK_LOG_PREFIX} ✅ Using Cloudflare KV for persistent storage`);
+    return mode;
+  }
+
+  // Fallback to localStorage if Cloudflare not configured
   mode = 'local';
+  console.info(`${FALLBACK_LOG_PREFIX} ⚠️  Using localStorage (configure Cloudflare KV for production)`);
   return mode;
 };
 
@@ -47,6 +89,16 @@ const setMode = (value: KvMode) => {
 };
 
 const shouldUseLocal = (): boolean => loadMode() === 'local';
+const shouldUseCloudflare = (): boolean => loadMode() === 'cloudflare';
+
+const getCloudflareAdapter = (): CloudflareKVAdapter | null => {
+  if (cloudflareKV) {
+    return cloudflareKV;
+  }
+
+  cloudflareKV = createCloudflareKV();
+  return cloudflareKV;
+};
 
 const loadStore = (): KvRecord => {
   if (memoryStore) {
@@ -81,6 +133,8 @@ const persistStore = () => {
   }
 };
 
+
+// localStorage operations
 const fallbackKeys = async (): Promise<string[]> => {
   return Object.keys(loadStore());
 };
@@ -240,26 +294,33 @@ const handleLoadedRequest = async (): Promise<Response> => {
 };
 
 const handleLlmRequest = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-  console.warn(`${FALLBACK_LOG_PREFIX} LLM request intercepted - returning mock response`);
-  
+  console.warn(`${FALLBACK_LOG_PREFIX} ⚠️  LLM request intercepted - returning mock response`);
+  console.info(`${FALLBACK_LOG_PREFIX} 💡 Configure Azure OpenAI in the Azure tab for production LLM capabilities`);
+
   const requestBody = await readRequestBody(input, init);
-  let parsedBody: any = {};
-  
+  let parsedBody: Record<string, unknown> = {};
+
   if (requestBody) {
     try {
-      parsedBody = JSON.parse(requestBody);
+      parsedBody = JSON.parse(requestBody) as Record<string, unknown>;
     } catch (e) {
       console.warn(`${FALLBACK_LOG_PREFIX} Failed to parse LLM request body:`, e);
     }
   }
 
   // Extract prompt from the body
-  const prompt = parsedBody.prompt || parsedBody.message || 'Hello, this is a mock response from Spark fallback.';
-  
+  const prompt = String(parsedBody.prompt || parsedBody.message || 'Hello, this is a mock response.');
+
   const mockResponse = {
     choices: [{
       message: {
-        content: `Mock LLM response. I understand you're asking about: "${prompt.substring(0, 100)}...". This is a fallback response because the Spark backend is not available. Please configure your environment variables or check your authentication.`
+        content: `[Mock Response] I understand you're asking about: "${prompt.substring(0, 100)}...".
+
+This is a development fallback. For production:
+- Configure Azure OpenAI in the Azure tab
+- Or deploy to Cloudflare Workers with Workers AI binding
+
+The application is using ${shouldUseCloudflare() ? 'Cloudflare KV' : 'localStorage'} for data persistence.`
       }
     }]
   };
@@ -319,7 +380,7 @@ const installFetchInterceptor = () => {
         }
 
         return response;
-      } catch (error) {
+      } catch {
         // Network errors also trigger local fallback
         console.warn(`${FALLBACK_LOG_PREFIX} Spark backend unreachable, using local mode`);
         setMode('local');
@@ -333,7 +394,7 @@ const installFetchInterceptor = () => {
 
   fetchPatched = true;
 
-  const controls = {
+  const controls: SparkFallbackControls = {
     useLocal: () => {
       setMode('local');
       installFetchInterceptor();
@@ -353,15 +414,10 @@ const installFetchInterceptor = () => {
     originalFetch,
   };
 
-  (window as any).sparkFallback = controls;
+  window.sparkFallback = controls;
 };
 
-export interface SparkKv {
-  keys: () => Promise<string[]>;
-  get: (key: string) => Promise<unknown>;
-  set: (key: string, value: unknown) => Promise<void>;
-  delete: (key: string) => Promise<void>;
-}
+export type SparkKv = CloudflareKVAdapter;
 
 export const fallbackKv: SparkKv = {
   keys: fallbackKeys,
@@ -370,12 +426,18 @@ export const fallbackKv: SparkKv = {
   delete: fallbackDelete,
 };
 
-const logFallback = (operation: string) => {
-  console.warn(`${FALLBACK_LOG_PREFIX} Using local fallback for ${operation}. Set GITHUB_TOKEN to enable Spark KV or call sparkFallback.useRemote().`);
-  
-  // Show user-friendly notification for critical operations
+type KvSource = 'remote' | 'cloudflare' | 'local';
+
+const logLocalFallback = (operation: string, reason?: string, error?: unknown) => {
+  const details = reason ? ` (${reason})` : '';
+  if (error) {
+    console.warn(`${FALLBACK_LOG_PREFIX} Using localStorage fallback for ${operation}${details}`, error);
+  } else {
+    console.warn(`${FALLBACK_LOG_PREFIX} Using localStorage fallback for ${operation}${details}`);
+  }
+
   if (operation === 'llm') {
-    console.warn(`${FALLBACK_LOG_PREFIX} AI features are using mock responses. Configure environment variables for full functionality.`);
+    console.warn(`${FALLBACK_LOG_PREFIX} 💡 AI features are using mock responses. Configure Azure OpenAI for full functionality.`);
   }
 };
 
@@ -384,15 +446,15 @@ let warned = false;
 
 export const shouldShowFallbackWarning = (): boolean => {
   if (warned) return false;
-  
+
   // Check if we're in local mode (using fallbacks)
-  const isUsingFallback = shouldUseLocal() || !((window as any).spark?.kv);
-  
+  const isUsingFallback = shouldUseLocal() || !(window.spark?.kv);
+
   if (isUsingFallback) {
     warned = true;
     return true;
   }
-  
+
   return false;
 };
 
@@ -401,55 +463,116 @@ export const installSparkFallbacks = () => {
     return;
   }
 
-  installFetchInterceptor();
-
-  const globalSpark = ((window as any).spark ??= {});
+  const globalSpark: SparkGlobal = (window.spark ??= {} as never) as unknown as SparkGlobal;
   const remoteKv: SparkKv | undefined = globalSpark.kv;
+
+  const resolveActiveKv = (): { client: SparkKv; source: KvSource } => {
+    if (!shouldUseLocal()) {
+      if (shouldUseCloudflare()) {
+        const adapter = getCloudflareAdapter();
+        if (adapter) {
+          return { client: adapter, source: 'cloudflare' };
+        }
+        console.warn(`${FALLBACK_LOG_PREFIX} Cloudflare KV mode requested but adapter is not configured. Falling back to ${remoteKv ? 'remote Spark KV' : 'localStorage'}.`);
+      }
+
+      if (remoteKv) {
+        return { client: remoteKv, source: 'remote' };
+      }
+    }
+
+    return { client: fallbackKv, source: 'local' };
+  };
+
+  const getFallbackReason = (): string | undefined => {
+    if (shouldUseLocal()) {
+      return 'local mode enabled';
+    }
+    if (shouldUseCloudflare()) {
+      return 'Cloudflare KV unavailable';
+    }
+    if (!remoteKv) {
+      return 'remote Spark KV not detected';
+    }
+    return undefined;
+  };
+
+  installFetchInterceptor();
 
   globalSpark.kv = {
     async keys() {
-      if (!remoteKv || shouldUseLocal()) {
-        if (!remoteKv) {
-          logFallback('keys');
-        }
+      const { client, source } = resolveActiveKv();
+
+      if (source === 'local') {
+        logLocalFallback('keys', getFallbackReason());
         return fallbackKeys();
       }
 
-      return remoteKv.keys();
+      try {
+        return await client.keys();
+      } catch (error) {
+        logLocalFallback('keys', `${source} request failed`, error);
+        return fallbackKeys();
+      }
     },
     async get(key: string) {
-      if (!remoteKv || shouldUseLocal()) {
-        if (!remoteKv) {
-          logFallback('get');
-        }
+      const { client, source } = resolveActiveKv();
+
+      if (source === 'local') {
+        logLocalFallback('get', getFallbackReason());
         return fallbackGet(key);
       }
 
-      return remoteKv.get(key);
+      try {
+        return await client.get(key);
+      } catch (error) {
+        logLocalFallback('get', `${source} request failed`, error);
+        return fallbackGet(key);
+      }
     },
     async set(key: string, value: unknown) {
-      if (!remoteKv || shouldUseLocal()) {
-        if (!remoteKv) {
-          logFallback('set');
-        }
+      const { client, source } = resolveActiveKv();
+
+      if (source === 'local') {
+        logLocalFallback('set', getFallbackReason());
         await fallbackSet(key, value);
         return;
       }
 
-      await remoteKv.set(key, value);
+      try {
+        await client.set(key, value);
+      } catch (error) {
+        logLocalFallback('set', `${source} request failed`, error);
+        await fallbackSet(key, value);
+      }
     },
     async delete(key: string) {
-      if (!remoteKv || shouldUseLocal()) {
-        if (!remoteKv) {
-          logFallback('delete');
-        }
+      const { client, source } = resolveActiveKv();
+
+      if (source === 'local') {
+        logLocalFallback('delete', getFallbackReason());
         await fallbackDelete(key);
         return;
       }
 
-      await remoteKv.delete(key);
+      try {
+        await client.delete(key);
+      } catch (error) {
+        logLocalFallback('delete', `${source} request failed`, error);
+        await fallbackDelete(key);
+      }
     },
   };
+
+  if (!globalSpark.telemetry && !globalSpark.analytics && !globalSpark.analyticsClient) {
+    globalSpark.telemetry = {
+      track: (eventName: string, payload: unknown) => {
+        if (import.meta.env?.MODE !== 'production') {
+          console.debug(`[telemetry:${eventName}]`, payload);
+        }
+      },
+    };
+  }
 };
 
 export const getActiveSparkKv = (): SparkKv => {
@@ -457,6 +580,6 @@ export const getActiveSparkKv = (): SparkKv => {
     return fallbackKv;
   }
 
-  const globalSpark = ((window as any).spark ??= {});
-  return (globalSpark.kv as SparkKv) ?? fallbackKv;
+  const globalSpark: SparkGlobal = (window.spark ??= {} as never) as unknown as SparkGlobal;
+  return globalSpark.kv ?? fallbackKv;
 };

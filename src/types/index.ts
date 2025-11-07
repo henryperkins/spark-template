@@ -11,7 +11,7 @@ export interface Document {
   errorMessage?: string
   source?: 'upload' | 'github' | 'website' | 'dropbox' | 'onedrive'
   sourceUrl?: string
-  sourceMetadata?: Record<string, any>
+  sourceMetadata?: Record<string, unknown>
 }
 
 export interface DocumentChunk {
@@ -99,6 +99,7 @@ export interface AzureConfig {
       enabled: boolean
       method: 'scalar' | 'binary'
     }
+    vectorDimensions?: number
     customScoring?: {
       enabled: boolean
       recencyWeight: number
@@ -136,7 +137,7 @@ export interface AzureSearchDocument {
   documentId: string
   documentName: string
   chunkIndex: number
-  metadata?: Record<string, any>
+  metadata?: Record<string, unknown>
 }
 
 export interface AzureSearchResult {
@@ -179,4 +180,13 @@ export interface IntegrationSource {
   documentCount: number
   status: 'active' | 'syncing' | 'error' | 'paused'
   errorMessage?: string
+}
+
+export interface SavedAzureConfig {
+  id: string
+  name: string
+  description?: string
+  config: AzureConfig
+  createdAt: string
+  updatedAt: string
 }
