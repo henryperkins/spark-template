@@ -271,6 +271,22 @@ describe('OneDriveService', () => {
         (service as any).downloadFile('token', item)
       ).rejects.toThrow('Failed to download file')
     })
+
+    it('throws error on download failure with item ID', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        new Response('Internal Server Error', { status: 500 })
+      )
+
+      const item = {
+        id: '123',
+        name: 'test.txt',
+        size: 100
+      }
+
+      await expect(
+        (service as any).downloadFile('token', item)
+      ).rejects.toThrow('OneDrive API error')
+    })
   })
 
   describe('isTextFile', () => {
@@ -313,13 +329,19 @@ describe('OneDriveService', () => {
 
   describe('chunkContent', () => {
     it('chunks content by lines respecting max size', () => {
-      const content = 'Line 1\n'.repeat(100)
-      const chunks = (service as any).chunkContent(content, 50)
+      const line = 'This is a line of text.'; // length 23
+      const content = (line + '\n').repeat(10); // 10 lines, total length 240
+      const chunks = (service as any).chunkContent(content, 100);
 
-      expect(chunks.length).toBeGreaterThan(1)
-      chunks.forEach((chunk: string) => {
-        expect(chunk.length).toBeLessThanOrEqual(50 + 10)
-      })
+      expect(chunks).toHaveLength(3);
+      
+      const expectedChunk1 = (line + '\n').repeat(4).trim();
+      const expectedChunk2 = (line + '\n').repeat(4).trim();
+      const expectedChunk3 = (line + '\n').repeat(2).trim();
+      
+      expect(chunks[0]).toBe(expectedChunk1);
+      expect(chunks[1]).toBe(expectedChunk2);
+      expect(chunks[2]).toBe(expectedChunk3);
     })
 
     it('handles content smaller than max chunk size', () => {
@@ -360,7 +382,7 @@ describe('OneDriveService', () => {
       fetchSpy.mockResolvedValueOnce(
         new Response(JSON.stringify({
           value: [
-            { id: 'abc123', name: 'doc1.txt', size: 100, file: { mimeType: 'text/plain' } }
+            { id: 'abc123', name: 'doc1.txt', size: 100, file: { mimeType: 'text/plain' }, '@microsoft.graph.downloadUrl': 'https://dl.example.com/doc1.txt' }
           ]
         }), { status: 200 })
       )

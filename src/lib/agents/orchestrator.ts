@@ -9,7 +9,7 @@ import { cacheManager } from '../cache-manager'
 import { DocumentAnalyzerAgent } from './document-analyzer'
 import type { ChunkingDecision } from './types'
 import { healthProgressAgent } from './health-progress-agent'
-import { findRelevantChunks, findRelevantChunksLocal, generateResponse } from '../rag'
+import { findRelevantChunks, findRelevantChunksLocal, findRelevantChunksWithMeta, generateResponse } from '../rag'
 import { azureServiceManager } from '../azure-service-manager'
 import { AgentStepEvent, telemetry, type AgentStepMetadata } from '../services/telemetry'
 import { setActiveQueryContext } from './context-registry'
@@ -85,16 +85,15 @@ export class AgenticOrchestrator {
   ): Promise<AgenticRAGResult> {
     const startTime = Date.now()
     const runId = options.runId ?? this.generateRunId()
-
-    try {
-      // Gap #1: Initialize execution context with KB awareness
-      const kb = buildKBContext(documents)
-      const context = createQueryExecutionContext(runId, query, kb, {
-        tokenBudget: 50000, // 50k token budget
-        timeBudgetMs: 60000 // 60s time budget
-      })
-      // Expose context to lower-level services (e.g., LLMService) for per-call recording
-      setActiveQueryContext(context)
+    
+    // Initialize execution context with KB awareness
+    const kb = buildKBContext(documents)
+    const context = createQueryExecutionContext(runId, query, kb, {
+      tokenBudget: 50000, // 50k token budget
+      timeBudgetMs: 60000 // 60s time budget
+    })
+    // Expose context to lower-level services (e.g., LLMService) for per-call recording
+    setActiveQueryContext(context)
     // Track baseline usage so we can approximate per-run consumption
     const baselineUsage = tokenTracker.getTotalUsage()
     const syncTokenBudget = () => {
@@ -170,7 +169,8 @@ export class AgenticOrchestrator {
     let routing: RoutingDecision | undefined
     let retrievalDurationMs = 0
 
-    if (classification.requiresDecomposition) {
+    try {
+      if (classification.requiresDecomposition) {
       // Planning phase with timing
       const planningStart = Date.now()
       plan = await this.executeStep(
@@ -209,7 +209,18 @@ export class AgenticOrchestrator {
       const retrievalDuration = Date.now() - retrievalStart
       retrievalDurationMs = retrievalDuration
       recordPhaseTime(context, 'retrieval', retrievalDuration)
-    } else {
+      // Populate retrieval metadata for decomposed (sub-query) path
+      context.retrievalMetadata = {
+        strategy: 'hybrid',
+        sourceCount: allSources.length,
+        avgRelevanceScore: allSources.length
+          ? allSources.reduce((sum, s) => sum + (s.relevanceScore ?? 0), 0) / allSources.length
+          : 0,
+        duration: retrievalDuration,
+        degraded: azureFallback,
+        degradationReason: azureFallback ? 'Azure retrieval fallback used during sub-queries' : undefined
+      }
+      } else {
       // Routing phase with timing
       const routingStart = Date.now()
       routing = await this.executeStep(
@@ -234,31 +245,40 @@ export class AgenticOrchestrator {
 
       // Retrieval phase
       const retrievalStart = Date.now()
-      allSources = await this.executeStep(
-      workflow,
-      'Retrieval',
-      `Execute ${routing.strategy} search`,
-      () => this.executeRetrieval(query, documents, routing!.strategy, () => {
-        azureFallback = true
-      }),
-      emitWorkflowUpdate,
-      (event) => {
-        emitStepEvent({
-          ...event,
-          metadata: {
-            sourceCount: (event as { result?: Source[] }).result?.length,
-            avgRelevanceScore: (event as { result?: Source[] }).result
-              ? (event as { result?: Source[] }).result!.reduce((sum, s) => sum + s.relevanceScore, 0) / (event as { result?: Source[] }).result!.length
-              : 0,
-            degraded: azureFallback
-          }
-        })
-      }
-    )
+      const retrievalResult = await this.executeStep(
+        workflow,
+        'Retrieval',
+        `Execute ${routing.strategy} search`,
+        () => findRelevantChunksWithMeta(query, documents, 5, routing!.strategy, {
+          onAzureFallback: () => {
+            azureFallback = true
+          },
+          namespaceId: azureServiceManager.getNamespaceId()
+        }),
+        emitWorkflowUpdate,
+        (event) => {
+          const result = (event as { result?: { sources: Source[]; metadata: any } }).result
+          const meta = result?.metadata
+          emitStepEvent({
+            ...event,
+            metadata: meta
+              ? {
+                  strategy: meta.strategy,
+                  sourceCount: meta.sourceCount,
+                  avgRelevanceScore: meta.avgRelevanceScore,
+                  degraded: meta.degraded
+                }
+              : undefined
+          })
+        }
+      )
+      allSources = retrievalResult.sources
       const retrievalDuration = Date.now() - retrievalStart
       retrievalDurationMs = retrievalDuration
       recordPhaseTime(context, 'retrieval', retrievalDuration)
-    }
+      // Populate retrieval metadata for single-query path
+      context.retrievalMetadata = retrievalResult.metadata
+      }
 
     // Generation phase with timing
     const generationStart = Date.now()
@@ -300,7 +320,7 @@ export class AgenticOrchestrator {
       const validationDuration = Date.now() - validationStart
       recordPhaseTime(context, 'validation', validationDuration)
       context.validation = validation
-    }
+      }
 
     // Refinement phase with timing
     let refinement: ReActResult | undefined
@@ -637,7 +657,11 @@ export class AgenticOrchestrator {
       }
     }
 
-    return allSources.slice(0, 8)
+      return allSources.slice(0, 8)
+    } finally {
+      // Clear active context to avoid leaking execution state across runs
+      setActiveQueryContext(null)
+    }
   }
 
   private async executeRetrieval(
@@ -673,6 +697,9 @@ export class AgenticOrchestrator {
       })
     }
   }
+
+  // Ensure active query context is cleared when processing completes
+  // (callers of processQuery should manage errors; this utility is context-agnostic)
 
   private buildNoSourcesMessage(query: string, documents: Document[], strategy?: RetrievalStrategy): string {
     const totalDocs = documents.length
