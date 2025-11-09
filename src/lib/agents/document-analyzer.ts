@@ -48,15 +48,36 @@ Content sample (first 500 chars):\n${contentSample}`
       return { ok: true, value }
     } catch (err) {
       if (err instanceof LLMError && err.code === 'EPARSE') {
-        const raw = (err as LLMError).rawText || (err.message?.replace(/^Could not parse JSON from LLM response:\s*/, '') ?? '')
-        const repaired = jsonRepairAgent.tryRepairJson<ChunkingDecision>({ rawText: raw, schema: chunkingDecisionSchema, contextLabel: 'chunking-decision' })
+        // Prefer the structured rawText captured by LLMService so we can attempt repair
+        const raw =
+          (err as LLMError).rawText ||
+          // Back-compat: fall back to message-derived snippet if older errors are observed
+          (err.message?.replace(/^Could not parse JSON from LLM response:\s*/, '') ?? '')
+        const repaired = jsonRepairAgent.tryRepairJson<ChunkingDecision>({
+          rawText: raw,
+          schema: chunkingDecisionSchema,
+          contextLabel: 'chunking-decision'
+        })
         if (repaired.ok) {
           console.info('[DocumentAnalyzerAgent] LLM_JSON_REPAIR_SUCCESS', { attempts: repaired.attempts })
-          return { ok: true, value: repaired.value, meta: { repaired: true, attempts: repaired.attempts } }
+          return {
+            ok: true,
+            value: repaired.value,
+            meta: { repaired: true, attempts: repaired.attempts }
+          }
         }
+        // If repair fails, emit a clear, structured signal before falling back.
         const fb = this.fallbackAnalysis(fileName, contentSample)
-        console.warn('[DocumentAnalyzerAgent] LLM_JSON_PARSE_FAIL → LLM_FALLBACK_USED', { reason: 'json_parse_failed' })
-        return { ok: true, value: fb, meta: { fallback: true, reason: 'json_parse_failed' } }
+        console.warn('[DocumentAnalyzerAgent] LLM_JSON_PARSE_FAIL → LLM_FALLBACK_USED', {
+          reason: 'json_parse_failed',
+          hadRawText: Boolean(raw),
+          rawPreview: (raw || '').slice(0, 200)
+        })
+        return {
+          ok: true,
+          value: fb,
+          meta: { fallback: true, reason: 'json_parse_failed' }
+        }
       }
       // Infra/network or other errors → fallback but keep UX
       const fb = this.fallbackAnalysis(fileName, contentSample)

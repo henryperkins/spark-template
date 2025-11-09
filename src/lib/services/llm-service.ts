@@ -569,6 +569,19 @@ export class LLMService {
       }
     }
 
+    // 2b) Generic fenced block without explicit json language tag.
+    const genericFence = text.match(/```\s*[\r\n]+([\s\S]*?)```/)
+    if (genericFence && genericFence[1]) {
+      const fenced = genericFence[1].trim()
+      if (fenced) {
+        try {
+          return JSON.parse(fenced)
+        } catch {
+          // continue
+        }
+      }
+    }
+
     // 3) Balanced brace scan: extract smallest valid top-level JSON object.
     const start = text.indexOf('{')
     if (start !== -1) {
@@ -668,6 +681,28 @@ export class LLMService {
       if (err instanceof LLMError) throw err
       throw new LLMError('EREMOTE', 'generateTextStream failed', err)
     }
+  }
+}
+
+/**
+ * Safely parse JSON with sanitation for common LLM output issues.
+ * Strips code fences, trims whitespace, and handles various JSON formats.
+ */
+export function safeParseJson(raw: unknown): unknown {
+  try {
+    let s = typeof raw === 'string' ? raw.trim() : String(raw ?? '').trim()
+
+    // Strip common code fences or noise
+    if (s.startsWith('```json')) s = s.replace(/^```json/i, '')
+    if (s.startsWith('```')) s = s.replace(/^```/, '')
+    if (s.endsWith('```')) s = s.slice(0, -3)
+
+    // Try direct parse
+    return JSON.parse(s)
+  } catch (e) {
+    console.error('[llm-service] safeParseJson failed:', e)
+    const msg = e instanceof Error ? e.message : String(e)
+    return { _parseError: msg, _raw: raw }
   }
 }
 

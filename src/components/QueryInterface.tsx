@@ -8,36 +8,35 @@ import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { MagnifyingGlass, Brain, FileText, Link, Sparkle, CloudSlash } from '@phosphor-icons/react'
-import { Document, ChatMessage, Source } from '@/types'
-import { findRelevantChunks, generateResponse } from '@/lib/rag'
-import { AgenticOrchestrator, AgenticRAGResult, AgentWorkflowStep } from '@/lib/agents'
+import { Document } from '@/types'
+import { AgenticOrchestrator, AgentWorkflowStep } from '@/lib/agents'
 import { AgentWorkflowVisualizer } from './AgentWorkflowVisualizer'
 import { SuggestedQuestions } from './SuggestedQuestions'
+import { SafeMarkdown } from './SafeMarkdown'
+import { useStreamingQuery } from '@/hooks/use-streaming-query'
 import { queryHistoryService } from '@/lib/services/query-history'
-import { azureServiceManager } from '@/lib/azure-service-manager'
 import { cn } from '@/lib/utils'
-import { errorTracking } from '@/lib/services/error-tracker'
 
 interface QueryInterfaceProps {
   documents: Document[]
 }
 
-interface ExtendedChatMessage extends ChatMessage {
-  agenticResult?: AgenticRAGResult
-  azureFallback?: boolean
-  azureUsed?: boolean
-  isLoading?: boolean
-}
-
 export function QueryInterface({ documents }: QueryInterfaceProps) {
   const [query, setQuery] = useState('')
-  const [messages, setMessages] = useState<ExtendedChatMessage[]>([])
-  const [loading, setLoading] = useState(false)
   const [agenticMode, setAgenticMode] = useState(true)
   const [orchestrator] = useState<AgenticOrchestrator>(() => new AgenticOrchestrator())
   const [activeWorkflow, setActiveWorkflow] = useState<AgentWorkflowStep[]>([])
   const [recentQueries, setRecentQueries] = useState<string[]>([])
-  const [lastErrorHint, setLastErrorHint] = useState<string | null>(null)
+
+  // Use streaming query hook
+  const { messages, loading, executeStreamingQuery } = useStreamingQuery({
+    agenticMode,
+    documents,
+    orchestrator,
+    onWorkflowUpdate: (steps) => {
+      setActiveWorkflow(steps)
+    }
+  })
 
   useEffect(() => {
     let isMounted = true
@@ -62,155 +61,19 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
       isMounted = false
     }
   }, [])
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!query.trim() || loading) return
 
-    await executeQuery(query)
-  }
+    const queryText = query
+    setQuery('') // Clear input immediately for better UX
 
-  const executeQuery = async (queryText: string) => {
-    if (!queryText.trim() || loading) return
-
-    // Optimistic: immediately append user message and a loading assistant placeholder
-    const userMessage: ExtendedChatMessage = {
-      id: `msg-${Date.now()}-user`,
-      type: 'user',
-      content: queryText,
-      timestamp: new Date().toISOString()
-    }
-
-    const assistantPlaceholder: ExtendedChatMessage = {
-      id: `msg-${Date.now()}-assistant`,
-      type: 'assistant',
-      content: 'Thinking...',
-      timestamp: new Date().toISOString(),
-      isLoading: true
-    }
-
-    setMessages(prev => [...prev, userMessage, assistantPlaceholder])
-    setLoading(true)
-    setQuery('')
     if (agenticMode) {
-      setActiveWorkflow([])
+      setActiveWorkflow([]) // Reset workflow for new query
     }
 
-    try {
-      let sources: Source[]
-      let response: string
-      let agenticResult: AgenticRAGResult | undefined
-      let azureFallbackDetected = false
-      const startTime = Date.now()
-
-      if (agenticMode) {
-        const runId = userMessage.id
-        agenticResult = await orchestrator.processQuery(queryText, documents, {
-          runId,
-          onWorkflowUpdate: (steps) => {
-            setActiveWorkflow(steps)
-          },
-          onStepEvent: (event) => {
-            if (event.status === 'failed') {
-              console.error('[agent-step failed]', event)
-            } else if (import.meta.env?.MODE !== 'production') {
-              console.debug('[agent-step]', event.agent, event.action, event.status)
-            }
-          }
-        })
-        sources = agenticResult.sources
-        response = agenticResult.response
-        azureFallbackDetected = agenticResult.azureFallback
-        // Agentic queries are logged by AgenticOrchestrator
-      } else {
-        // Non-agentic query: log manually
-        sources = await findRelevantChunks(queryText, documents, 5, 'hybrid', {
-          onAzureFallback: () => {
-            azureFallbackDetected = true
-          }
-        })
-        response = await generateResponse(queryText, sources)
-
-        const totalDuration = Date.now() - startTime
-
-        // Log non-agentic query to history
-        queryHistoryService.add({
-          id: userMessage.id,
-          timestamp: new Date().toISOString(),
-          query: queryText,
-          routing: {
-            strategy: 'hybrid',
-            reasoning: 'Non-agentic mode: default hybrid search',
-            confidence: 1.0
-          },
-          resultCount: sources.length,
-          topScore: sources[0]?.relevanceScore || 0,
-          azureUsed: azureServiceManager.isConfigured(),
-          azureFallback: azureFallbackDetected,
-          totalDuration
-        }).catch(error => {
-          console.error('Failed to log query to history:', error)
-        })
-      }
-
-      const assistantMessage: ExtendedChatMessage = {
-        id: assistantPlaceholder.id,
-        type: 'assistant',
-        content: response,
-        timestamp: new Date().toISOString(),
-        sources: sources.length > 0 ? sources : undefined,
-        azureUsed: sources.some(s => s.azureScore !== undefined),
-        agenticResult,
-        azureFallback: azureFallbackDetected
-      }
-
-      // Replace the placeholder with the real assistant message
-      setMessages(prev => prev.map(msg => (msg.id === assistantPlaceholder.id ? assistantMessage : msg)))
-    } catch (err) {
-      // Roll back the placeholder on error and show error card
-      setMessages(prev => prev.filter(msg => msg.id !== assistantPlaceholder.id))
-
-      let hint: string | null = null
-      if (err && typeof err === 'object') {
-        const anyErr = err as any
-        const status = anyErr?.status || anyErr?.azure?.status
-        const message = (anyErr?.message as string | undefined) || ''
-        if (status === 401 || status === 403) {
-          hint = 'Azure authentication failed (401/403). Check keys or RBAC token.'
-        } else if (status === 429) {
-          hint = 'Rate limited by Azure (429). Please wait and retry.'
-        } else if (typeof message === 'string' && message.toLowerCase().includes('cors')) {
-          hint = 'CORS blocked the request. Use the built-in proxy or enable CORS in Azure.'
-        } else if (typeof message === 'string' && /index(.+)?does not exist/i.test(message)) {
-          hint = 'Azure Search index missing. Rebuild the index from Configuration.'
-        }
-      }
-      setLastErrorHint(hint)
-      try {
-        errorTracking.record(err as Error, { type: 'llm', agent: 'QueryInterface', code: hint || 'query_error', status: (err as any)?.status || (err as any)?.azure?.status })
-      } catch {
-        // Ignore error tracking failures
-      }
-      const errorId = `msg-${Date.now()}-error`
-      const errorMessage: ExtendedChatMessage = {
-        id: errorId,
-        type: 'assistant',
-        content:
-          'Something went wrong while processing your question. Please review the details below and try again.',
-        timestamp: new Date().toISOString()
-      }
-      setMessages(prev => [...prev, errorMessage])
-
-      console.error('[query-error]', err)
-    } finally {
-      setLoading(false)
-      setTimeout(() => {
-        setActiveWorkflow([])
-      }, 300)
-    }
-  }
-
-  const handleSuggestedQuestionSelect = (question: string) => {
-    executeQuery(question)
+    await executeStreamingQuery(queryText)
   }
 
   const formatTime = (timestamp: string) => {
@@ -270,7 +133,7 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
                     variant="outline"
                     size="sm"
                     className="text-xs"
-                    onClick={() => executeQuery(q)}
+                    onClick={() => executeStreamingQuery(q)}
                   >
                     {q}
                   </Button>
@@ -341,9 +204,17 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
               )}
             >
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <Badge variant={message.type === 'user' ? 'default' : 'secondary'}>
-                    {message.type === 'user' ? 'You' : 'Assistant'}
-                  </Badge>
+                  <div className="flex items-center gap-2">
+                    <Badge variant={message.type === 'user' ? 'default' : 'secondary'}>
+                      {message.type === 'user' ? 'You' : 'Assistant'}
+                    </Badge>
+                    {message.type === 'assistant' && message.isStreaming && (
+                      <Badge variant="outline" className="animate-pulse">
+                        <Sparkle size={12} className="mr-1" />
+                        Streaming...
+                      </Badge>
+                    )}
+                  </div>
                   <span className="text-xs text-muted-foreground">
                     {formatTime(message.timestamp)}
                   </span>
@@ -380,9 +251,6 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
                     </AlertTitle>
                     <AlertDescription className="text-xs sm:text-sm space-y-1">
                       <p>{message.content}</p>
-                      {lastErrorHint && (
-                        <p className="text-[11px] opacity-90">Hint: {lastErrorHint}</p>
-                      )}
                       <p>
                         • Verify your{' '}
                         <a
@@ -403,22 +271,19 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
                         size="sm"
                         variant="outline"
                         className="mt-2 h-7 px-2 text-[10px]"
-                        onClick={() =>
-                          executeQuery(
-                            messages[messages.length - 2]?.content || query || ''
-                          )
-                        }
+                        onClick={() => {
+                          const lastUserMessage = messages.filter(m => m.type === 'user').pop()
+                          if (lastUserMessage) {
+                            executeStreamingQuery(lastUserMessage.content)
+                          }
+                        }}
                       >
                         Try again
                       </Button>
                     </AlertDescription>
                   </Alert>
                 ) : (
-                  <div className="prose prose-sm max-w-none dark:prose-invert">
-                    <p className="whitespace-pre-wrap leading-relaxed">
-                      {message.content}
-                    </p>
-                  </div>
+                  <SafeMarkdown content={message.content} />
                 )}
 
                 {message.agenticResult && (
@@ -463,7 +328,10 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
                   <div className="mt-4">
                     <SuggestedQuestions
                       expansion={message.agenticResult.expansion}
-                      onQuestionSelect={handleSuggestedQuestionSelect}
+                      onQuestionSelect={(question) => {
+                        if (agenticMode) setActiveWorkflow([])
+                        executeStreamingQuery(question)
+                      }}
                       loading={loading}
                     />
                   </div>
@@ -497,9 +365,11 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
                                     {Math.round(source.relevanceScore * 100)}% match
                                   </Badge>
                                 </div>
-                                <p className="text-sm leading-relaxed">
-                                  {source.content}
-                                </p>
+                                <SafeMarkdown
+                                  content={source.content}
+                                  className="text-sm leading-relaxed prose-sm max-w-none dark:prose-invert"
+                                  allowLinks={false}
+                                />
                               </div>
                             ))}
                           </div>

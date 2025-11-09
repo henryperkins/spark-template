@@ -57,6 +57,14 @@ export interface Env {
   // Azure Search (server-side)
   AZURE_SEARCH_ENDPOINT?: string
   AZURE_SEARCH_KEY?: string
+  // OAuth Credentials (Worker-only secrets)
+  WORKER_URL?: string
+  GITHUB_CLIENT_ID?: string
+  GITHUB_CLIENT_SECRET?: string
+  DROPBOX_CLIENT_ID?: string
+  DROPBOX_CLIENT_SECRET?: string
+  ONEDRIVE_CLIENT_ID?: string
+  ONEDRIVE_CLIENT_SECRET?: string
 }
 
 // Structured log types
@@ -182,6 +190,27 @@ export default {
       // Telemetry endpoint
       if (url.pathname.startsWith('/api/telemetry')) {
         return handleTelemetryRequest(request, env)
+      }
+
+      // OAuth endpoints
+      if (url.pathname === '/api/oauth/store-verifier' && request.method === 'POST') {
+        const { handleStoreVerifier } = await import('./oauth-handler')
+        return handleStoreVerifier(request, env)
+      }
+
+      if (url.pathname === '/api/oauth/github/callback') {
+        const { handleOAuthCallback } = await import('./oauth-handler')
+        return handleOAuthCallback(request, env, 'github')
+      }
+
+      if (url.pathname === '/api/oauth/dropbox/callback') {
+        const { handleOAuthCallback } = await import('./oauth-handler')
+        return handleOAuthCallback(request, env, 'dropbox')
+      }
+
+      if (url.pathname === '/api/oauth/onedrive/callback') {
+        const { handleOAuthCallback } = await import('./oauth-handler')
+        return handleOAuthCallback(request, env, 'onedrive')
       }
 
       // API endpoint for KV operations

@@ -254,6 +254,27 @@ export function isCloudflareKVConfigured(): boolean {
 let hasWarned = false
 let hasInitialized = false
 export function createCloudflareKV(): CloudflareKV | null {
+  // Prefer Worker KV when available (custom domains or *.workers.dev)
+  const isWorkerRuntime =
+    typeof window !== 'undefined' &&
+    (window.location.hostname.includes('.workers.dev') ||
+      (import.meta as any)?.env?.VITE_USE_WORKER_KV === 'true')
+
+  if (isWorkerRuntime) {
+    // In Worker mode the constructor switches to /api/kv; these fields are not used
+    const config: CloudflareKVConfig = {
+      accountId: 'worker-mode',
+      namespaceId: 'worker-mode',
+      apiToken: 'worker-mode',
+    }
+    // Only log initialization once per runtime to reduce noise
+    if (!hasInitialized) {
+      console.info(`${LOG_PREFIX} Initialized in Worker KV mode`)
+      hasInitialized = true
+    }
+    return new CloudflareKV(config)
+  }
+
   if (!isCloudflareKVConfigured()) {
     if (!hasWarned) {
       console.warn(

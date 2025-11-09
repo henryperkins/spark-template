@@ -844,61 +844,104 @@ export class ResponsesClient {
     if (json.status === 'incomplete') {
       try {
         console.warn('[ResponsesClient] Incomplete response; attempting to extract partial output', { id: json.id })
-        // Debug: log the full response to see actual structure
         if (Array.isArray(json.output) && json.output.length > 0) {
           console.debug('[ResponsesClient] Output array contents:', JSON.stringify(json.output, null, 2))
         }
-      } catch {}
+      } catch {
+        // best-effort diagnostics only
+      }
     }
 
-    // 1) Simple top-level fields
-    if (typeof json.text === 'string') return json.text
-    if (typeof json.output_text === 'string') return json.output_text
-    if (typeof (json as any).reasoning_summary_text === 'string') return (json as any).reasoning_summary_text
-    if (typeof (json as any).reasoning_content === 'string') return (json as any).reasoning_content
+    // 1) Simple top-level fields (happy path)
+    if (typeof json.text === 'string' && json.text.trim()) return json.text
+    if (typeof json.output_text === 'string' && json.output_text.trim()) return json.output_text
+    if (typeof (json as any).reasoning_summary_text === 'string' && (json as any).reasoning_summary_text.trim()) {
+      return (json as any).reasoning_summary_text
+    }
+    if (typeof (json as any).reasoning_content === 'string' && (json as any).reasoning_content.trim()) {
+      return (json as any).reasoning_content
+    }
     if ((json as any).reasoning && typeof (json as any).reasoning === 'object') {
       const rr = (json as any).reasoning
-      if (typeof rr.summary_text === 'string') return rr.summary_text
-      if (typeof rr.text === 'string') return rr.text
+      if (typeof rr.summary_text === 'string' && rr.summary_text.trim()) return rr.summary_text
+      if (typeof rr.text === 'string' && rr.text.trim()) return rr.text
+      if (typeof rr.content === 'string' && rr.content.trim()) return rr.content
     }
 
     // 2) Nested under "response"
     if (json.response && typeof json.response === 'object') {
       const r = json.response
-      if (typeof r.output_text === 'string') return r.output_text
-      if (typeof r.text === 'string') return r.text
-      if (typeof (r as any).reasoning_summary_text === 'string') return (r as any).reasoning_summary_text
-      if (typeof (r as any).reasoning_content === 'string') return (r as any).reasoning_content
+      if (typeof r.output_text === 'string' && r.output_text.trim()) return r.output_text
+      if (typeof r.text === 'string' && r.text.trim()) return r.text
+      if (typeof (r as any).reasoning_summary_text === 'string' && (r as any).reasoning_summary_text.trim()) {
+        return (r as any).reasoning_summary_text
+      }
+      if (typeof (r as any).reasoning_content === 'string' && (r as any).reasoning_content.trim()) {
+        return (r as any).reasoning_content
+      }
       if ((r as any).reasoning && typeof (r as any).reasoning === 'object') {
         const rr = (r as any).reasoning
-        if (typeof rr.summary_text === 'string') return rr.summary_text
-        if (typeof rr.text === 'string') return rr.text
+        if (typeof rr.summary_text === 'string' && rr.summary_text.trim()) return rr.summary_text
+        if (typeof rr.text === 'string' && rr.text.trim()) return rr.text
+        if (typeof rr.content === 'string' && rr.content.trim()) return rr.content
       }
     }
 
     // 3) Prefer reasoning items explicitly before general text extraction
     const reasoningChunks = this.extractReasoningChunks(json.output)
     if (reasoningChunks.length) {
-      return reasoningChunks.join('')
+      const joined = reasoningChunks.join('')
+      if (joined.trim()) return joined
     }
 
     // 4) Gather assistant/tool text regardless of the exact content shape
     const outputChunks = this.collectTextFromOutput(json.output)
     if (outputChunks.length) {
-      return outputChunks.join('')
+      const joined = outputChunks.join('')
+      if (joined.trim()) return joined
     }
 
-    // 6) Final fallback: some APIs put a human-readable message here
-    if (typeof (json as any).message === 'string') return (json as any).message
+    // 5) Robust fallbacks for partially-structured responses:
+    //    - Some providers/models surface plain text under `message` or `a.text`
+    if (typeof (json as any).message === 'string' && (json as any).message.trim()) {
+      return (json as any).message
+    }
+    if (json.a && typeof json.a === 'object') {
+      if (typeof (json.a as any).text === 'string' && (json.a as any).text.trim()) {
+        return (json.a as any).text
+      }
+      if (typeof (json.a as any).message === 'string' && (json.a as any).message.trim()) {
+        return (json.a as any).message
+      }
+    }
+
+    // 6) Last-ditch: inspect first output item for obvious inline text/content fields
+    if (Array.isArray(json.output) && json.output.length > 0) {
+      const first = json.output[0]
+      if (first) {
+        if (typeof (first as any).content === 'string' && (first as any).content.trim()) {
+          return (first as any).content
+        }
+        if (typeof (first as any).text === 'string' && (first as any).text.trim()) {
+          return (first as any).text
+        }
+        if (Array.isArray((first as any).content)) {
+          const nested = this.collectTextFromContentNode((first as any).content).join('')
+          if (nested.trim()) return nested
+        }
+      }
+    }
 
     // Log when we can't extract text to help diagnose API response structure issues
     console.warn('[ResponsesClient] Failed to extract output text. Response structure:', {
-      hasText: 'text' in json,
-      hasOutputText: 'output_text' in json,
-      hasResponse: 'response' in json,
+      hasText: typeof json.text === 'string',
+      hasOutputText: typeof json.output_text === 'string',
+      hasResponse: typeof json.response === 'object',
       hasOutput: Array.isArray(json.output),
       outputLength: Array.isArray(json.output) ? json.output.length : 0,
       firstOutputType: Array.isArray(json.output) && json.output[0] ? json.output[0].type : null,
+      hasMessage: typeof (json as any).message === 'string',
+      hasAText: !!(json as any)?.a && typeof (json as any).a.text === 'string',
       status: json.status,
       id: json.id
     })

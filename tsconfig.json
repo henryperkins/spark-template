@@ -10,11 +10,20 @@
     ],
     "module": "ESNext",
     "skipLibCheck": true,
-    "strictNullChecks": true,
+    /* Strict Type Checking - Phase 1 */
     "strict": true,
+    "strictNullChecks": true,
     "noImplicitAny": true,
     "strictFunctionTypes": true,
     "strictPropertyInitialization": true,
+    "useUnknownInCatchVariables": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noImplicitThis": true,
+    /* TODO Phase 2: Enable advanced strict flags after refactoring */
+    // "noUncheckedIndexedAccess": true,            // Requires bounds checking (77 errors)
+    // "noPropertyAccessFromIndexSignature": true,  // Requires bracket notation for env vars
+    // "exactOptionalPropertyTypes": true,          // Requires undefined handling in 20+ files
     /* Bundler mode */
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,

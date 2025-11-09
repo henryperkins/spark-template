@@ -6,9 +6,10 @@ import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { githubService } from '@/lib/integrations/github-service'
 import { GitHubRepo, Document } from '@/types'
-import { GithubLogo, Check, Warning } from '@phosphor-icons/react'
+import { GithubLogo, Check, Warning, Key } from '@phosphor-icons/react'
 import { toast } from 'sonner'
 import { secureTokenStorage } from '@/lib/services/secure-token-storage'
+import { useOAuth, getOAuthConfig } from '@/hooks/use-oauth'
 
 interface GitHubIngestionProps {
   onDocumentsIngested: (documents: Document[]) => void
@@ -26,6 +27,21 @@ export function GitHubIngestion({ onDocumentsIngested }: GitHubIngestionProps) {
   const [isValidating, setIsValidating] = useState(false)
   const [isIngesting, setIsIngesting] = useState(false)
   const [validationResult, setValidationResult] = useState<{ valid: boolean; error?: string } | null>(null)
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [showTokenInput, setShowTokenInput] = useState(false)
+
+  const { initiateOAuth, checkOAuthResult, loading: oauthLoading } = useOAuth()
+
+  // Check OAuth result on mount
+  useEffect(() => {
+    const result = checkOAuthResult()
+    if (result.success) {
+      setIsAuthenticated(true)
+      toast.success('GitHub authentication successful!')
+    } else if (result.error) {
+      toast.error(`OAuth failed: ${result.error}`)
+    }
+  }, [checkOAuthResult])
 
   // Load any previously saved token on mount
   useEffect(() => {
@@ -33,6 +49,7 @@ export function GitHubIngestion({ onDocumentsIngested }: GitHubIngestionProps) {
     secureTokenStorage.getToken('github').then((token) => {
       if (!mounted || !token) return
       setConfig(prev => ({ ...prev, token }))
+      setIsAuthenticated(true)
     }).catch(() => {
       // ignore token load failures
     })
@@ -166,18 +183,70 @@ export function GitHubIngestion({ onDocumentsIngested }: GitHubIngestionProps) {
             </div>
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor={`${idPrefix}-github-token`}>Personal Access Token (optional)</Label>
-            <Input
-              id={`${idPrefix}-github-token`}
-              name="token"
-              type="password"
-              placeholder="ghp_xxxxxxxxxxxx"
-              value={config.token}
-              onChange={(e) => setConfig({ ...config, token: e.target.value })}
-            />
+          <div className="space-y-3">
+            <Label>Authentication (optional)</Label>
+
+            {!isAuthenticated ? (
+              <div className="space-y-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => {
+                    const oauthConfig = getOAuthConfig('github')
+                    if (!oauthConfig.clientId) {
+                      toast.error('GitHub OAuth not configured. Using manual token instead.')
+                      setShowTokenInput(true)
+                      return
+                    }
+                    initiateOAuth({ ...oauthConfig, provider: 'github' })
+                  }}
+                  disabled={oauthLoading}
+                >
+                  <GithubLogo size={16} className="mr-2" />
+                  Connect with GitHub OAuth
+                </Button>
+
+                {!showTokenInput && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="w-full text-xs"
+                    onClick={() => setShowTokenInput(true)}
+                  >
+                    <Key size={14} className="mr-1" />
+                    Use Personal Access Token Instead
+                  </Button>
+                )}
+
+                {showTokenInput && (
+                  <div className="space-y-2">
+                    <Input
+                      id={`${idPrefix}-github-token`}
+                      name="token"
+                      type="password"
+                      placeholder="ghp_xxxxxxxxxxxx"
+                      value={config.token}
+                      onChange={(e) => setConfig({ ...config, token: e.target.value })}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Enter your GitHub Personal Access Token
+                    </p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <Alert>
+                <Check size={16} className="text-primary" />
+                <AlertDescription>
+                  Authenticated with GitHub
+                </AlertDescription>
+              </Alert>
+            )}
+
             <p className="text-xs text-muted-foreground">
-              Required for private repositories or to increase rate limits
+              Authentication required for private repositories or to increase rate limits
             </p>
           </div>
         </form>

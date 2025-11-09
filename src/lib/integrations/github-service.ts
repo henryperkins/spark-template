@@ -3,6 +3,7 @@ import { intelligentChunkDocument } from '@/lib/rag'
 import { azureServiceManager } from '@/lib/azure-service-manager'
 import { embeddingManager } from '@/lib/embedding-manager'
 import { cacheManager } from '@/lib/cache-manager'
+import { secureTokenStorage } from '@/lib/services/secure-token-storage'
 
 interface GitHubFile {
   name: string
@@ -16,6 +17,17 @@ interface GitHubFile {
 export class GitHubService {
   private delay(ms: number) {
     return new Promise(resolve => setTimeout(resolve, ms))
+  }
+
+  private async resolveToken(provided?: string): Promise<string | undefined> {
+    if (provided && provided.trim()) return provided
+    try {
+      const stored = await secureTokenStorage.getToken('github')
+      return stored ?? undefined
+    } catch (e) {
+      console.warn('GitHubService: secure token lookup failed; continuing unauthenticated', e)
+      return undefined
+    }
   }
 
   private async fetchWithAuth(url: string, token?: string, retries = 3): Promise<Response> {
@@ -114,9 +126,9 @@ export class GitHubService {
 
   async ingestRepo(config: GitHubRepo): Promise<Document[]> {
     const { owner, repo, branch = 'main', path = '', token } = config
-    
+      const resolvedToken = await this.resolveToken(token)
     try {
-      let files = await this.getAllFilesViaTree(owner, repo, branch, token)
+      let files = await this.getAllFilesViaTree(owner, repo, branch, resolvedToken)
       if (path) {
         files = files.filter(f => f.path.startsWith(path))
       }
@@ -126,7 +138,7 @@ export class GitHubService {
         const file = files[i]
         try {
           await this.delay(100)
-          const content = await this.getFileContent(owner, repo, file.path, branch, token)
+          const content = await this.getFileContent(owner, repo, file.path, branch, resolvedToken)
           const documentId = `github-${file.sha}`
           
           const { chunks } = await intelligentChunkDocument(content, documentId, file.name)
@@ -189,7 +201,8 @@ export class GitHubService {
 
   async validateConfig(config: GitHubRepo): Promise<{ valid: boolean; error?: string }> {
     try {
-      await this.getRepoContents(config.owner, config.repo, '', config.branch || 'main', config.token)
+      const resolvedToken = await this.resolveToken(config.token)
+      await this.getRepoContents(config.owner, config.repo, '', config.branch || 'main', resolvedToken)
       return { valid: true }
     } catch (error) {
       return { 
