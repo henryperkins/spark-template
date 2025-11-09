@@ -19,6 +19,7 @@ markdown-output
 
 # Test coverage
 coverage/
+.pytest_cache/
 
 # Editor directories and files
 .vscode/*
@@ -39,6 +40,7 @@ packages
 pids
 .file-manifest
 .devcontainer/
+.wrangler/
 
 .spark-workbench-id
 

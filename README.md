@@ -73,13 +73,15 @@ Worker (wrangler secrets / bindings):
 
 ### 🏗️ Architecture & Design
 - **[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)** - Multi-agent system design patterns
-- **[docs/context-architecture.md](./docs/context-architecture.md)** - Context flow and state management
-- **[docs/prompt-engineering.md](./docs/prompt-engineering.md)** - Agent prompt engineering guide
+- **[docs/AGENT-CONTEXT-FLOW.md](./docs/AGENT-CONTEXT-FLOW.md)** - Agent context flow and implementation
+- **[docs/QUERY_HISTORY.md](./docs/QUERY_HISTORY.md)** - Query history and telemetry design
 - **[docs/CLOUDFLARE.md](./docs/CLOUDFLARE.md)** - Cloudflare architecture deep dive
 
 ### 🔧 Production Features
 - **[docs/OBSERVABILITY.md](./docs/OBSERVABILITY.md)** - Observability and monitoring layer
 - **[docs/LAYER_UPGRADES.md](./docs/LAYER_UPGRADES.md)** - Production upgrades (Layers 6-8)
+- **[docs/SMOKE-TEST.md](./docs/SMOKE-TEST.md)** - Deployment testing procedures
+- **[docs/theme.md](./docs/theme.md)** - Theme system and design tokens
 
 ### ☁️ Azure Integration
 - **[docs/AZURE_OPTIMIZATION.md](./docs/AZURE_OPTIMIZATION.md)** - Azure AI Search optimization
