@@ -119,6 +119,28 @@ class TokenTracker {
   private usageMetrics: LLMUsageMetrics[] = []
   private maxMetricsRetention = 1000
 
+  // Ready flag + promise so orchestrator can await persisted metrics before taking baselines.
+  private _ready = false
+  private _readyPromise: Promise<void> | null = null
+
+  get ready(): Promise<void> {
+    if (this._ready) {
+      return Promise.resolve()
+    }
+    if (!this._readyPromise) {
+      this._readyPromise = (async () => {
+        try {
+          await this.loadMetrics()
+        } catch {
+          // loadMetrics already logs; never throw from readiness path
+        } finally {
+          this._ready = true
+        }
+      })()
+    }
+    return this._readyPromise
+  }
+
   private readonly modelPricing: Record<string, ModelPricing> = {
     // Costs per 1K tokens (USD). Aligned with agent-context per-1M table.
     'gpt-4': { promptCostPer1k: 0.03, completionCostPer1k: 0.06 },
@@ -198,6 +220,9 @@ class TokenTracker {
       }
     } catch (error) {
       console.warn('[token-tracker] Failed to load metrics:', error)
+    } finally {
+      // Mark as ready even on failure so callers don't block forever.
+      this._ready = true
     }
   }
 
@@ -309,4 +334,5 @@ class TokenTracker {
 }
 
 export const tokenTracker = new TokenTracker()
+// Kick off async load in the background; orchestrator can await tokenTracker.ready before baselines.
 tokenTracker.loadMetrics()

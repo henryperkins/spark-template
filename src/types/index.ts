@@ -145,6 +145,7 @@ export interface AzureSearchDocument {
   documentId: string
   documentName: string
   chunkIndex: number
+  namespaceId?: string
   metadata?: Record<string, unknown>
 }
 

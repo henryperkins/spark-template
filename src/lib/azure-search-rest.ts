@@ -136,6 +136,7 @@ export class SearchRestClient {
           vectorSearchProfile: 'vprofile'
         },
         { name: 'documentId', type: 'Edm.String', searchable: false, filterable: true, retrievable: true },
+        { name: 'namespaceId', type: 'Edm.String', searchable: false, filterable: true, retrievable: true },
         { name: 'documentName', type: 'Edm.String', searchable: true, filterable: true, retrievable: true },
         { name: 'chunkIndex', type: 'Edm.Int32', searchable: false, filterable: true, sortable: true, retrievable: true },
         { name: 'metadata', type: 'Edm.String', searchable: true, retrievable: true, analyzer: 'keyword' },

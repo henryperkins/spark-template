@@ -87,6 +87,39 @@ describe('AzureSearchService', () => {
     })
   })
 
+  describe('createSearchIndex', () => {
+    it('rebuilds when Azure rejects compression updates', async () => {
+      const compressionService = new AzureSearchService({
+        ...mockConfig,
+        vectorCompression: { enabled: true, method: 'scalar' }
+      })
+
+      const rebuildSpy = vi
+        .spyOn(
+          compressionService as unknown as { rebuildIndex: AzureSearchService['rebuildIndex'] },
+          'rebuildIndex'
+        )
+        .mockResolvedValue({ success: true })
+
+      try {
+        fetchSpy.mockResolvedValueOnce(
+          new Response('Not Found', { status: 404 })
+        )
+
+        fetchSpy.mockResolvedValueOnce(
+          new Response('Cannot add compression to a field', { status: 400 })
+        )
+
+        const result = await compressionService.createSearchIndex()
+
+        expect(result.success).toBe(true)
+        expect(rebuildSpy).toHaveBeenCalledTimes(1)
+      } finally {
+        rebuildSpy.mockRestore()
+      }
+    })
+  })
+
   describe('indexDocuments', () => {
     it('successfully indexes documents', async () => {
       const docs: AzureSearchDocument[] = [
@@ -204,6 +237,7 @@ describe('AzureSearchService', () => {
       const batch = requestBody.batch || requestBody
       expect(batch.value).toBeDefined()
       expect(batch.value[0]).toBeDefined()
+      expect(batch.value[0].namespaceId).toBe('custom-namespace')
       const metadata = JSON.parse(batch.value[0].metadata)
       expect(metadata.namespace_id).toBe('custom-namespace')
     })
@@ -474,6 +508,18 @@ describe('AzureSearchService', () => {
       expect(stats.documentCount).toBe(0)
       expect(stats.storageSize).toBe(0)
       expect(stats.error).toBeDefined()
+    })
+  })
+
+  describe('buildNamespaceFilter', () => {
+    it('uses namespaceId equality', () => {
+      const filter = (service as any).buildNamespaceFilter('tenant-a')
+      expect(filter).toBe("namespaceId eq 'tenant-a'")
+    })
+
+    it('escapes single quotes for OData', () => {
+      const filter = (service as any).buildNamespaceFilter("team's-plan")
+      expect(filter).toBe("namespaceId eq 'team''s-plan'")
     })
   })
 })

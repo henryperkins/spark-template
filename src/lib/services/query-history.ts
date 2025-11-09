@@ -49,6 +49,12 @@ export interface QueryHistoryEntry {
     }
     phaseBreakdown: Record<string, number>
   }
+
+  // NEW: Vector/Hybrid retrieval metadata (backward compatible)
+  namespace?: string
+  storeType?: 'azure' | 'in-memory'
+  driftDetected?: boolean
+  driftReasons?: string[]
 }
 
 const KV_KEY = 'query-history'
@@ -82,6 +88,17 @@ class QueryHistoryService {
       workflow: entry.workflow ? entry.workflow.map(step => ({ ...step })) : undefined,
       validation: entry.validation ? { ...entry.validation } : undefined,
       routing: { ...entry.routing },
+      executionSummary: entry.executionSummary
+        ? {
+            ...entry.executionSummary,
+            budgetUtilization: {
+              ...(entry.executionSummary.budgetUtilization ?? {})
+            },
+            phaseBreakdown: {
+              ...(entry.executionSummary.phaseBreakdown ?? {})
+            }
+          }
+        : undefined,
     }))
   }
 
@@ -142,10 +159,10 @@ class QueryHistoryService {
 
   async getAll(): Promise<QueryHistoryEntry[]> {
     try {
-      if (this.cache) return this.cache
+      if (this.cache) return this.cloneHistory(this.cache)
       const history = await this.load()
       this.cache = history
-      return this.cache
+      return this.cloneHistory(this.cache)
     } catch (error) {
       console.error('Failed to load query history:', error)
       return []

@@ -762,17 +762,16 @@ export class ResponsesClient {
       }
     }
 
-    // From output content items
+    // From output reasoning items
     if (Array.isArray(json?.output)) {
       for (const item of json.output) {
-        if (!item || !Array.isArray(item.content)) continue
-        for (const c of item.content || []) {
-          const isReasoningType =
-            c?.type === 'reasoning' ||
-            c?.type === 'reasoning_summary' ||
-            c?.type === 'reasoning_content'
-          if (isReasoningType && typeof c?.text === 'string') {
-            candidates.push(c.text)
+        if (!item) continue
+        // Reasoning items have a 'summary' array, not 'content'
+        if (item.type === 'reasoning' && Array.isArray(item.summary)) {
+          for (const part of item.summary) {
+            if (part?.type === 'summary_text' && typeof part?.text === 'string') {
+              candidates.push(part.text)
+            }
           }
         }
       }
@@ -846,6 +845,10 @@ export class ResponsesClient {
     if (json.status === 'incomplete') {
       try {
         console.warn('[ResponsesClient] Incomplete response; attempting to extract partial output', { id: json.id })
+        // Debug: log the full response to see actual structure
+        if (Array.isArray(json.output) && json.output.length > 0) {
+          console.debug('[ResponsesClient] Output array contents:', JSON.stringify(json.output, null, 2))
+        }
       } catch {}
     }
 
@@ -874,65 +877,16 @@ export class ResponsesClient {
       }
     }
 
-    // 3) From output: pass 0 — prefer reasoning items explicitly
-    if (Array.isArray(json.output)) {
-      const reasoningChunks: string[] = []
-      for (const item of json.output) {
-        if (!item || !Array.isArray(item.content)) continue
-        for (const c of item.content || []) {
-          const isReasoningType =
-            c?.type === 'reasoning' ||
-            c?.type === 'reasoning_summary' ||
-            c?.type === 'reasoning_content'
-          if (isReasoningType && typeof c?.text === 'string') {
-            reasoningChunks.push(c.text)
-          }
-        }
-      }
-      if (reasoningChunks.length) {
-        return reasoningChunks.join('')
-      }
+    // 3) Prefer reasoning items explicitly before general text extraction
+    const reasoningChunks = this.extractReasoningChunks(json.output)
+    if (reasoningChunks.length) {
+      return reasoningChunks.join('')
     }
 
-    // 4) From output: pass 1 — assistant message text/json
-    if (Array.isArray(json.output)) {
-      const chunks: string[] = []
-      for (const item of json.output) {
-        if (!item || item.type !== 'message' || !Array.isArray(item.content)) continue
-        for (const c of item.content || []) {
-          if ((c.type === 'output_text' || c.type === 'text') && typeof c.text === 'string') {
-            chunks.push(c.text)
-          } else if (
-            (c.type === 'output_json' || c.type === 'json') &&
-            (typeof (c as any).json === 'string' || typeof (c as any).json === 'object')
-          ) {
-            const j = (c as any).json
-            chunks.push(typeof j === 'string' ? j : JSON.stringify(j))
-          }
-        }
-      }
-      if (chunks.length) return chunks.join('')
-    }
-
-    // 5) From output: pass 2 — tolerant non-message (skip input_text)
-    if (Array.isArray(json.output)) {
-      const chunks: string[] = []
-      for (const item of json.output) {
-        if (!item || !Array.isArray(item.content)) continue
-        for (const c of item.content || []) {
-          if (c.type === 'input_text') continue
-          if (typeof c?.text === 'string') {
-            chunks.push(c.text)
-          } else if (
-            (c.type === 'output_json' || c.type === 'json') &&
-            (typeof (c as any).json === 'string' || typeof (c as any).json === 'object')
-          ) {
-            const j = (c as any).json
-            chunks.push(typeof j === 'string' ? j : JSON.stringify(j))
-          }
-        }
-      }
-      if (chunks.length) return chunks.join('')
+    // 4) Gather assistant/tool text regardless of the exact content shape
+    const outputChunks = this.collectTextFromOutput(json.output)
+    if (outputChunks.length) {
+      return outputChunks.join('')
     }
 
     // 6) Final fallback: some APIs put a human-readable message here
@@ -951,6 +905,136 @@ export class ResponsesClient {
     })
 
     return undefined
+  }
+
+  private extractReasoningChunks(output: any): string[] {
+    if (!Array.isArray(output)) {
+      return []
+    }
+    const reasoningChunks: string[] = []
+    for (const item of output) {
+      if (!item || item.type !== 'reasoning') continue
+      try {
+        console.debug('[ResponsesClient] Found reasoning item. Keys:', Object.keys(item), 'Full item:', item)
+        if (Array.isArray(item.summary)) {
+          console.debug('[ResponsesClient] Summary array length:', item.summary.length)
+          for (const part of item.summary) {
+            console.debug('[ResponsesClient] Summary part:', part)
+            if (part?.type === 'summary_text' && typeof part?.text === 'string') {
+              reasoningChunks.push(part.text)
+            }
+          }
+        } else {
+          console.warn('[ResponsesClient] Reasoning item missing summary array. Has:', Object.keys(item))
+        }
+      } catch {
+        // best-effort diagnostics only
+      }
+    }
+    if (reasoningChunks.length) {
+      console.debug('[ResponsesClient] Successfully extracted reasoning chunks:', reasoningChunks.length)
+    }
+    return reasoningChunks
+  }
+
+  private collectTextFromOutput(output: any): string[] {
+    if (!Array.isArray(output)) {
+      return []
+    }
+    const chunks: string[] = []
+    for (const item of output) {
+      if (!item || typeof item !== 'object') continue
+      if (typeof item.output_text === 'string') {
+        chunks.push(item.output_text)
+      }
+      if (typeof item.text === 'string' && item.type !== 'input_text') {
+        chunks.push(item.text)
+      }
+      if (Array.isArray(item.text)) {
+        for (const textPart of item.text) {
+          if (typeof textPart === 'string' && textPart.length) {
+            chunks.push(textPart)
+          }
+        }
+      }
+      if (item.content !== undefined) {
+        chunks.push(...this.collectTextFromContentNode(item.content))
+      }
+      if (Array.isArray(item.summary)) {
+        for (const part of item.summary) {
+          if (typeof part?.text === 'string') {
+            chunks.push(part.text)
+          }
+        }
+      }
+      if (Array.isArray(item.output)) {
+        chunks.push(...this.collectTextFromOutput(item.output))
+      }
+    }
+    return chunks.filter(text => typeof text === 'string' && text.length > 0)
+  }
+
+  private collectTextFromContentNode(node: any): string[] {
+    if (node === null || node === undefined) {
+      return []
+    }
+    if (Array.isArray(node)) {
+      return node.flatMap(part => this.collectTextFromContentNode(part))
+    }
+    if (typeof node === 'string') {
+      return node.length ? [node] : []
+    }
+    if (typeof node !== 'object') {
+      return []
+    }
+
+    const type = typeof node.type === 'string' ? node.type : undefined
+    if (type === 'input_text') {
+      return []
+    }
+
+    if ((type === 'output_text' || type === 'text') && typeof node.text === 'string') {
+      return node.text.length ? [node.text] : []
+    }
+
+    if ((type === 'output_json' || type === 'json') && node.json !== undefined) {
+      try {
+        return [typeof node.json === 'string' ? node.json : JSON.stringify(node.json)]
+      } catch {
+        return []
+      }
+    }
+
+    if (typeof node.text === 'string' && node.text.length) {
+      return [node.text]
+    }
+
+    if (typeof node.value === 'string' && node.value.length) {
+      return [node.value]
+    }
+
+    if (typeof node.arguments === 'string' && node.arguments.length) {
+      return [node.arguments]
+    }
+
+    if (Array.isArray(node.arguments)) {
+      return node.arguments
+        .map(arg => {
+          if (typeof arg === 'string') return arg
+          try {
+            return JSON.stringify(arg)
+          } catch {
+            return undefined
+          }
+        })
+        .filter((value): value is string => typeof value === 'string' && value.length > 0)
+    }
+
+    if (node.content !== undefined) {
+      return this.collectTextFromContentNode(node.content)
+    }
+
+    return []
   }
 
   private extractTextDelta(parsed: any): string | null {

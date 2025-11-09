@@ -537,7 +537,7 @@ const metrics = {
 **Issue**: Namespace isolation not working
 ```typescript
 // Solution: Verify metadata filter syntax
-const filter = `metadata/any(m: contains(m, 'namespace_id":"${namespaceId}"'))`
+const filter = `namespaceId eq '${namespaceId}'`
 console.log('Filter:', filter)
 ```
 

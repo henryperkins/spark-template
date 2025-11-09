@@ -118,3 +118,68 @@ describe('Responses resiliency and fallbacks', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('ResponsesClient text extraction', () => {
+  it('extracts text when assistant message content is not an array', () => {
+    const client = new ResponsesClient({ endpoint: 'https://example.com', defaultModel: 'gpt-4o' })
+    const sample = {
+      id: 'resp_test_object_content',
+      status: 'completed',
+      output: [
+        {
+          type: 'message',
+          role: 'assistant',
+          content: {
+            type: 'output_text',
+            text: 'object-backed text',
+            annotations: []
+          }
+        }
+      ]
+    }
+
+    const result = (client as any).toResult(sample)
+    expect(result.outputText).toBe('object-backed text')
+  })
+
+  it('extracts text when output items expose top-level text fields', () => {
+    const client = new ResponsesClient({ endpoint: 'https://example.com', defaultModel: 'gpt-4o' })
+    const sample = {
+      id: 'resp_direct_text',
+      status: 'completed',
+      output: [
+        {
+          type: 'output_text',
+          text: 'direct text payload',
+          annotations: []
+        }
+      ]
+    }
+
+    const result = (client as any).toResult(sample)
+    expect(result.outputText).toBe('direct text payload')
+  })
+
+  it('ignores input_text content when no assistant output is present', () => {
+    const client = new ResponsesClient({ endpoint: 'https://example.com', defaultModel: 'gpt-4o' })
+    const sample = {
+      id: 'resp_input_only',
+      status: 'completed',
+      output: [
+        {
+          type: 'message',
+          role: 'user',
+          content: [
+            {
+              type: 'input_text',
+              text: 'user question'
+            }
+          ]
+        }
+      ]
+    }
+
+    const result = (client as any).toResult(sample)
+    expect(result.outputText).toBe('')
+  })
+})

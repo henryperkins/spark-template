@@ -44,6 +44,13 @@ export interface AgentStepMetadata {
   // Refinement metadata
   iterations?: number
   improved?: boolean
+
+  // NEW: Vector/Hybrid retrieval metadata (backward compatible)
+  storeType?: 'azure' | 'in-memory'
+  namespace?: string
+  fusionLatencyMs?: number
+  driftDetected?: boolean
+  driftReasons?: string[]
 }
 
 export interface AgentStepEvent {

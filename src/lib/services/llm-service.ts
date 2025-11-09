@@ -27,6 +27,7 @@ type CompletionOptions = {
   temperature?: number
   topP?: number
   model?: string
+  provider?: 'azure' | 'worker' | 'auto'
 }
 
 type CompletionPayload = string | Array<{ role: string; content: string }>
@@ -99,6 +100,9 @@ export class LLMService {
 
   // Centralized recording of LLM usage: context + telemetry.
   // Prefers actual token counts returned by providers (Azure) and falls back to estimates only when necessary.
+  // Also exposes the last call metadata so orchestrator step events can attribute LLM usage per step.
+  private lastLLMMetadata: import('../services/telemetry').LLMMetadata | null = null
+
   private recordLLMOutcome(
     provider: 'azure' | 'worker',
     model: string | undefined,
@@ -154,26 +158,47 @@ export class LLMService {
 
     const duration = Date.now() - startedAt
 
+    // Build metadata object once so it can be:
+    // - Attached to the active QueryExecutionContext.llmCalls
+    // - Exposed via getLastLLMMetadata for AgentStepEvent.llm attribution
+    const metadata: import('../services/telemetry').LLMMetadata & {
+      duration: number
+      reasoningTokens?: number
+      reasoningPreview?: string
+    } = {
+      model: resolvedModel,
+      provider,
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      estimatedCost: cost,
+      temperature: options.temperature,
+      maxTokens: options.maxTokens,
+      duration,
+      reasoningTokens: typeof usage?.reasoningTokens === 'number' ? usage.reasoningTokens : undefined,
+      reasoningPreview
+    }
+
     // Push into active query context for budgeting/telemetry.
     const ctx = getActiveQueryContext()
     if (ctx) {
       try {
-        recordLLMCall(ctx, {
-          model: resolvedModel,
-          provider,
-          promptTokens,
-          completionTokens,
-          totalTokens,
-          estimatedCost: cost,
-          temperature: options.temperature,
-          maxTokens: options.maxTokens,
-          duration,
-          reasoningTokens: typeof usage?.reasoningTokens === 'number' ? usage.reasoningTokens : undefined,
-          reasoningPreview
-        })
+        recordLLMCall(ctx, metadata)
       } catch {
         // non-fatal
       }
+    }
+
+    // Cache as "last call" metadata for orchestrator steps.
+    this.lastLLMMetadata = {
+      model: metadata.model,
+      provider: metadata.provider,
+      promptTokens: metadata.promptTokens,
+      completionTokens: metadata.completionTokens,
+      totalTokens: metadata.totalTokens,
+      estimatedCost: metadata.estimatedCost,
+      temperature: metadata.temperature,
+      maxTokens: metadata.maxTokens
     }
 
     // Persist via tokenTracker using the same authoritative-or-derived numbers.
@@ -252,8 +277,9 @@ export class LLMService {
 
     const call = async () => {
       const start = Date.now()
+      const providerPref = options.provider ?? 'auto'
       // Priority 1: Azure OpenAI (production)
-      if (azureServiceManager.hasOpenAI()) {
+      if (providerPref !== 'worker' && azureServiceManager.hasOpenAI()) {
         // Sanitize options for strict deployments
         const azureOptions = this.sanitizeOptionsForDeployment(options)
 
@@ -596,6 +622,10 @@ export class LLMService {
       undefined,
       text.slice(0, 4000)
     )
+  }
+
+  getLastLLMMetadata(): import('../services/telemetry').LLMMetadata | null {
+    return this.lastLLMMetadata
   }
 
   async *generateTextStream(

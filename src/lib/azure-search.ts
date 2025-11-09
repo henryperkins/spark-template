@@ -381,6 +381,13 @@ export class AzureSearchService {
             retrievable: true
           },
           {
+            name: 'namespaceId',
+            type: 'Edm.String',
+            searchable: false,
+            filterable: true,
+            retrievable: true
+          },
+          {
             name: 'documentName',
             type: 'Edm.String',
             searchable: true,
@@ -513,6 +520,8 @@ export class AzureSearchService {
       if (!response.ok) {
         const errorText = await response.text()
         const cannotChangeField = /CannotChangeExistingField|Existing field 'contentVector' cannot be changed/i.test(errorText)
+        const cannotChangeCompression = /CannotModifyVectorCompressionConfiguration|Cannot add compression to a field/i.test(errorText)
+
         if (cannotChangeField) {
           // 1) Wait in case prior deletion is still in progress, then retry once.
           const waited = await this.waitForIndexRemoval(60, 2000)
@@ -520,13 +529,31 @@ export class AzureSearchService {
             response = await doCreateRequest()
             if (response.ok) return { success: true }
           }
+        }
+
+        if ((cannotChangeField || cannotChangeCompression) && allowRebuildOnImmutableFieldError) {
           // 2) If still failing and allowed, do a full rebuild (DELETE -> wait -> PUT)
-          if (allowRebuildOnImmutableFieldError) {
-            const rebuild = await this.rebuildIndex(dimensions)
-            if (rebuild.success) return { success: true }
-            return { success: false, error: `Index creation failed after rebuild attempt: ${rebuild.error ?? 'Unknown error'}` }
+          const rebuild = await this.rebuildIndex(dimensions)
+          if (rebuild.success) {
+            return { success: true }
+          }
+          const reason = cannotChangeCompression ? 'compression change rejected' : 'immutable field change'
+          return {
+            success: false,
+            error: `Index creation failed after rebuild attempt (${reason}): ${rebuild.error ?? 'Unknown error'}`
           }
         }
+
+        if (cannotChangeCompression) {
+          return {
+            success: false,
+            error:
+              `Index creation failed: ${response.status} ${errorText}. ` +
+              'Azure AI Search does not allow toggling vector compression on an existing index. ' +
+              'Delete the index (or allow this code path to rebuild automatically) before enabling compression.'
+          }
+        }
+
         return { success: false, error: `Index creation failed: ${response.status} ${errorText}` }
       }
 
@@ -654,6 +681,7 @@ export class AzureSearchService {
           documentId: doc.documentId,
           documentName: doc.documentName,
           chunkIndex: doc.chunkIndex,
+          namespaceId: effectiveNamespace,
           metadata: doc.metadata ? JSON.stringify({
             ...doc.metadata,
             namespace_id: effectiveNamespace,
@@ -737,18 +765,25 @@ export class AzureSearchService {
     }
   }
 
-  async vectorSearch(queryVector: number[], top: number = 5): Promise<Source[]> {
+  async vectorSearch(queryVector: number[], top: number = 5, namespace?: string): Promise<Source[]> {
     try {
-      const searchRequest = {
+      const effectiveNamespace = namespace || this.config.namespace
+
+      const searchRequest: Record<string, unknown> = {
         count: true,
         select: 'id,content,documentId,documentName,chunkIndex',
-        vectors: [
+        vectorQueries: [
           {
-            value: queryVector,
+            kind: 'vector',
+            vector: queryVector,
             fields: 'contentVector',
             k: top
           }
         ]
+      }
+
+      if (effectiveNamespace) {
+        searchRequest.filter = this.buildNamespaceFilter(effectiveNamespace)
       }
 
       const response = await (this.shouldProxy()
@@ -809,7 +844,7 @@ export class AzureSearchService {
 
       const effectiveNamespace = namespace || this.config.namespace
       if (effectiveNamespace) {
-        searchRequest.filter = `metadata/any(m: contains(m, 'namespace_id":"${effectiveNamespace}"'))`
+        searchRequest.filter = this.buildNamespaceFilter(effectiveNamespace)
       }
 
       const response = await (this.shouldProxy()
@@ -891,9 +926,11 @@ export class AzureSearchService {
           }
         }
       } else {
-        searchRequest.vectors = [
+        // Use modern vectorQueries format even when hybrid search is disabled
+        searchRequest.vectorQueries = [
           {
-            value: queryVector,
+            kind: 'vector',
+            vector: queryVector,
             fields: 'contentVector',
             k: top
           }
@@ -901,7 +938,7 @@ export class AzureSearchService {
       }
 
       if (effectiveNamespace) {
-        searchRequest.filter = `metadata/any(m: contains(m, 'namespace_id":"${effectiveNamespace}"'))`
+        searchRequest.filter = this.buildNamespaceFilter(effectiveNamespace)
       }
 
       if (useSemanticSearch && this.config.hybridSearch?.enableSemanticReranker) {
@@ -963,6 +1000,11 @@ export class AzureSearchService {
       }
       throw error
     }
+  }
+
+  private buildNamespaceFilter(namespace: string): string {
+    const safeNamespace = namespace.replace(/'/g, "''")
+    return `namespaceId eq '${safeNamespace}'`
   }
 
   private async applyContextualCompression(sources: Source[], query: string): Promise<Source[]> {

@@ -17,7 +17,14 @@
         "cf:deploy:production": "npm run build && wrangler deploy --env production",
         "cf:kv:create": "wrangler kv:namespace create RAG_KV",
         "cf:kv:create:preview": "wrangler kv:namespace create RAG_KV --preview",
-        "cf:tail": "wrangler tail"
+        "cf:tail": "wrangler tail",
+        "logs": "node scripts/analyze-logs.cjs",
+        "logs:list": "node scripts/analyze-logs.cjs list",
+        "logs:recent": "node scripts/analyze-logs.cjs recent",
+        "logs:analyze": "node scripts/analyze-logs.cjs analyze",
+        "logs:errors": "node scripts/analyze-logs.cjs errors",
+        "logs:perf": "node scripts/analyze-logs.cjs performance",
+        "logs:watch": "node scripts/analyze-logs.cjs watch"
     },
     "dependencies": {
         "@dqbd/tiktoken": "^1.0.22",
