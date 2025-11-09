@@ -51,6 +51,12 @@ export interface AgentStepMetadata {
   fusionLatencyMs?: number
   driftDetected?: boolean
   driftReasons?: string[]
+
+  // Web vitals metadata
+  source?: string
+  metricName?: string
+  metricValue?: number
+  navigationType?: 'navigate' | 'reload' | 'back-forward' | 'back-forward-cache' | 'prerender' | 'restore'
 }
 
 export interface AgentStepEvent {

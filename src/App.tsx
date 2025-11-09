@@ -6,6 +6,7 @@ import { Document, AzureConfig } from '@/types'
 import { Brain, FileText, ChatCircle, CloudArrowUp, ChartBar, PlugsConnected, TreeStructure } from '@phosphor-icons/react'
 import { azureServiceManager } from '@/lib/azure-service-manager'
 import { cacheManager } from '@/lib/cache-manager'
+import { errorTracking } from '@/lib/services/error-tracker'
 
 const QueryInterface = lazy(() => import('@/components/QueryInterface').then(m => ({ default: m.QueryInterface })))
 const DocumentUpload = lazy(() => import('@/components/DocumentUpload').then(m => ({ default: m.DocumentUpload })))
@@ -28,7 +29,14 @@ function App() {
   useEffect(() => {
     // Initialize Azure services if config exists
     if (azureConfig) {
-      azureServiceManager.initialize(azureConfig).catch(console.error)
+      azureServiceManager.initialize(azureConfig).catch(error => {
+        errorTracking.record(error, {
+          type: 'runtime',
+          agent: 'App.tsx',
+          code: 'azure_init_failed',
+          status: 500
+        })
+      })
     }
   }, [azureConfig])
 

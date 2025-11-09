@@ -163,7 +163,7 @@ describe('Retrieval Evaluation Harness (local only)', () => {
     expect(meanMRR).toBeGreaterThan(0)
 
     // Log summary so it appears in CI output for quick inspection.
-    // eslint-disable-next-line no-console
+     
     console.log('[retrieval-eval] mean@', {
       K,
       precision: Number(meanPAtK.toFixed(3)),

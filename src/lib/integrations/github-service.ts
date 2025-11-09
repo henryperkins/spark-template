@@ -5,6 +5,26 @@ import { embeddingManager } from '@/lib/embedding-manager'
 import { cacheManager } from '@/lib/cache-manager'
 import { secureTokenStorage } from '@/lib/services/secure-token-storage'
 
+/**
+ * Robust base64 decoder that works in both browser and Node/vitest.
+ * - Uses atob when available (browser/JSDOM)
+ * - Falls back to Buffer in Node
+ */
+function decodeBase64(b64: string): string {
+  try {
+    const atobFn = (globalThis as any)?.atob as ((data: string) => string) | undefined
+    if (typeof atobFn === 'function') {
+      return atobFn(b64)
+    }
+  } catch {
+    // fall through to Buffer
+  }
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(b64, 'base64').toString('utf-8')
+  }
+  throw new Error('Base64 decode not available in this environment')
+}
+
 interface GitHubFile {
   name: string
   path: string
@@ -21,7 +41,17 @@ export class GitHubService {
 
   private async resolveToken(provided?: string): Promise<string | undefined> {
     if (provided && provided.trim()) return provided
+    
+    // In test environments, skip KV entirely to keep unit tests hermetic
+    if (typeof process !== 'undefined' && (process.env.VITEST || process.env.NODE_ENV === 'test')) {
+      return undefined
+    }
+    
     try {
+      const { runtime } = await import('@/lib/config')
+      if (!runtime.isCloudflareWorkers()) {
+        return undefined
+      }
       const stored = await secureTokenStorage.getToken('github')
       return stored ?? undefined
     } catch (e) {
@@ -70,7 +100,22 @@ export class GitHubService {
   ): Promise<GitHubFile[]> {
     const url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}${branch !== 'main' ? `?ref=${branch}` : ''}`
     const response = await this.fetchWithAuth(url, token)
-    return response.json()
+    const data = await response.json()
+
+    // fetchWithAuth already throws on non-OK statuses, so reaching here means
+    // the repo/path is accessible. We only need to normalize the shape:
+    // - Directory listing: array
+    // - Single file: object
+    // - Anything else: treat as empty but non-fatal for accessibility checks.
+    if (Array.isArray(data)) {
+      return data as GitHubFile[]
+    }
+
+    if (data && typeof data === 'object' && (data as any).type === 'file') {
+      return [data as GitHubFile]
+    }
+
+    return []
   }
 
   private async getFileContent(
@@ -82,12 +127,13 @@ export class GitHubService {
   ): Promise<string> {
     const url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}${branch !== 'main' ? `?ref=${branch}` : ''}`
     const response = await this.fetchWithAuth(url, token)
-    const data = await response.json()
-    
-    if (data.content) {
-      return atob(data.content.replace(/\n/g, ''))
+    const data = await response.json() as { content?: string }
+
+    const raw = typeof data?.content === 'string' ? data.content.replace(/\n/g, '') : null
+    if (raw) {
+      return decodeBase64(raw)
     }
-    
+
     throw new Error('No content found in file')
   }
 
@@ -99,12 +145,15 @@ export class GitHubService {
   ): Promise<GitHubFile[]> {
     const url = `https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`
     const response = await this.fetchWithAuth(url, token)
+
     const data = await response.json()
-    
-    return data.tree
-      .filter((item: { type: string; path: string }) => item.type === 'blob' && this.isTextFile(item.path))
-      .map((item: { path: string; sha: string; size: number }) => ({
-        name: item.path.split('/').pop(),
+    const tree = Array.isArray((data as any)?.tree)
+      ? ((data as any).tree as Array<{ type: string; path: string; sha: string; size: number }>)
+      : []
+    return tree
+      .filter((item) => item.type === 'blob' && this.isTextFile(item.path))
+      .map((item) => ({
+        name: item.path.split('/').pop() as string,
         path: item.path,
         type: 'file',
         sha: item.sha,

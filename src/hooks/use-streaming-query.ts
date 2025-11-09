@@ -1,6 +1,8 @@
 import { useState, useCallback, useRef } from 'react'
 import { Document, Source } from '@/types'
 import { AgenticRAGResult, AgentWorkflowStep } from '@/lib/agents'
+import { AgenticOrchestrator } from '@/lib/agents/orchestrator'
+import { AgentStepEvent } from '@/lib/services/telemetry'
 import { llmService } from '@/lib/services/llm-service'
 import { findRelevantChunks } from '@/lib/rag'
 import { errorTracking } from '@/lib/services/error-tracker'
@@ -20,7 +22,7 @@ export interface StreamingMessage {
 interface UseStreamingQueryOptions {
   agenticMode: boolean
   documents: Document[]
-  orchestrator?: any // AgenticOrchestrator
+  orchestrator?: AgenticOrchestrator
   onWorkflowUpdate?: (steps: AgentWorkflowStep[]) => void
 }
 
@@ -71,7 +73,7 @@ export function useStreamingQuery(options: UseStreamingQueryOptions) {
         agenticResult = await orchestrator.processQuery(query, documents, {
           runId,
           onWorkflowUpdate,
-          onStepEvent: (event: any) => {
+          onStepEvent: (event: AgentStepEvent) => {
             if (event.status === 'failed') {
               console.error('[agent-step failed]', event)
             } else if (import.meta.env?.MODE !== 'production') {

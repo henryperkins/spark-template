@@ -513,7 +513,7 @@ export class LLMService {
       }
 
       return text
-    } catch (error) {
+    } catch {
       // Network or other failures: in dev, provide deterministic stubs.
       if (forceJson) {
         const stubDecision = {

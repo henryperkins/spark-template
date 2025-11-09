@@ -199,3 +199,44 @@ export interface SavedAzureConfig {
   createdAt: string
   updatedAt: string
 }
+
+// OAuth/WebSocket/SSE Contracts
+export interface OAuthCallbackPayload {
+  provider: 'github' | 'dropbox' | 'onedrive'
+  code: string
+  state: string
+  codeVerifier?: string
+  redirectUri: string
+  clientId: string
+}
+
+export interface TelemetryEvent {
+  type: 'web_vitals' | 'error' | 'performance' | 'user_interaction'
+  timestamp: string
+  data: Record<string, unknown>
+  correlationId?: string
+}
+
+export interface WorkflowUpdateEvent {
+  event: 'workflow_start' | 'workflow_step' | 'workflow_complete' | 'workflow_error'
+  runId: string
+  stepId?: string
+  agent?: string
+  status: 'running' | 'completed' | 'failed'
+  message?: string
+  metadata?: Record<string, unknown>
+}
+
+export interface SSEEnvelope {
+  id: string
+  event: string
+  data: string
+  retry?: number
+}
+
+export interface WebSocketMessage {
+  type: 'query' | 'workflow_update' | 'telemetry' | 'ping'
+  payload: unknown
+  correlationId: string
+  timestamp: string
+}

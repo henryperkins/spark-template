@@ -619,6 +619,12 @@ export function ArchitectureDiagram() {
 
   return (
     <div className="space-y-6">
+      <div className="sr-only">
+        This view presents a 14-layer architecture for a production-grade multi-agent RAG system.
+        It starts from user interfaces and edge runtime, down through agents, retrieval, vector and
+        document stores, caching and observability, and finally infrastructure. Use the tabs to
+        explore the diagram, detailed layer breakdowns, and component catalog.
+      </div>
       <Card>
         <CardHeader>
           <div className="flex items-center gap-3">
@@ -769,28 +775,35 @@ export function ArchitectureDiagram() {
 
             <TabsContent value="layers" className="space-y-4 mt-6">
               <ScrollArea className="h-[600px] pr-4">
-                <div className="space-y-4">
+                <div className="space-y-4" role="list" aria-label="Architecture layers">
                   {layers.map((layer) => (
-                    <Card key={layer.id}>
-                      <CardHeader>
-                        <div className="flex items-center gap-3">
-                          <div
-                            className="p-2 rounded-lg"
-                            style={getLayerAccentStyles(layer.accent)}
-                          >
-                            {layer.icon}
+                    <section
+                      key={layer.id}
+                      role="listitem"
+                      aria-labelledby={`layer-${layer.id}-title`}
+                    >
+                      <Card>
+                        <CardHeader>
+                          <div className="flex items-center gap-3">
+                            <div
+                              className="p-2 rounded-lg"
+                              style={getLayerAccentStyles(layer.accent)}
+                            >
+                              {layer.icon}
+                            </div>
+                            <div className="flex-1">
+                              <CardTitle className="text-lg" id={`layer-${layer.id}-title`}>
+                                {layer.name}
+                              </CardTitle>
+                              <p className="text-sm text-muted-foreground mt-1">
+                                {layer.description}
+                              </p>
+                            </div>
                           </div>
-                          <div className="flex-1">
-                            <CardTitle className="text-lg">{layer.name}</CardTitle>
-                            <p className="text-sm text-muted-foreground mt-1">
-                              {layer.description}
-                            </p>
-                          </div>
-                        </div>
-                      </CardHeader>
-                      <CardContent className="space-y-4">
-                        <div>
-                          <h4 className="font-semibold text-sm mb-2">Components</h4>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                          <div>
+                            <h4 className="font-semibold text-sm mb-2">Components</h4>
                           <div className="grid grid-cols-2 gap-2">
                             {layer.components.map((component, idx) => (
                               <div
@@ -819,6 +832,7 @@ export function ArchitectureDiagram() {
                         </div>
                       </CardContent>
                     </Card>
+                  </section>
                   ))}
                 </div>
               </ScrollArea>

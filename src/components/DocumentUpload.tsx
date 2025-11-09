@@ -13,6 +13,8 @@ import { embeddingManager } from '@/lib/embedding-manager'
 import { extractTextFromPdf } from '@/lib/pdf'
 import { isCloudflareKVConfigured } from '@/lib/cloudflare-kv'
 import { runtime } from '@/lib/config'
+import { useUploadQueue } from '@/hooks/use-upload-queue'
+import { errorTracking } from '@/lib/services/error-tracker'
 
 interface DocumentUploadProps {
   onDocumentUploaded: (document: Document) => void
@@ -32,10 +34,9 @@ export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
   const [dragActive, setDragActive] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState<UploadProgress[]>([])
-  
-  // Chunked upload tuning
-  const CHUNK_SIZE = 5 * 1024 * 1024 // 5MB
-  const MAX_RETRIES = 3
+
+  // Resumable upload queue (Phase 4 - F7)
+  const { addFile } = useUploadQueue()
 
   const processFile = async (file: File): Promise<Document> => {
     const documentId = `doc-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
@@ -54,10 +55,23 @@ export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
     updateProgress(10, 'processing')
 
     try {
-      // Handle large files with chunked upload to avoid UI stalls (only when running behind Worker)
-      // Note: chunk upload endpoint (/api/upload-chunk) only exists in worker/index.ts
-      if (file.size > CHUNK_SIZE && runtime.isCloudflareWorkers()) {
-        return await processLargeFile(file, documentId, updateProgress)
+      // For large files on Workers, prefer resumable queue so uploads survive refresh
+      if (file.size > 5 * 1024 * 1024 && runtime.isCloudflareWorkers()) {
+        // Enqueue file; actual chunk uploads handled by useUploadQueue + processQueue.
+        await addFile(file)
+        updateProgress(5, 'processing')
+        // The ingestion pipeline (intelligentChunkDocument, etc.) will run once finalized.
+        // For now, return a placeholder Document; App will refresh from storage.
+        return {
+          id: documentId,
+          name: file.name,
+          size: file.size,
+          uploadedAt: new Date().toISOString(),
+          type: file.type || 'application/octet-stream',
+          chunks: [],
+          processed: false,
+          processingStatus: 'pending'
+        }
       }
 
       // Small files: read directly and process
@@ -72,102 +86,17 @@ export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
       }
       return await processContent(content, documentId, file.name, file.size, file.type || 'text/plain', updateProgress)
     } catch (error) {
-      updateProgress(100, 'error', error instanceof Error ? error.message : 'Unknown error')
-      throw error
-    }
-
-    /**
-     * Chunked upload pipeline for large files (Worker mode only).
-     *
-     * Flow:
-     * 1. Upload chunks via /api/upload-chunk (stored in KV with 1hr TTL)
-     * 2. Call /api/upload-complete to assemble chunks and cleanup
-     * 3. Read file locally for ingestion (keeps existing pipeline stable)
-     *
-     * This exercises the worker chunk assembly while maintaining backward-compatible
-     * ingestion behavior. Future work can move ingestion server-side.
-     */
-    async function processLargeFile(
-      file: File,
-      docId: string,
-      progressFn: (progress: number, status: UploadProgress['status'], error?: string) => void
-    ): Promise<Document> {
-      const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
-      let uploaded = 0
-
-      for (let i = 0; i < totalChunks; i++) {
-        const start = i * CHUNK_SIZE
-        const end = Math.min(start + CHUNK_SIZE, file.size)
-        const blob = file.slice(start, end)
-
-        let retries = 0
-        // Exponential backoff retry
-        while (retries < MAX_RETRIES) {
-          try {
-            await uploadChunk(blob, docId, i)
-            uploaded++
-            const pct = Math.min(90, 10 + Math.floor((uploaded / totalChunks) * 80))
-            progressFn(pct, 'processing')
-            break
-          } catch (err) {
-            retries++
-            if (retries === MAX_RETRIES) {
-              throw new Error(`Failed to upload chunk ${i + 1} after ${MAX_RETRIES} attempts`)
-            }
-            await new Promise(resolve => setTimeout(resolve, 1000 * retries))
-          }
+      const message = error instanceof Error ? error.message : 'Unknown error'
+      updateProgress(100, 'error', message)
+      errorTracking.record(error as Error, {
+        type: 'runtime',
+        agent: 'DocumentUpload',
+        code: 'process_file_failed',
+        metadata: {
+          fileName: file.name
         }
-      }
-
-      // Notify worker to assemble chunks
-      const finalizeResp = await fetch('/api/upload-complete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          documentId: docId,
-          fileName: file.name,
-          fileType: file.type || 'application/octet-stream',
-          totalChunks,
-        }),
       })
-
-      if (!finalizeResp.ok) {
-        const message = await finalizeResp.text().catch(() => '')
-        throw new Error(
-          `Failed to finalize upload: ${finalizeResp.status} ${finalizeResp.statusText}` +
-          (message ? ` - ${message}` : ''),
-        )
-      }
-
-      // For now, still read locally so ingestion uses existing pipeline.
-      // This keeps behavior stable while exercising the worker endpoint.
-      const content = await readLargeFile(file)
-      return await processContent(
-        content,
-        docId,
-        file.name,
-        file.size,
-        file.type || 'text/plain',
-        progressFn,
-      )
-    }
-
-    async function uploadChunk(chunk: Blob, documentId: string, chunkIndex: number): Promise<void> {
-      const formData = new FormData()
-      formData.append('chunk', chunk)
-      formData.append('documentId', documentId)
-      formData.append('chunkIndex', String(chunkIndex))
-
-      const resp = await fetch('/api/upload-chunk', { method: 'POST', body: formData })
-      if (!resp.ok) {
-        throw new Error(`Chunk upload failed: ${resp.status} ${resp.statusText}`)
-      }
-    }
-
-    async function readLargeFile(file: File): Promise<string> {
-      return file.type === 'application/pdf'
-        ? await extractTextFromPdf(file)
-        : await file.text()
+      throw error
     }
 
     async function processContent(
@@ -284,7 +213,7 @@ export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
       setUploadProgress([])
       setUploading(false)
     }, 2000)
-  }, [onDocumentUploaded])
+  }, [onDocumentUploaded, processFile])
 
   const getStatusIcon = (status: UploadProgress['status']) => {
     switch (status) {

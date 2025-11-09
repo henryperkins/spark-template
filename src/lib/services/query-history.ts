@@ -230,4 +230,4 @@ class QueryHistoryService {
   }
 }
 
-export const queryHistoryService = new QueryHistoryService(createCloudflareKV())
+export const queryHistoryService = new QueryHistoryService()

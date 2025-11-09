@@ -3,7 +3,15 @@
  * Systematic error classification, aggregation, and analysis
  */
 
-export type ErrorType = 'retrieval' | 'llm' | 'embedding' | 'cache' | 'network' | 'unknown'
+export type ErrorType =
+  | 'retrieval'
+  | 'llm'
+  | 'embedding'
+  | 'cache'
+  | 'network'
+  | 'runtime'
+  | 'performance'
+  | 'unknown'
 
 export interface ErrorEvent {
   errorId: string
@@ -15,6 +23,7 @@ export interface ErrorEvent {
   code?: string
   status?: number
   requestId?: string
+  metadata?: Record<string, unknown>
   timestamp: string
 }
 
@@ -40,6 +49,7 @@ class ErrorTrackingService {
     code?: string
     status?: number
     requestId?: string
+    metadata?: Record<string, unknown>
   }): void {
     const errorEvent: ErrorEvent = {
       errorId: crypto.randomUUID(),
@@ -51,6 +61,7 @@ class ErrorTrackingService {
       code: context?.code,
       status: context?.status,
       requestId: context?.requestId,
+      metadata: context?.metadata,
       timestamp: new Date().toISOString()
     }
 
@@ -117,6 +128,8 @@ class ErrorTrackingService {
       embedding: 0,
       cache: 0,
       network: 0,
+      runtime: 0,
+      performance: 0,
       unknown: 0
     }
 

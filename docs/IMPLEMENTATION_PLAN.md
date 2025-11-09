@@ -573,6 +573,23 @@ const AGENT_ICONS = useMemo(() => ({
 
 **Solution**: Add comprehensive accessibility enhancements.
 
+Implementation status:
+
+- AgentWorkflowVisualizer (`src/components/AgentWorkflowVisualizer.tsx`):
+  - Wrapped main content in a `role="region"` with an accessible label that distinguishes live vs. static timelines.
+  - Added a screen-reader-only summary describing:
+    - Total workflow steps.
+    - Count of completed, running, and failed steps.
+  - Ensure expand/collapse controls for step details expose `aria-expanded` and `aria-controls` wired to stable IDs and virtualization indices.
+
+- ArchitectureDiagram (`src/components/ArchitectureDiagram.tsx`):
+  - Added a screen-reader-only introduction summarizing the 14-layer architecture and how to navigate via tabs.
+  - Updated the Layers view to:
+    - Treat the layer list as a proper list (`role="list"` / `role="listitem"`).
+    - Associate each layer card with a semantic heading via `aria-labelledby` for consistent hierarchy.
+
+These changes bring the primary complex visualizations in line with WCAG 2.1 AA expectations for structure and non-visual understanding.
+
 **Files to Modify**:
 1. **AgentWorkflowVisualizer.tsx** (lines 427-445):
 ```typescript

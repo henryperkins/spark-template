@@ -57,7 +57,7 @@ function createWorkerLlmProvider(): LlmProvider | null {
           throw new Error('LLM worker returned empty response')
         }
         return data.text
-      } catch (_err) {
+      } catch {
         // Network error – dev fallback
         const text = typeof body.prompt === 'string'
           ? body.prompt

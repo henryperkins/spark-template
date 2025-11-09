@@ -1,5 +1,5 @@
-import React, { type ReactNode } from 'react'
-import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
+import React, { type ReactNode, useMemo } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -30,6 +30,7 @@ import {
 } from '@/lib/agents'
 import { Source } from '@/types'
 import { cn } from '@/lib/utils'
+import { useVirtualizedWorkflow } from '@/hooks/use-virtualized-workflow'
 
 interface AgentWorkflowVisualizerProps {
   steps: AgentWorkflowStep[]
@@ -113,48 +114,30 @@ const isErrorResult = (value: unknown): value is { error: string } => {
 }
 
 export function AgentWorkflowVisualizer({ steps, className, isLive = false }: AgentWorkflowVisualizerProps) {
-  const [expandedSteps, setExpandedSteps] = React.useState<Set<number>>(new Set())
-  const shouldReduceMotion = useReducedMotion()
+  const {
+    visibleSteps,
+    expandedSteps,
+    toggleStep,
+    hasMore,
+    totalCount,
+    windowStart,
+    isExpanded,
+    shouldReduceMotion
+  } = useVirtualizedWorkflow(steps, {
+    windowSize: 50,
+    expandedWindowSize: 20,
+    enableReducedMotionForLargeWorkflows: true
+  })
 
+  // Auto-expand latest step in live mode
   React.useEffect(() => {
-    if (steps.length === 0) {
-      setExpandedSteps(new Set())
-      return
-    }
-
-    if (isLive) {
-      setExpandedSteps(prev => {
-        const latestIndex = steps.length - 1
-        if (prev.has(latestIndex)) {
-          return prev
-        }
-        const next = new Set(prev)
-        next.add(latestIndex)
-        return next
-      })
-    } else {
-      setExpandedSteps(prev => {
-        if (prev.size > 0) {
-          return prev
-        }
-        const next = new Set<number>()
-        next.add(0)
-        return next
-      })
-    }
-  }, [steps, isLive])
-
-  const toggleStep = (index: number) => {
-    setExpandedSteps(prev => {
-      const next = new Set(prev)
-      if (next.has(index)) {
-        next.delete(index)
-      } else {
-        next.add(index)
+    if (isLive && steps.length > 0) {
+      const latestIndex = steps.length - 1
+      if (!expandedSteps.has(latestIndex)) {
+        toggleStep(steps.length - windowStart - 1)
       }
-      return next
-    })
-  }
+    }
+  }, [steps.length, isLive, windowStart, expandedSteps, toggleStep])
 
   const getAgentIcon = (agentName: string) => {
     switch (agentName.toLowerCase()) {
@@ -424,9 +407,35 @@ export function AgentWorkflowVisualizer({ steps, className, isLive = false }: Ag
     return null
   }
 
+  const completedCount = useMemo(
+    () => steps.filter((s) => s.status === 'completed').length,
+    [steps]
+  )
+  const runningCount = useMemo(
+    () => steps.filter((s) => s.status === 'running').length,
+    [steps]
+  )
+  const failedCount = useMemo(
+    () => steps.filter((s) => s.status === 'failed').length,
+    [steps]
+  )
+
+  const regionLabel = isLive
+    ? 'Live agent workflow timeline'
+    : 'Agent workflow timeline'
+
   return (
     <Card className={className}>
-      <CardContent className="p-4">
+      <CardContent
+        className="p-4"
+        role="region"
+        aria-label={regionLabel}
+      >
+        <div className="sr-only">
+          {steps.length === 0
+            ? 'No workflow steps yet.'
+            : `${steps.length} steps; ${completedCount} completed, ${runningCount} running, ${failedCount} failed.`}
+        </div>
         <div className="flex items-center gap-2 mb-4">
           <Brain size={18} className="text-primary" />
           <h4 className="font-semibold text-sm">Agent Workflow</h4>
@@ -439,7 +448,11 @@ export function AgentWorkflowVisualizer({ steps, className, isLive = false }: Ag
               Live
             </Badge>
           )}
-          <Badge variant="outline" className={cn("text-xs", !isLive && "ml-auto")}>
+          <Badge
+            variant="outline"
+            className={cn('text-xs', !isLive && 'ml-auto')}
+            aria-label={`${steps.length} workflow step${steps.length !== 1 ? 's' : ''}`}
+          >
             {steps.length} step{steps.length !== 1 ? 's' : ''}
           </Badge>
         </div>
@@ -449,15 +462,16 @@ export function AgentWorkflowVisualizer({ steps, className, isLive = false }: Ag
         ) : (
           <div className="space-y-3">
             <AnimatePresence initial={false}>
-              {steps.map((step, index) => {
-                const isExpanded = expandedSteps.has(index)
+              {visibleSteps.map((step, visibleIndex) => {
+                const actualIndex = windowStart + visibleIndex
+                const stepIsExpanded = isExpanded(visibleIndex)
                 const statusMeta = STATUS_META[step.status] ?? STATUS_META.pending
                 const detailContent = renderDetailContent(step)
                 const hasDetails = Boolean(detailContent)
 
                 return (
                   <motion.div
-                    key={`${step.agent}-${index}-${step.status}-${step.timestamp}`}
+                    key={`${step.agent}-${actualIndex}-${step.status}`}
                     layout={!shouldReduceMotion}
                     initial={shouldReduceMotion ? false : { opacity: 0, y: 10 }}
                     animate={shouldReduceMotion ? false : { opacity: 1, y: 0 }}
@@ -465,7 +479,7 @@ export function AgentWorkflowVisualizer({ steps, className, isLive = false }: Ag
                     transition={shouldReduceMotion ? { duration: 0 } : { duration: 0.2 }}
                     className="relative"
                   >
-                    {index < steps.length - 1 && (
+                    {visibleIndex < visibleSteps.length - 1 && (
                       <motion.div
                         layout={!shouldReduceMotion}
                         initial={shouldReduceMotion ? false : { opacity: 0, scaleY: 0 }}
@@ -520,16 +534,18 @@ export function AgentWorkflowVisualizer({ steps, className, isLive = false }: Ag
                                 variant="ghost"
                                 size="sm"
                                 className="h-7 px-2 text-xs"
-                                onClick={() => toggleStep(index)}
+                                onClick={() => toggleStep(visibleIndex)}
+                                aria-expanded={stepIsExpanded}
+                                aria-controls={`agent-step-${actualIndex}-details`}
                               >
-                                {isExpanded ? 'Hide details' : 'View details'}
+                                {stepIsExpanded ? 'Hide details' : 'View details'}
                               </Button>
                             )}
                           </div>
                         </div>
 
                         <AnimatePresence initial={false}>
-                          {hasDetails && isExpanded && (
+                          {hasDetails && stepIsExpanded && (
                             <motion.div
                               initial={shouldReduceMotion ? false : { opacity: 0, height: 0 }}
                               animate={shouldReduceMotion ? false : { opacity: 1, height: 'auto' }}
@@ -547,6 +563,19 @@ export function AgentWorkflowVisualizer({ steps, className, isLive = false }: Ag
                 )
               })}
             </AnimatePresence>
+          </div>
+        )}
+
+        {hasMore && (
+          <div className="mt-4 pt-4 border-t border-border">
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span>
+                Showing {visibleSteps.length} of {totalCount} steps
+              </span>
+              <Badge variant="outline" className="text-xs">
+                Use scroll to view more
+              </Badge>
+            </div>
           </div>
         )}
       </CardContent>

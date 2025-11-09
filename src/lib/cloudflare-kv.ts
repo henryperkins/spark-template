@@ -42,15 +42,24 @@ export class CloudflareKV implements CloudflareKVAdapter {
   private static hasLoggedMode = false
 
   constructor(config: CloudflareKVConfig) {
-    // Check if we're running on Cloudflare Workers (has /api/kv endpoint)
-    this.useWorkerAPI = window.location.hostname.includes('.workers.dev') ||
-                       import.meta.env.VITE_USE_WORKER_KV === 'true'
+    // Guard: this module must never assume Node globals (no require / process).
+    // Only run browser-specific checks when window is available.
+    const isBrowser =
+      typeof window !== 'undefined' && typeof window.location !== 'undefined'
+
+    // Check if we're running in a Worker/edge-like environment that exposes the
+    // Worker KV proxy endpoint. This matches both *.workers.dev and custom
+    // domains fronted by a Worker when VITE_USE_WORKER_KV is enabled.
+    this.useWorkerAPI =
+      isBrowser &&
+      (window.location.hostname.includes('.workers.dev') ||
+        (import.meta as any)?.env?.VITE_USE_WORKER_KV === 'true')
 
     if (this.useWorkerAPI) {
       // Use Worker API endpoint (relative path)
       this.baseUrl = '/api/kv'
       this.headers = {
-        'Content-Type': 'application/json',
+        'Content-Type': 'application/json'
       }
       // Only log mode once per runtime to reduce noise
       if (!CloudflareKV.hasLoggedMode) {
@@ -58,11 +67,11 @@ export class CloudflareKV implements CloudflareKVAdapter {
         CloudflareKV.hasLoggedMode = true
       }
     } else {
-      // Use Cloudflare REST API
+      // Use Cloudflare REST API (browser-safe; no require/process)
       this.baseUrl = `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/storage/kv/namespaces/${config.namespaceId}`
       this.headers = {
-        'Authorization': `Bearer ${config.apiToken}`,
-        'Content-Type': 'application/json',
+        Authorization: `Bearer ${config.apiToken}`,
+        'Content-Type': 'application/json'
       }
       console.info(`${LOG_PREFIX} Using Cloudflare REST API`)
     }
@@ -265,7 +274,7 @@ export function createCloudflareKV(): CloudflareKV | null {
     const config: CloudflareKVConfig = {
       accountId: 'worker-mode',
       namespaceId: 'worker-mode',
-      apiToken: 'worker-mode',
+      apiToken: 'worker-mode'
     }
     // Only log initialization once per runtime to reduce noise
     if (!hasInitialized) {

@@ -7,9 +7,10 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
 import { FileText, Trash, Clock, CloudArrowUp, XCircle, CircleNotch, GithubLogo, Globe, DropboxLogo, MicrosoftOutlookLogo, Upload, PencilSimple } from '@phosphor-icons/react'
-import { Document } from '@/types'
+import { Document, DocumentChunk } from '@/types'
 import { formatFileSize, formatDate } from '@/lib/rag'
 import { azureServiceManager } from '@/lib/azure-service-manager'
+import { useVirtualizedDocuments } from '@/hooks/use-virtualized-documents'
 
 interface DocumentListProps {
   documents: Document[]
@@ -21,6 +22,8 @@ export function DocumentList({ documents, onDeleteDocument, onEditDocument }: Do
   const [editingDocId, setEditingDocId] = useState<string | null>(null)
   const [editContent, setEditContent] = useState('')
   const [isUpdating, setIsUpdating] = useState(false)
+  
+  const { visibleDocuments, hasMore, totalCount, windowStart, windowEnd } = useVirtualizedDocuments(documents, { windowSize: 50 })
 
   const isEditableSource = (document: Document) => {
     return !document.source || document.source === 'upload'
@@ -79,7 +82,7 @@ export function DocumentList({ documents, onDeleteDocument, onEditDocument }: Do
       lastTail = reconstructed.slice(-300)
     }
 
-    const safeText = reconstructed || (document as any).originalContent || ''
+    const safeText = reconstructed || ('originalContent' in document ? (document as Document & { originalContent: string }).originalContent : '') || ''
 
     setEditContent(safeText)
     setEditingDocId(document.id)
@@ -236,7 +239,7 @@ export function DocumentList({ documents, onDeleteDocument, onEditDocument }: Do
           </div>
         </div>
 
-        {documents.map((document) => (
+        {visibleDocuments.map((document) => (
           <Card key={document.id}>
             <CardHeader className="pb-3">
               <div className="flex items-start justify-between gap-3">
@@ -327,7 +330,7 @@ export function DocumentList({ documents, onDeleteDocument, onEditDocument }: Do
                   </AccordionTrigger>
                   <AccordionContent>
                     <div className="space-y-3 mt-2">
-                      {document.chunks.map((chunk, index) => (
+                      {document.chunks.map((chunk: DocumentChunk, index: number) => (
                         <div key={chunk.id} className="p-3 bg-muted rounded-lg">
                           <div className="flex items-center justify-between mb-2">
                             <div className="flex items-center gap-2">
@@ -360,6 +363,11 @@ export function DocumentList({ documents, onDeleteDocument, onEditDocument }: Do
         ))}
       </div>
 
+      {hasMore && (
+        <div className="mt-4 pt-4 border-t border-border text-xs text-muted-foreground">
+          Showing {visibleDocuments.length} of {totalCount} documents (latest {windowStart + 1}–{windowEnd})
+        </div>
+      )}
       {/* Edit Dialog */}
       <Dialog open={editingDocId !== null} onOpenChange={(open) => !open && handleCancelEdit()}>
         <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col">

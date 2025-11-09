@@ -1,27 +1,37 @@
 import { vi } from 'vitest'
+import { JSDOM } from 'jsdom'
+
+// Create a proper DOM environment for testing
+const dom = new JSDOM('<!doctype html><html><body></body></html>', {
+  url: 'http://localhost:5000',
+  pretendToBeVisual: true
+})
+
+global.window = dom.window as any
+global.document = dom.window.document
+global.navigator = dom.window.navigator
 
 // Mock browser APIs for Node.js test environment
-global.window = {
-  location: {
-    hostname: 'localhost',
-    href: 'http://localhost:5000',
-    origin: 'http://localhost:5000',
-    protocol: 'http:',
-    host: 'localhost:5000',
-    port: '5000',
-    pathname: '/',
-    search: '',
-    hash: ''
-  },
-  localStorage: {
-    getItem: vi.fn(),
-    setItem: vi.fn(),
-    removeItem: vi.fn(),
-    clear: vi.fn(),
-    length: 0,
-    key: vi.fn()
-  }
+global.window.location = {
+  hostname: 'localhost',
+  href: 'http://localhost:5000',
+  origin: 'http://localhost:5000',
+  protocol: 'http:',
+  host: 'localhost:5000',
+  port: '5000',
+  pathname: '/',
+  search: '',
+  hash: ''
 } as any
+
+Object.defineProperty(global.window, "localStorage", { value: {
+  getItem: vi.fn(),
+  setItem: vi.fn(),
+  removeItem: vi.fn(),
+  clear: vi.fn(),
+  length: 0,
+  key: vi.fn()
+}, writable: true });
 
 // Mock import.meta.env
 if (!import.meta.env) {

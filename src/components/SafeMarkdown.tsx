@@ -1,6 +1,11 @@
-import { useMemo } from 'react'
-import DOMPurify from 'dompurify'
+import React, { useMemo } from 'react'
 import { marked } from 'marked'
+import createDOMPurify from 'dompurify'
+
+// DOMPurify needs a Window-like object; in browsers/tests we can rely on globalThis.
+const domPurify = typeof window !== 'undefined'
+  ? createDOMPurify(window)
+  : undefined
 
 interface SafeMarkdownProps {
   content: string
@@ -8,37 +13,23 @@ interface SafeMarkdownProps {
   allowLinks?: boolean
 }
 
-/**
- * SafeMarkdown: Renders markdown content with XSS protection via DOMPurify.
- *
- * Security Features:
- * - Sanitizes HTML using DOMPurify to prevent XSS attacks
- * - Parses markdown to HTML using marked
- * - Optional link blocking for untrusted content
- * - Memoized for performance
- *
- * @param content - Raw markdown/text content to render
- * @param className - Optional CSS classes (defaults to prose styling)
- * @param allowLinks - Whether to allow <a> tags (default: true)
- */
-export function SafeMarkdown({
-  content,
+export function SafeMarkdown({ 
+  content, 
   className = 'prose prose-sm max-w-none dark:prose-invert',
-  allowLinks = true
+  allowLinks = true 
 }: SafeMarkdownProps) {
   const html = useMemo(() => {
-    // Parse markdown to HTML
-    const rawHtml = marked.parse(content, { async: false }) as string
-
-    // Sanitize HTML to prevent XSS
-    const clean = DOMPurify.sanitize(rawHtml, {
+    if (!domPurify) {
+      return ''
+    }
+    // marked.parse returns string | Promise<string>; async rendering is disabled so coerce to string.
+    const raw = marked.parse(content) as string
+    const clean = domPurify.sanitize(raw, {
       USE_PROFILES: { html: true },
       ADD_ATTR: allowLinks ? ['target', 'rel'] : [],
       FORBID_TAGS: allowLinks ? [] : ['a'],
       ALLOW_UNKNOWN_PROTOCOLS: false,
-      ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto):|[^a-z]|[a-z+.-]+(?:[^a-z+.\-:]|$))/i,
     })
-
     return clean
   }, [content, allowLinks])
 

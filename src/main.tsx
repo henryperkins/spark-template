@@ -4,8 +4,12 @@ import { ErrorBoundary } from "react-error-boundary"
 
 import App from './App.tsx'
 import { ErrorFallback } from './ErrorFallback.tsx'
+import { webVitals } from '@/lib/web-vitals'
 
 import "./main.css"
+
+// Initialize Web Vitals monitoring
+webVitals.initialize()
 
 const root = document.getElementById('root')
 if (!root) {

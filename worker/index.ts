@@ -259,6 +259,27 @@ export default {
       // Serve static assets (React app)
       const response = await (env.ASSETS as any).fetch(request)
 
+      const cspDirectives = [
+        "default-src 'self'",
+        "script-src 'self'",
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self' data:",
+        "connect-src 'self' https://api.openai.com https://*.openai.azure.com https://login.microsoftonline.com https://api.github.com https://raw.githubusercontent.com https://api.dropboxapi.com https://content.dropboxapi.com https://graph.microsoft.com https://*.search.windows.net",
+        "font-src 'self'",
+        "object-src 'none'",
+        "frame-ancestors 'none'",
+        "base-uri 'self'",
+        "form-action 'self'"
+      ]
+      const csp = cspDirectives.join('; ')
+
+      const secured = new Response(response.body, response)
+      secured.headers.set('Content-Security-Policy', csp)
+      secured.headers.set('X-Content-Type-Options', 'nosniff')
+      secured.headers.set('X-Frame-Options', 'DENY')
+      secured.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin')
+      secured.headers.set('Permissions-Policy', 'geolocation=(), microphone=(), camera=()')
+
       // Only log non-asset requests to reduce noise
       if (!url.pathname.match(/\.(js|css|png|jpg|svg|ico|woff2?)$/)) {
         logStructured({
@@ -266,12 +287,12 @@ export default {
           event: 'asset_request',
           method: request.method,
           path: url.pathname,
-          statusCode: response.status,
+          statusCode: secured.status,
           duration: Date.now() - startTime,
         })
       }
 
-      return response
+      return secured
     } catch (error: unknown) {
       const duration = Date.now() - startTime
 

@@ -1101,7 +1101,9 @@ export class ResponsesClient {
           return parsed.delta
         }
       }
-    } catch {}
+    } catch {
+      // Ignore JSON parse errors - return null for invalid chunks
+    }
     return null
   }
 }

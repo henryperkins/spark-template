@@ -1,4 +1,4 @@
-interface AnalyticsConfig {
+interface _AnalyticsConfig {
   endpoint?: string
   analyticsEndpoint?: string
 }
