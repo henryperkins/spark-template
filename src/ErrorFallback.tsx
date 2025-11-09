@@ -2,8 +2,9 @@ import { Alert, AlertTitle, AlertDescription } from "./components/ui/alert";
 import { Button } from "./components/ui/button";
 
 import { Warning as AlertTriangleIcon, ArrowsClockwise as RefreshCwIcon } from "@phosphor-icons/react";
+import type { FallbackProps } from "react-error-boundary";
 
-export const ErrorFallback = ({ error, resetErrorBoundary }) => {
+export const ErrorFallback = ({ error, resetErrorBoundary }: FallbackProps) => {
   // When encountering an error in the development mode, rethrow it and don't display the boundary.
   // The parent UI will take care of showing a more helpful dialog.
   if (import.meta.env.DEV) throw error;

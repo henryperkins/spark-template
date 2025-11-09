@@ -20,7 +20,8 @@ import {
   CurrencyDollar,
   WarningCircle,
   Bug,
-  CopySimple
+  CopySimple,
+  Download
 } from '@phosphor-icons/react'
 import { Document } from '@/types'
 import { embeddingManager, type RefreshResult } from '@/lib/embedding-manager'
@@ -172,6 +173,42 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
     } finally {
       setCleaning(false)
     }
+  }
+
+  const handleExportMetrics = () => {
+    if (!tokenMetrics || !errorMetrics) return
+
+    const exportData = {
+      timestamp: new Date().toISOString(),
+      tokenMetrics: {
+        daily: tokenMetrics.daily,
+        budget: tokenMetrics.budget,
+        byModel: tokenMetrics.byModel
+      },
+      errorMetrics: {
+        errorRate: errorMetrics.errorRate,
+        totalErrors: errorMetrics.totalErrors,
+        byType: errorMetrics.byType,
+        errorsByAgent: errorMetrics.errorsByAgent,
+        recentErrors: errorMetrics.recentErrors
+      },
+      cacheMetrics: cacheMetrics,
+      refreshMetrics: refreshMetrics
+    }
+
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], {
+      type: 'application/json'
+    })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `rag-metrics-${new Date().toISOString().split('T')[0]}.json`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+
+    toast.success('Metrics exported successfully')
   }
 
   const formatDuration = (ms: number) => {
@@ -545,6 +582,12 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              <div className="flex justify-end">
+                <Button onClick={handleExportMetrics} variant="outline" size="sm">
+                  <Download size={16} className="mr-2" />
+                  Export Metrics
+                </Button>
+              </div>
               {tokenMetrics && (
                 <>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">

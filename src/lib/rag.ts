@@ -1,8 +1,6 @@
 import { Document, DocumentChunk, Source } from '@/types'
-import { cacheManager } from './cache-manager'
 import { azureServiceManager } from './azure-service-manager'
 import { DocumentAnalyzerAgent, ChunkingStrategy } from './agents/document-analyzer'
-import { runtime } from './runtime-context'
 import { llmService } from './services/llm-service'
 import { appConfig } from './config'
 import type { RetrievalMetadata } from './agents/agent-context'
@@ -463,13 +461,12 @@ export async function findRelevantChunksWithMeta(
     ? drift.annotatedSources.reduce((s, x) => s + (x.relevanceScore ?? 0), 0) / drift.annotatedSources.length
     : 0
 
-  const metadata: RetrievalMetadata & any = {
+  const metadata: RetrievalMetadata = {
     strategy: result.metadata.strategy,
     sourceCount: drift.annotatedSources.length,
     avgRelevanceScore: Number.isFinite(avg) ? avg : 0,
     duration: result.metadata.latencyMs,
     degraded: result.metadata.azureFallback || azureUnavailable,
-    // Extended fields (optional; tolerated by callers)
     storeType: result.metadata.storeType,
     namespace,
     driftDetected: drift.summary.driftDetected,
@@ -560,14 +557,4 @@ export function formatFileSize(bytes: number): string {
 export function formatDate(dateString: string): string {
   const date = new Date(dateString)
   return date.toLocaleDateString() + ' at ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-}
-
-function hashString(value: string): string {
-  let hash = 0
-  for (let i = 0; i < value.length; i++) {
-    hash = (hash << 5) - hash + value.charCodeAt(i)
-    hash |= 0
-  }
-
-  return hash.toString(16)
 }

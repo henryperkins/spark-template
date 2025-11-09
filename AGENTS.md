@@ -4,8 +4,10 @@ This file provides guidance to agents when working with code in this repository.
 
 Only non-obvious, project-specific rules are documented here.
 
-- Azure OpenAI:
-  - Use `AzureServiceManager` ([`src/lib/azure-service-manager.ts`](src/lib/azure-service-manager.ts)) as the single entry point; do not construct `AzureOpenAIService` directly in UI code.
+- LLM Access:
+  - **UI/Controller code**: Route all LLM calls through `LLMService` ([`src/lib/services/llm-service.ts`](src/lib/services/llm-service.ts)) to populate tokenTracker and recordLLMCall.
+  - **Agent code**: May use `AzureServiceManager` ([`src/lib/azure-service-manager.ts`](src/lib/azure-service-manager.ts)) directly when needed.
+  - Do not construct `AzureOpenAIService` directly anywhere; always use the service layer.
   - The `AzureOpenAIService` ([`src/lib/azure-openai.ts`](src/lib/azure-openai.ts)) can transparently switch between:
     - Legacy `deployments/{deployment}/chat/completions`
     - v1 Responses API via `ResponsesClient` ([`src/lib/responses-client.ts`](src/lib/responses-client.ts))
@@ -61,6 +63,9 @@ Only non-obvious, project-specific rules are documented here.
 - Pathing and runtime:
   - All imports must use the `@/` alias (configured in tsconfig/vite) for src modules; relative deep paths make refactors fragile.
   - Assume Cloudflare Workers as the production runtime; any new Node-only APIs (e.g., `fs`, `crypto` without WebCrypto) are invalid unless guarded or isolated from worker bundles.
+  - Two `runtime` modules exist:
+    - `src/lib/config.ts` exports `runtime` with detection helpers (isCloudflareWorkers, getStorageMode, etc.)
+    - `src/lib/runtime-context.ts` exports `runtime` with service providers (llm, kv, telemetry)
 
 - Testing:
   - Use `vitest` with the existing structure; when adding tests that exercise Azure behavior, mock network calls instead of hitting real endpoints to preserve the worker-compatible runtime.

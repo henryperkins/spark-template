@@ -12,6 +12,7 @@ import { cacheManager } from '@/lib/cache-manager'
 import { embeddingManager } from '@/lib/embedding-manager'
 import { extractTextFromPdf } from '@/lib/pdf'
 import { isCloudflareKVConfigured } from '@/lib/cloudflare-kv'
+import { runtime } from '@/lib/config'
 
 interface DocumentUploadProps {
   onDocumentUploaded: (document: Document) => void
@@ -24,22 +25,26 @@ interface UploadProgress {
   error?: string
 }
 
+// 20 MB limit by default to avoid browser memory spikes and timeouts
+const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024
+
 export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
   const [dragActive, setDragActive] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState<UploadProgress[]>([])
-
-  // 20 MB limit by default to avoid browser memory spikes and timeouts
-  const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024
+  
+  // Chunked upload tuning
+  const CHUNK_SIZE = 5 * 1024 * 1024 // 5MB
+  const MAX_RETRIES = 3
 
   const processFile = async (file: File): Promise<Document> => {
     const documentId = `doc-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-    
+
     // Update progress
     const updateProgress = (progress: number, status: UploadProgress['status'], error?: string) => {
-      setUploadProgress(prev => 
-        prev.map(p => 
-          p.fileName === file.name 
+      setUploadProgress(prev =>
+        prev.map(p =>
+          (file?.name ? p.fileName === file.name : false)
             ? { ...p, progress, status, error }
             : p
         )
@@ -49,7 +54,13 @@ export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
     updateProgress(10, 'processing')
 
     try {
-      // Read content with PDF-aware extraction
+      // Handle large files with chunked upload to avoid UI stalls (only when running behind Worker)
+      // Note: chunk upload endpoint (/api/upload-chunk) only exists in worker/index.ts
+      if (file.size > CHUNK_SIZE && runtime.isCloudflareWorkers()) {
+        return await processLargeFile(file, documentId, updateProgress)
+      }
+
+      // Small files: read directly and process
       const content =
         file.type === 'application/pdf'
           ? await extractTextFromPdf(file)
@@ -59,17 +70,128 @@ export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
           ? 'Could not extract text from PDF'
           : 'Empty file content')
       }
-      updateProgress(25, 'processing')
+      return await processContent(content, documentId, file.name, file.size, file.type || 'text/plain', updateProgress)
+    } catch (error) {
+      updateProgress(100, 'error', error instanceof Error ? error.message : 'Unknown error')
+      throw error
+    }
 
-      const { chunks } = await intelligentChunkDocument(content, documentId, file.name)
-      updateProgress(40, 'processing')
+    /**
+     * Chunked upload pipeline for large files (Worker mode only).
+     *
+     * Flow:
+     * 1. Upload chunks via /api/upload-chunk (stored in KV with 1hr TTL)
+     * 2. Call /api/upload-complete to assemble chunks and cleanup
+     * 3. Read file locally for ingestion (keeps existing pipeline stable)
+     *
+     * This exercises the worker chunk assembly while maintaining backward-compatible
+     * ingestion behavior. Future work can move ingestion server-side.
+     */
+    async function processLargeFile(
+      file: File,
+      docId: string,
+      progressFn: (progress: number, status: UploadProgress['status'], error?: string) => void
+    ): Promise<Document> {
+      const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
+      let uploaded = 0
+
+      for (let i = 0; i < totalChunks; i++) {
+        const start = i * CHUNK_SIZE
+        const end = Math.min(start + CHUNK_SIZE, file.size)
+        const blob = file.slice(start, end)
+
+        let retries = 0
+        // Exponential backoff retry
+        while (retries < MAX_RETRIES) {
+          try {
+            await uploadChunk(blob, docId, i)
+            uploaded++
+            const pct = Math.min(90, 10 + Math.floor((uploaded / totalChunks) * 80))
+            progressFn(pct, 'processing')
+            break
+          } catch (err) {
+            retries++
+            if (retries === MAX_RETRIES) {
+              throw new Error(`Failed to upload chunk ${i + 1} after ${MAX_RETRIES} attempts`)
+            }
+            await new Promise(resolve => setTimeout(resolve, 1000 * retries))
+          }
+        }
+      }
+
+      // Notify worker to assemble chunks
+      const finalizeResp = await fetch('/api/upload-complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          documentId: docId,
+          fileName: file.name,
+          fileType: file.type || 'application/octet-stream',
+          totalChunks,
+        }),
+      })
+
+      if (!finalizeResp.ok) {
+        const message = await finalizeResp.text().catch(() => '')
+        throw new Error(
+          `Failed to finalize upload: ${finalizeResp.status} ${finalizeResp.statusText}` +
+          (message ? ` - ${message}` : ''),
+        )
+      }
+
+      // For now, still read locally so ingestion uses existing pipeline.
+      // This keeps behavior stable while exercising the worker endpoint.
+      const content = await readLargeFile(file)
+      return await processContent(
+        content,
+        docId,
+        file.name,
+        file.size,
+        file.type || 'text/plain',
+        progressFn,
+      )
+    }
+
+    async function uploadChunk(chunk: Blob, documentId: string, chunkIndex: number): Promise<void> {
+      const formData = new FormData()
+      formData.append('chunk', chunk)
+      formData.append('documentId', documentId)
+      formData.append('chunkIndex', String(chunkIndex))
+
+      const resp = await fetch('/api/upload-chunk', { method: 'POST', body: formData })
+      if (!resp.ok) {
+        throw new Error(`Chunk upload failed: ${resp.status} ${resp.statusText}`)
+      }
+    }
+
+    async function readLargeFile(file: File): Promise<string> {
+      return file.type === 'application/pdf'
+        ? await extractTextFromPdf(file)
+        : await file.text()
+    }
+
+    async function processContent(
+      content: string,
+      docId: string,
+      fileName: string,
+      fileSize: number,
+      fileType: string,
+      progressFn: (progress: number, status: UploadProgress['status'], error?: string) => void
+    ): Promise<Document> {
+      if (!content || content.trim().length === 0) {
+        throw new Error('Empty file content')
+      }
+
+      progressFn(25, 'processing')
+      const { chunks } = await intelligentChunkDocument(content, docId, fileName)
+      progressFn(40, 'processing')
 
       const document: Document = {
-        id: documentId,
-        name: file.name,
-        size: file.size,
+        id: docId,
+        name: fileName,
+        size: fileSize,
         uploadedAt: new Date().toISOString(),
-        type: file.type || 'text/plain',
+        type: fileType || 'text/plain',
         chunks,
         processed: true,
         processingStatus: 'pending'
@@ -78,24 +200,24 @@ export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
       let finalDocument = document
 
       if (azureServiceManager.isConfigured()) {
-        updateProgress(50, 'embedding')
+        progressFn(50, 'embedding')
         finalDocument = await azureServiceManager.processDocumentWithAzure(document, (done, total) => {
           // Map embedding progress (50% → 80%)
           const frac = total > 0 ? done / total : 0
           const pct = Math.min(80, 50 + Math.floor(frac * 30))
-          updateProgress(pct, 'embedding')
+          progressFn(pct, 'embedding')
         })
-        
+
         if (finalDocument.processingStatus === 'completed') {
-          updateProgress(80, 'indexing')
+          progressFn(80, 'indexing')
           await new Promise(resolve => setTimeout(resolve, 500))
-          updateProgress(100, 'completed')
+          progressFn(100, 'completed')
         } else {
-          updateProgress(100, 'error', finalDocument.errorMessage)
+          progressFn(100, 'error', finalDocument.errorMessage)
         }
       } else {
-        // Local mode; warn on potentially large persistence limits
-        updateProgress(100, 'completed')
+        // Local mode
+        progressFn(100, 'completed')
       }
 
       await embeddingManager.setMetadata({
@@ -113,9 +235,6 @@ export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
       await cacheManager.invalidateByPrefix('rag-query')
 
       return finalDocument
-    } catch (error) {
-      updateProgress(100, 'error', error instanceof Error ? error.message : 'Unknown error')
-      throw error
     }
   }
 

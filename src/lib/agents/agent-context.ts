@@ -85,6 +85,18 @@ export interface RetrievalMetadata {
 
   /** Reason for degradation (if degraded) */
   degradationReason?: string
+
+  /** Store type used for retrieval */
+  storeType?: 'azure' | 'in-memory'
+
+  /** Namespace used for retrieval */
+  namespace?: string
+
+  /** Whether drift was detected in retrieved sources */
+  driftDetected?: boolean
+
+  /** Reasons for drift if detected */
+  driftReasons?: string[]
 }
 
 /**
@@ -299,7 +311,6 @@ export function buildKBContext(documents: Document[]): KBContext {
     // Per-document stats
     const docChunkCount = doc.chunks.length
     let docChunksWithEmbeddings = 0
-    let docTotalLength = 0
 
     // Content type classification per document via helper
     const docContents = doc.chunks.map(c => c.content)
@@ -308,7 +319,6 @@ export function buildKBContext(documents: Document[]): KBContext {
     for (const chunk of doc.chunks) {
       totalChunks++
       totalChunkLength += chunk.content.length
-      docTotalLength += chunk.content.length
 
       // Check for embeddings
       if (chunk.embedding || chunk.azureEmbedding) {

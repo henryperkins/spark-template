@@ -19,13 +19,13 @@ import { queryHistoryService } from '../services/query-history'
 import { tokenTracker } from '../services/token-tracker'
 import { llmService } from '../services/llm-service'
 import {
-  type QueryExecutionContext,
   buildKBContext,
   createQueryExecutionContext,
   recordPhaseTime,
   getExecutionSummary,
   canAffordTokens,
-  addWarning
+  addWarning,
+  type RetrievalMetadata
 } from './agent-context'
 
 export interface AgentWorkflowStep {
@@ -285,7 +285,7 @@ export class AgenticOrchestrator {
           emitWorkflowUpdate,
           event => {
             const result = (event as {
-              result?: { sources: Source[]; metadata: any }
+              result?: { sources: Source[]; metadata: RetrievalMetadata }
             }).result
             const meta = result?.metadata
             emitStepEvent({
@@ -557,12 +557,9 @@ export class AgenticOrchestrator {
           executionSummary,
           // NEW: Vector/Hybrid retrieval metadata (best-effort; may be undefined)
           namespace: azureServiceManager.getNamespaceId(),
-          storeType: (context.retrievalMetadata as any)
-            ?.storeType,
-          driftDetected: (context.retrievalMetadata as any)
-            ?.driftDetected,
-          driftReasons: (context.retrievalMetadata as any)
-            ?.driftReasons
+          storeType: context.retrievalMetadata?.storeType,
+          driftDetected: context.retrievalMetadata?.driftDetected,
+          driftReasons: context.retrievalMetadata?.driftReasons
         })
         .catch(error => {
           console.error(
@@ -605,7 +602,7 @@ export class AgenticOrchestrator {
 
     // Snapshot LLM call count before this step executes so we can detect
     // whether this step actually triggered LLM activity.
-    const ctxBefore = (getActiveQueryContext?.() as any) || null
+    const ctxBefore = getActiveQueryContext?.() || null
     const llmCallsBefore = Array.isArray(ctxBefore?.llmCalls)
       ? ctxBefore.llmCalls.length
       : 0
@@ -632,7 +629,7 @@ export class AgenticOrchestrator {
       emitWorkflowUpdate?.()
 
       // Detect if this step produced any new LLM calls.
-      const ctxAfter = (getActiveQueryContext?.() as any) || null
+      const ctxAfter = getActiveQueryContext?.() || null
       const llmCallsAfter = Array.isArray(ctxAfter?.llmCalls)
         ? ctxAfter.llmCalls.length
         : llmCallsBefore
@@ -693,7 +690,7 @@ export class AgenticOrchestrator {
       emitWorkflowUpdate?.()
 
       // Same LLM attribution rule on failure: only if new calls occurred during this step.
-      const ctxAfter = (getActiveQueryContext?.() as any) || null
+      const ctxAfter = getActiveQueryContext?.() || null
       const llmCallsAfter = Array.isArray(ctxAfter?.llmCalls)
         ? ctxAfter.llmCalls.length
         : llmCallsBefore
@@ -932,8 +929,9 @@ export class AgenticOrchestrator {
       await healthProgressAgent.setProgress({ runId: id, docSlug, percent: 100, phase: 'complete', updatedAt: new Date().toISOString() })
       this.logDocAnalysis('doc_analysis_complete', { runId: id, docSlug, ms: Date.now() - start })
       return decision!
-    } catch (error: any) {
-      console.error('[doc-analysis] ERROR', { runId: id, docSlug, state, error: error?.message })
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      console.error('[doc-analysis] ERROR', { runId: id, docSlug, state, error: errorMessage })
       await healthProgressAgent.setProgress({ runId: id, docSlug, percent: 100, phase: 'error', updatedAt: new Date().toISOString(), message: 'error' }).catch(() => void 0)
       return { strategy: 'semantic', chunkSize: 1000, overlap: 100, reasoning: 'Conservative default (runtime error)' }
     }

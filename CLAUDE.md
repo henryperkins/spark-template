@@ -13,9 +13,16 @@ This is an **Agentic RAG (Retrieval-Augmented Generation)** application built wi
 - `npm run preview` - Preview production build locally
 
 ### Building and Quality
-- `npm run build` - Build for production (runs TypeScript compilation with `--noCheck` flag, then Vite build)
+- `npm run build` - Build for production (runs full TypeScript type checking via `tsc --noEmit` then Vite build)
 - `npm run lint` - Run ESLint to check code quality
+- `npm run test` - Run test suite (Vitest)
 - `npm run optimize` - Optimize Vite dependencies
+
+### Cloudflare Deployment
+- `npm run cf:dev` - Start local development server for Cloudflare Worker
+- `npm run cf:deploy` - Deploy worker to Cloudflare
+- `npm run cf:deploy:staging` - Deploy worker to staging environment
+- `npm run cf:deploy:production` - Deploy worker to production environment
 
 ### Utilities
 - `npm run kill` - Kill process on port 5000
@@ -45,24 +52,33 @@ The app uses a **hybrid runtime** with automatic detection:
 2. **Mock responses** - Development fallback when Azure not configured
 
 **Runtime Detection**:
-The `runtime` utility (src/lib/config.ts) automatically detects:
-- Cloudflare Workers deployment (`.workers.dev` domain)
-- Cloudflare KV configuration (environment variables)
-- Azure OpenAI configuration
+Two `runtime` modules provide different capabilities:
+- **src/lib/config.ts** exports `runtime` with environment detection helpers:
+  - `isCloudflareWorkers()` - Detects Cloudflare Workers deployment
+  - `isCloudflareKVConfigured()` - Checks KV configuration
+  - `isAzureConfigured()` - Checks Azure OpenAI configuration
+  - `getStorageMode()` - Returns 'cloudflare' or 'local'
+- **src/lib/runtime-context.ts** exports `runtime` with service providers:
+  - `llm` - LLM provider instance
+  - `kv` - KV storage adapter
+  - `telemetry` - Telemetry sink
 
 Note: Icons are imported directly from '@phosphor-icons/react'; no additional Vite plugins are required. The current vite.config.ts uses @vitejs/plugin-react-swc, @tailwindcss/vite, vite-plugin-wasm, and vite-plugin-top-level-await.
 
 ### State Management Pattern
 
-The `useKV` hook (src/hooks/use-kv.ts) is the primary persistent state mechanism. For backward compatibility, `useSparkKV` (src/hooks/use-spark-kv.ts) re-exports `useKV`:
+The `useKV` hook (src/hooks/use-kv.ts) is the primary persistent state mechanism:
 - Automatically syncs state to Cloudflare KV or localStorage fallback
 - Auto-detects runtime environment and selects appropriate storage
 - Returns `[value, setter, deleter]` tuple similar to useState
 - Use for all persistent application state (documents, config, etc.)
+- Also exported as `useStorage` (alias for `useKV`)
 
 Example:
 ```typescript
 const [documents, setDocuments] = useKV<Document[]>('rag-documents', [])
+// OR
+const [documents, setDocuments] = useStorage<Document[]>('rag-documents', [])
 ```
 
 **See**: `docs/CLOUDFLARE_MIGRATION.md` for detailed architecture information.
@@ -140,8 +156,14 @@ Core types in src/types/index.ts include:
 ## Important Development Notes
 
 ### Working with Cloudflare KV
-- Always use `useKV` hook for persistent state, not localStorage directly
+- Always use `useKV` (or `useStorage`) hook for persistent state, not localStorage directly
 - KV keys are namespaced (e.g., 'rag-documents', 'azure-config')
+
+### LLM Service Integration
+- **Always** route LLM calls through `llmService` (src/lib/services/llm-service.ts)
+- Do NOT call `azureServiceManager` directly from UI or controller code
+- `llmService` provides token tracking, rate limiting, retry logic, and telemetry
+- Example: `llmService.generateText(prompt, options)` or `llmService.generateJson(prompt, schema, options)`
 
 ### Agent Development
 - All agents follow similar patterns: analyze input, make decisions, return structured results

@@ -1,4 +1,3 @@
-import { AzureConfig } from '@/types'
 import { errorTracking } from '@/lib/services/error-tracker'
 
 /**
@@ -1019,7 +1018,7 @@ export class ResponsesClient {
 
     if (Array.isArray(node.arguments)) {
       return node.arguments
-        .map(arg => {
+        .map((arg: unknown) => {
           if (typeof arg === 'string') return arg
           try {
             return JSON.stringify(arg)
@@ -1027,7 +1026,7 @@ export class ResponsesClient {
             return undefined
           }
         })
-        .filter((value): value is string => typeof value === 'string' && value.length > 0)
+        .filter((value: unknown): value is string => typeof value === 'string' && value.length > 0)
     }
 
     if (node.content !== undefined) {

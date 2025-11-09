@@ -2,7 +2,8 @@ import { ComponentProps } from "react"
 import { CaretLeft as ChevronLeftIcon, CaretRight as ChevronRightIcon, DotsThree as MoreHorizontalIcon } from "@phosphor-icons/react"
 
 import { cn } from "@/lib/utils"
-import { Button, buttonVariants } from "@/components/ui/button"
+import { Button } from "@/components/ui/button"
+import { buttonVariants } from "@/components/ui/button-variants"
 
 function Pagination({ className, ...props }: ComponentProps<"nav">) {
   return (

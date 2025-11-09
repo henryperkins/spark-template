@@ -125,12 +125,55 @@ function corsHeadersFor(
   }
 }
 
+const rateLimitStore = new Map<string, { count: number; resetTime: number }>()
+
+function checkRateLimit(request: Request, limit: number = 100, windowMs: number = 60000): boolean {
+  const clientIP = request.headers.get('CF-Connecting-IP') || 'unknown'
+  const now = Date.now()
+
+  // Clean expired windows
+  for (const [key, data] of rateLimitStore.entries()) {
+    if (data.resetTime < now) {
+      rateLimitStore.delete(key)
+    }
+  }
+
+  const current = rateLimitStore.get(clientIP)
+  if (!current || current.resetTime < now) {
+    rateLimitStore.set(clientIP, { count: 1, resetTime: now + windowMs })
+    return true
+  }
+
+  if (current.count >= limit) {
+    return false
+  }
+
+  current.count++
+  return true
+}
+
 export default {
   async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url)
     const startTime = Date.now()
 
     try {
+      // Health check endpoint
+      if (url.pathname === '/api/health') {
+        const healthCheck = {
+          status: 'healthy',
+          timestamp: new Date().toISOString(),
+          services: {
+            kv: !!env.RAG_KV,
+            logs: !!env.LOGS,
+            assets: !!env.ASSETS
+          }
+        }
+        return Response.json(healthCheck, {
+          headers: { 'Cache-Control': 'no-store', ...corsHeadersFor(request, { methods: ['GET', 'OPTIONS'] }) }
+        })
+      }
+
       // Edge LLM proxy endpoint
       if (url.pathname.startsWith('/api/llm')) {
         return handleLLMRequest(request, env)
@@ -156,6 +199,16 @@ export default {
         })
 
         return response
+      }
+
+      // Chunked upload endpoint
+      if (url.pathname === '/api/upload-chunk') {
+        return handleUploadChunkRequest(request, env)
+      }
+
+      // Chunk assembly endpoint
+      if (url.pathname === '/api/upload-complete') {
+        return handleUploadCompleteRequest(request, env)
       }
 
       // API endpoint for Azure Search proxy (avoids CORS)
@@ -378,6 +431,11 @@ async function handleKVRequest(request: Request, env: Env): Promise<Response> {
     return new Response(null, { headers: corsHeaders })
   }
 
+  // Rate limiting
+  if (!checkRateLimit(request)) {
+    return new Response('Rate limit exceeded', { status: 429, headers: corsHeaders })
+  }
+
   // Enforce origin on CORS requests
   if (request.headers.get('Origin') && !isOriginAllowed(request)) {
     return new Response('CORS origin not allowed', { status: 403, headers: corsHeaders })
@@ -484,6 +542,20 @@ async function handleKVRequest(request: Request, env: Env): Promise<Response> {
               listComplete: (listed as any).list_complete ?? false,
             },
           })
+// Edge cache lookup for single-key GETs
+if (!url.searchParams.get('nocache') && key) {
+  const cache = caches.default
+  const cacheKey = new Request(url.toString(), { method: 'GET' })
+  const cachedResponse = await cache.match(cacheKey)
+  if (cachedResponse) {
+    logStructured({
+      level: 'info',
+      event: 'kv_cache_hit',
+      key,
+    })
+    return cachedResponse
+  }
+}
           return Response.json(
             {
               keys: (listed as any).keys.map((k: { name: string }) => k.name),
@@ -492,6 +564,21 @@ async function handleKVRequest(request: Request, env: Env): Promise<Response> {
             },
             { headers: corsHeaders }
           )
+        }
+
+        // Edge cache lookup for single-key GETs
+        if (!url.searchParams.get('nocache') && key) {
+          const cache = caches.default
+          const cacheKey = new Request(url.toString(), { method: 'GET' })
+          const cachedResponse = await cache.match(cacheKey)
+          if (cachedResponse) {
+            logStructured({
+              level: 'info',
+              event: 'kv_cache_hit',
+              key,
+            })
+            return cachedResponse
+          }
         }
 
         // Get single key with defensive JSON parsing
@@ -556,7 +643,23 @@ async function handleKVRequest(request: Request, env: Env): Promise<Response> {
           event: 'kv_get_key',
           key,
         })
-        return Response.json(value, { headers: corsHeaders })
+
+        const response = Response.json(value, { headers: corsHeaders })
+
+        // Cache successful GET response for 5 minutes unless nocache is set
+        if (!url.searchParams.get('nocache') && key) {
+          try {
+            const cache = caches.default
+            const cacheKey = new Request(url.toString(), { method: 'GET' })
+            const cacheableResponse = response.clone()
+            cacheableResponse.headers.set('Cache-Control', 'public, max-age=300')
+            await cache.put(cacheKey, cacheableResponse)
+          } catch {
+            // ignore cache put errors
+          }
+        }
+
+        return response
       }
 
       case 'POST': {
@@ -816,6 +919,144 @@ async function handleAzureSearchRequest(request: Request, env: Env): Promise<Res
  * Handle Logs API requests
  * Provides programmatic access to Logpush logs stored in R2
  */
+/**
+ * Handle chunked upload requests for large files.
+ *
+ * Lifecycle:
+ * 1. Client uploads chunks via POST /api/upload-chunk (this endpoint)
+ * 2. Chunks are stored in KV with 1-hour TTL to handle incomplete uploads
+ * 3. Client calls POST /api/upload-complete to trigger assembly
+ * 4. Assembly endpoint (handleUploadCompleteRequest) merges chunks and cleans up KV keys
+ *
+ * Only reachable when runtime.isCloudflareWorkers() is true (gated in DocumentUpload.tsx).
+ */
+async function handleUploadChunkRequest(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = corsHeadersFor(request, { methods: ['POST', 'OPTIONS'] })
+
+  // Preflight
+  if (request.method === 'OPTIONS') {
+    if (!isOriginAllowed(request)) {
+      return new Response('CORS origin not allowed', { status: 403, headers: corsHeaders })
+    }
+    return new Response(null, { headers: corsHeaders })
+  }
+
+  if (request.method !== 'POST') {
+    return new Response('Method not allowed', { status: 405, headers: corsHeaders })
+  }
+
+  // Enforce origin on CORS requests
+  if (request.headers.get('Origin') && !isOriginAllowed(request)) {
+    return new Response('CORS origin not allowed', { status: 403, headers: corsHeaders })
+  }
+
+  try {
+    const form = await request.formData()
+    const chunk = form.get('chunk') as File | null
+    const documentId = String(form.get('documentId') || '')
+    const chunkIndex = Number.parseInt(String(form.get('chunkIndex') || ''), 10)
+
+    if (!chunk || !documentId || Number.isNaN(chunkIndex)) {
+      return new Response('Invalid form data', { status: 400, headers: corsHeaders })
+    }
+
+    const buf = await chunk.arrayBuffer()
+    const key = `upload-chunk:${documentId}:${chunkIndex.toString().padStart(6, '0')}`
+
+    // Store raw bytes with TTL so incomplete uploads eventually expire
+    await (env.RAG_KV as any).put(key, buf as any, { expirationTtl: 3600 })
+
+    logStructured({
+      level: 'info',
+      event: 'upload_chunk_saved',
+      metadata: { documentId, chunkIndex, size: buf.byteLength },
+    })
+
+    return new Response(null, { status: 204, headers: corsHeaders })
+  } catch (error: unknown) {
+    return new Response(getErrorMessage(error) || 'Bad Request', { status: 400, headers: corsHeaders })
+  }
+}
+
+async function handleUploadCompleteRequest(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = corsHeadersFor(request, { methods: ['POST', 'OPTIONS'] })
+
+  if (request.method === 'OPTIONS') {
+    if (!isOriginAllowed(request)) {
+      return new Response('CORS origin not allowed', { status: 403, headers: corsHeaders })
+    }
+    return new Response(null, { headers: corsHeaders })
+  }
+
+  if (request.method !== 'POST') {
+    return new Response('Method not allowed', { status: 405, headers: corsHeaders })
+  }
+
+  if (request.headers.get('Origin') && !isOriginAllowed(request)) {
+    return new Response('CORS origin not allowed', { status: 403, headers: corsHeaders })
+  }
+
+  try {
+    const { documentId, fileName, fileType, totalChunks } = (await request.json()) as {
+      documentId?: string
+      fileName?: string
+      fileType?: string
+      totalChunks?: number
+    }
+
+    if (!documentId || !Number.isInteger(totalChunks) || totalChunks! <= 0) {
+      return new Response('Invalid payload', { status: 400, headers: corsHeaders })
+    }
+
+    const parts: Uint8Array[] = []
+    for (let i = 0; i < (totalChunks as number); i++) {
+      const key = `upload-chunk:${documentId}:${i.toString().padStart(6, '0')}`
+      const chunk = await (env.RAG_KV as any).get(key, 'arrayBuffer')
+      if (!chunk) {
+        return new Response(`Missing chunk ${i}`, { status: 400, headers: corsHeaders })
+      }
+      parts.push(new Uint8Array(chunk as ArrayBuffer))
+    }
+
+    const totalSize = parts.reduce((sum, p) => sum + p.byteLength, 0)
+    const merged = new Uint8Array(totalSize)
+    let offset = 0
+    for (const p of parts) {
+      merged.set(p, offset)
+      offset += p.byteLength
+    }
+
+    // Cleanup chunks (best effort)
+    for (let i = 0; i < (totalChunks as number); i++) {
+      const key = `upload-chunk:${documentId}:${i.toString().padStart(6, '0')}`
+      try {
+        await (env.RAG_KV as any).delete(key)
+      } catch {
+        // ignore delete errors
+      }
+    }
+
+    logStructured({
+      level: 'info',
+      event: 'upload_chunks_assembled',
+      metadata: { documentId, totalChunks, totalSize },
+    })
+
+    return Response.json(
+      {
+        ok: true,
+        documentId,
+        fileName,
+        fileType,
+        size: totalSize,
+      },
+      { headers: corsHeaders },
+    )
+  } catch (error: unknown) {
+    return new Response(getErrorMessage(error) || 'Bad Request', { status: 400, headers: corsHeaders })
+  }
+}
+
 async function handleLogsRequest(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url)
   const corsHeaders = corsHeadersFor(request, { methods: ['GET', 'OPTIONS'], allowAuth: true })

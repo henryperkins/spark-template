@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { llmService, LLMError } from '../services/llm-service'
-import type { AgentResult, ChunkingDecision, ChunkingStrategy } from './types'
+import type { AgentResult, ChunkingDecision } from './types'
 import { jsonRepairAgent } from './json-repair-agent'
 
 export const chunkingDecisionSchema: z.ZodType<ChunkingDecision> = z.object({

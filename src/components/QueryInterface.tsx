@@ -25,6 +25,8 @@ interface QueryInterfaceProps {
 interface ExtendedChatMessage extends ChatMessage {
   agenticResult?: AgenticRAGResult
   azureFallback?: boolean
+  azureUsed?: boolean
+  isLoading?: boolean
 }
 
 export function QueryInterface({ documents }: QueryInterfaceProps) {
@@ -32,7 +34,7 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
   const [messages, setMessages] = useState<ExtendedChatMessage[]>([])
   const [loading, setLoading] = useState(false)
   const [agenticMode, setAgenticMode] = useState(true)
-  const [orchestrator] = useState(() => new AgenticOrchestrator())
+  const [orchestrator] = useState<AgenticOrchestrator>(() => new AgenticOrchestrator())
   const [activeWorkflow, setActiveWorkflow] = useState<AgentWorkflowStep[]>([])
   const [recentQueries, setRecentQueries] = useState<string[]>([])
   const [lastErrorHint, setLastErrorHint] = useState<string | null>(null)
@@ -70,6 +72,7 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
   const executeQuery = async (queryText: string) => {
     if (!queryText.trim() || loading) return
 
+    // Optimistic: immediately append user message and a loading assistant placeholder
     const userMessage: ExtendedChatMessage = {
       id: `msg-${Date.now()}-user`,
       type: 'user',
@@ -77,7 +80,15 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
       timestamp: new Date().toISOString()
     }
 
-    setMessages(prev => [...prev, userMessage])
+    const assistantPlaceholder: ExtendedChatMessage = {
+      id: `msg-${Date.now()}-assistant`,
+      type: 'assistant',
+      content: 'Thinking...',
+      timestamp: new Date().toISOString(),
+      isLoading: true
+    }
+
+    setMessages(prev => [...prev, userMessage, assistantPlaceholder])
     setLoading(true)
     setQuery('')
     if (agenticMode) {
@@ -142,7 +153,7 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
       }
 
       const assistantMessage: ExtendedChatMessage = {
-        id: `msg-${Date.now()}-assistant`,
+        id: assistantPlaceholder.id,
         type: 'assistant',
         content: response,
         timestamp: new Date().toISOString(),
@@ -152,9 +163,12 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
         azureFallback: azureFallbackDetected
       }
 
-      setMessages(prev => [...prev, assistantMessage])
+      // Replace the placeholder with the real assistant message
+      setMessages(prev => prev.map(msg => (msg.id === assistantPlaceholder.id ? assistantMessage : msg)))
     } catch (err) {
-      // Map typical error classes to concise, actionable hints
+      // Roll back the placeholder on error and show error card
+      setMessages(prev => prev.filter(msg => msg.id !== assistantPlaceholder.id))
+
       let hint: string | null = null
       if (err && typeof err === 'object') {
         const anyErr = err as any
@@ -186,7 +200,6 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
       }
       setMessages(prev => [...prev, errorMessage])
 
-      // Log to console for debugging without exposing internals to end users
       console.error('[query-error]', err)
     } finally {
       setLoading(false)
@@ -205,7 +218,14 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" role="main" aria-label="Query Interface">
+      <div
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+      >
+        {loading ? 'Processing query' : ''}
+      </div>
       <Card>
         <CardHeader>
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -299,7 +319,7 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
       </Card>
 
       {messages.length > 0 && (
-        <div className="space-y-4">
+        <div role="log" aria-label="Conversation history" className="space-y-4">
           <h3 className="text-lg font-semibold">Conversation</h3>
 
           {agenticMode && loading && activeWorkflow.length > 0 && (

@@ -7,11 +7,13 @@
 - **Chunking Decisions**: DocumentAnalyzerAgent chooses strategies; respect ChunkingStrategy return values if introducing new ingestion sources.
 - **Retrieval Logic**: findRelevantChunks() caches results under rag-query keys and handles Azure fallback; pass onAzureFallback handlers so UI can surface degraded mode.
 - **Cache Manager Usage**: cacheManager auto-selects TTL by key prefix; reuse prefixes doc:, query-expansion, rag-query to benefit from adaptiveTTL and invalidation tooling.
-- **Persistent Storage**: use useStorage/useKV from src/hooks/use-kv.ts—this auto-selects Cloudflare KV via createCloudflareKV and falls back to localStorage.
+- **Persistent Storage**: use `useKV` or `useStorage` from src/hooks/use-kv.ts (they're aliases)—this auto-selects Cloudflare KV via createCloudflareKV and falls back to localStorage.
 - **Namespace Conventions**: Document chunks should carry namespace metadata to align with azureServiceManager.getNamespaceId() filtering.
 - **App Config**: Fetch runtime settings via appConfig (src/lib/config.ts); new env knobs must be VITE_* so both Vite and worker exposure stay consistent.
-- **Runtime Detection**: runtime.* helpers map Cloudflare vs local behavior; prefer runtime.getStorageMode() and runtime.isAzureConfigured() instead of window checks.
-- **LLM Access**: runtime-context.ts exposes runtime.llm and telemetry sinks; for lightweight prompts use that provider or LLMService to inherit dev stubs (/api/llm).
+- **Runtime Detection**: Two `runtime` modules exist:
+  - src/lib/config.ts exports `runtime` with detection helpers (runtime.getStorageMode(), runtime.isAzureConfigured())
+  - src/lib/runtime-context.ts exports `runtime` with service providers (runtime.llm, runtime.kv, runtime.telemetry)
+- **LLM Access**: Route all LLM calls through LLMService (src/lib/services/llm-service.ts) to populate tokenTracker and recordLLMCall; do not call azureServiceManager directly from UI/controller code.
 - **Telemetry**: Send agent step updates through telemetry.trackAgentStep; Worker-side /api/telemetry expects Authorization per worker/index.ts CORS rules.
 - **Worker Endpoints**: worker/index.ts gates /api/kv, /api/telemetry, /api/llm, /api/azure-search, /api/logs—preserve CORS headers and Authorization checks when adding routes.
 - **Secrets Checklist**: KV_API_KEY, LOGS_API_KEY, AZURE_API_KEY, OPENAI_API_KEY set via wrangler secret; mirror client token in localStorage for dev per cloudflare-kv adapter.

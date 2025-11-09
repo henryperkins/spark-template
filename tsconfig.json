@@ -11,6 +11,10 @@
     "module": "ESNext",
     "skipLibCheck": true,
     "strictNullChecks": true,
+    "strict": true,
+    "noImplicitAny": true,
+    "strictFunctionTypes": true,
+    "strictPropertyInitialization": true,
     /* Bundler mode */
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,

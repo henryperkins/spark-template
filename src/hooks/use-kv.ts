@@ -78,7 +78,7 @@ export function useKV<T = string>(key: string, initialValue?: NoInfer<T>) {
     }
     loadValue()
     return () => { cancelled = true }
-  }, [key])
+  }, [key, storage])
 
   const setStoredValue = useCallback(
     (nextValue: Setter<T | undefined>) => {
@@ -96,7 +96,7 @@ export function useKV<T = string>(key: string, initialValue?: NoInfer<T>) {
         return resolved
       })
     },
-    [key]
+    [key, storage]
   )
 
   const deleteValue = useCallback(() => {
@@ -104,7 +104,7 @@ export function useKV<T = string>(key: string, initialValue?: NoInfer<T>) {
       console.error(`[use-kv] Failed to delete key "${key}":`, error)
     })
     setValue(undefined)
-  }, [key])
+  }, [key, storage])
 
   return [value, setStoredValue, deleteValue] as const
 }

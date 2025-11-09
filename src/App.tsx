@@ -1,18 +1,25 @@
-import { useEffect } from 'react'
+import { useEffect, lazy, Suspense } from 'react'
 import { useStorage } from '@/hooks/use-kv'
 import { ResponsiveNavigation } from '@/components/ResponsiveNavigation'
 import { ThemeToggle } from '@/components/ThemeToggle'
-import { DocumentUpload } from '@/components/DocumentUpload'
-import { DocumentList } from '@/components/DocumentList'
-import { QueryInterface } from '@/components/QueryInterface'
-import { AzureConfiguration } from '@/components/AzureConfiguration'
-import { ScalingDashboard } from '@/components/ScalingDashboard'
-import { Integrations } from '@/components/Integrations'
-import { ArchitectureDiagram } from '@/components/ArchitectureDiagram'
 import { Document, AzureConfig } from '@/types'
 import { Brain, FileText, ChatCircle, CloudArrowUp, ChartBar, PlugsConnected, TreeStructure } from '@phosphor-icons/react'
 import { azureServiceManager } from '@/lib/azure-service-manager'
 import { cacheManager } from '@/lib/cache-manager'
+
+const QueryInterface = lazy(() => import('@/components/QueryInterface').then(m => ({ default: m.QueryInterface })))
+const DocumentUpload = lazy(() => import('@/components/DocumentUpload').then(m => ({ default: m.DocumentUpload })))
+const Integrations = lazy(() => import('@/components/Integrations').then(m => ({ default: m.Integrations })))
+const DocumentList = lazy(() => import('@/components/DocumentList').then(m => ({ default: m.DocumentList })))
+const ScalingDashboard = lazy(() => import('@/components/ScalingDashboard').then(m => ({ default: m.ScalingDashboard })))
+const AzureConfiguration = lazy(() => import('@/components/AzureConfiguration').then(m => ({ default: m.AzureConfiguration })))
+const ArchitectureDiagram = lazy(() => import('@/components/ArchitectureDiagram').then(m => ({ default: m.ArchitectureDiagram })))
+
+const LoadingSpinner = () => (
+  <div className="flex items-center justify-center p-8">
+    <div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" />
+  </div>
+)
 
 function App() {
   const [documents, setDocuments] = useStorage<Document[]>('rag-documents', [])
@@ -107,49 +114,75 @@ function App() {
       value: 'query',
       label: 'Query',
       icon: <ChatCircle size={NAV_ICON_SIZE} />,
-      content: <QueryInterface documents={documents || []} />
+      content: (
+        <Suspense fallback={<LoadingSpinner />}>
+          <QueryInterface documents={documents || []} />
+        </Suspense>
+      )
     },
     {
       value: 'upload',
       label: 'Upload',
       icon: <FileText size={NAV_ICON_SIZE} />,
-      content: <DocumentUpload onDocumentUploaded={handleDocumentUploaded} />
+      content: (
+        <Suspense fallback={<LoadingSpinner />}>
+          <DocumentUpload onDocumentUploaded={handleDocumentUploaded} />
+        </Suspense>
+      )
     },
     {
       value: 'integrations',
       label: 'Integrations',
       icon: <PlugsConnected size={NAV_ICON_SIZE} />,
-      content: <Integrations onDocumentsIngested={handleDocumentsIngested} />
+      content: (
+        <Suspense fallback={<LoadingSpinner />}>
+          <Integrations onDocumentsIngested={handleDocumentsIngested} />
+        </Suspense>
+      )
     },
     {
       value: 'knowledge',
       label: 'Knowledge',
       icon: <Brain size={NAV_ICON_SIZE} />,
       content: (
-        <DocumentList
-          documents={documents || []}
-          onDeleteDocument={handleDeleteDocument}
-          onEditDocument={handleEditDocumentContent}
-        />
+        <Suspense fallback={<LoadingSpinner />}>
+          <DocumentList
+            documents={documents || []}
+            onDeleteDocument={handleDeleteDocument}
+            onEditDocument={handleEditDocumentContent}
+          />
+        </Suspense>
       )
     },
     {
       value: 'scaling',
       label: 'Scaling',
       icon: <ChartBar size={NAV_ICON_SIZE} />,
-      content: <ScalingDashboard documents={documents || []} />
+      content: (
+        <Suspense fallback={<LoadingSpinner />}>
+          <ScalingDashboard documents={documents || []} />
+        </Suspense>
+      )
     },
     {
       value: 'azure',
       label: 'Azure',
       icon: <CloudArrowUp size={NAV_ICON_SIZE} />,
-      content: <AzureConfiguration />
+      content: (
+        <Suspense fallback={<LoadingSpinner />}>
+          <AzureConfiguration />
+        </Suspense>
+      )
     },
     {
       value: 'architecture',
       label: 'Architecture',
       icon: <TreeStructure size={NAV_ICON_SIZE} />,
-      content: <ArchitectureDiagram />
+      content: (
+        <Suspense fallback={<LoadingSpinner />}>
+          <ArchitectureDiagram />
+        </Suspense>
+      )
     }
   ]
 

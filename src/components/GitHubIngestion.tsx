@@ -1,4 +1,4 @@
-import { useState, useId } from 'react'
+import { useState, useId, useEffect } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -8,6 +8,7 @@ import { githubService } from '@/lib/integrations/github-service'
 import { GitHubRepo, Document } from '@/types'
 import { GithubLogo, Check, Warning } from '@phosphor-icons/react'
 import { toast } from 'sonner'
+import { secureTokenStorage } from '@/lib/services/secure-token-storage'
 
 interface GitHubIngestionProps {
   onDocumentsIngested: (documents: Document[]) => void
@@ -25,6 +26,20 @@ export function GitHubIngestion({ onDocumentsIngested }: GitHubIngestionProps) {
   const [isValidating, setIsValidating] = useState(false)
   const [isIngesting, setIsIngesting] = useState(false)
   const [validationResult, setValidationResult] = useState<{ valid: boolean; error?: string } | null>(null)
+
+  // Load any previously saved token on mount
+  useEffect(() => {
+    let mounted = true
+    secureTokenStorage.getToken('github').then((token) => {
+      if (!mounted || !token) return
+      setConfig(prev => ({ ...prev, token }))
+    }).catch(() => {
+      // ignore token load failures
+    })
+    return () => {
+      mounted = false
+    }
+  }, [])
 
   const handleValidate = async () => {
     if (!config.owner || !config.repo) {
@@ -62,6 +77,16 @@ export function GitHubIngestion({ onDocumentsIngested }: GitHubIngestionProps) {
     setIsIngesting(true)
 
     try {
+      // Store token securely before ingesting (gracefully degrade if KV not available)
+      if (config.token) {
+        try {
+          await secureTokenStorage.setToken('github', config.token)
+        } catch (error) {
+          // KV not available in dev - token won't be persisted but ingestion can continue
+          console.warn('Could not persist GitHub token (KV storage not available):', error)
+        }
+      }
+
       const documents = await githubService.ingestRepo(config)
       onDocumentsIngested(documents)
       toast.success(`Ingested ${documents.length} files from repository`)
