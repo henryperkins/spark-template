@@ -1,6 +1,8 @@
 // Centralized typed configuration for context, prompts, retrieval, safety, and telemetry
 // Values are sourced from Vite env (import.meta.env.VITE_*) with process.env fallback and sensible defaults.
 
+import type { AzureConfig } from '@/types'
+
 export interface AppConfig {
   model: {
     defaultModel: string
@@ -112,7 +114,7 @@ export function getAppConfig(): AppConfig {
     llm: {
       maxRetries: envInt('VITE_LLM_MAX_RETRIES', 3),
       retryBackoffMs: envInt('VITE_LLM_RETRY_BACKOFF_MS', 300),
-      timeoutMs: envInt('VITE_LLM_TIMEOUT_MS', 20000),
+      timeoutMs: envInt('VITE_LLM_TIMEOUT_MS', 60000),
       rateLimitQPS: envInt('VITE_LLM_RATE_LIMIT_QPS', 5),
       rateLimitBurst: envInt('VITE_LLM_RATE_LIMIT_BURST', 10),
       enableStreaming: envBool('VITE_LLM_ENABLE_STREAMING', false)
@@ -225,5 +227,74 @@ export const runtime = {
     if (this.isCloudflareWorkers()) return 'cloudflare-production'
     if (this.isCloudflareKVConfigured()) return 'development-cloudflare'
     return 'development-local'
+  },
+
+  /**
+   * Check if Azure Search is configured
+   */
+  isAzureSearchConfigured(): boolean {
+    return !!(
+      readEnv('VITE_AZURE_SEARCH_ENDPOINT') &&
+      readEnv('VITE_AZURE_SEARCH_KEY')
+    )
+  },
+
+  /**
+   * Build Azure configuration from environment variables
+   */
+  buildAzureConfigFromEnv(): AzureConfig | null {
+    const openaiEndpoint = readEnv('VITE_AZURE_OPENAI_ENDPOINT')
+    const openaiKey = readEnv('VITE_AZURE_OPENAI_KEY')
+    const searchEndpoint = readEnv('VITE_AZURE_SEARCH_ENDPOINT')
+    const searchKey = readEnv('VITE_AZURE_SEARCH_KEY')
+
+    // Require both OpenAI and Search for a complete configuration
+    if (!openaiEndpoint || !openaiKey || !searchEndpoint || !searchKey) {
+      return null
+    }
+
+    return {
+      openai: {
+        endpoint: openaiEndpoint,
+        apiKey: openaiKey,
+        deploymentName: readEnv('VITE_AZURE_OPENAI_DEPLOYMENT') || 'gpt-4o-mini',
+        embeddingDeploymentName: readEnv('VITE_AZURE_OPENAI_EMBEDDING_DEPLOYMENT') || 'text-embedding-3-large',
+        apiVersion: '2025-08-01-preview'
+      },
+      search: {
+        endpoint: searchEndpoint,
+        apiKey: searchKey,
+        indexName: readEnv('VITE_AZURE_SEARCH_INDEX') || 'documents',
+        apiVersion: '2025-08-01-preview',
+        vectorDimensions: 1536,
+        semanticConfiguration: {
+          enabled: true,
+          configName: 'semantic-config',
+          prioritizeTitle: true,
+          prioritizeKeywords: true
+        },
+        vectorCompression: {
+          enabled: false,
+          method: 'scalar'
+        },
+        customScoring: {
+          enabled: true,
+          recencyWeight: 2.0,
+          lengthWeight: 1.5,
+          metadataWeight: 0.3
+        },
+        hybridSearch: {
+          enabled: true,
+          maxTextRecallSize: 2000,
+          enableRRF: true,
+          enableSemanticReranker: true
+        },
+        contextCompression: {
+          enabled: false,
+          method: 'extractive',
+          compressionRatio: 0.5
+        }
+      }
+    }
   }
 }

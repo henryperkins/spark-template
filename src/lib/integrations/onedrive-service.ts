@@ -4,6 +4,42 @@ import { azureServiceManager } from '@/lib/azure-service-manager'
 import { embeddingManager } from '@/lib/embedding-manager'
 import { cacheManager } from '@/lib/cache-manager'
 
+// KV auth + persist helpers (mirror DocumentUpload logic)
+function getKVAuthHeader(): Record<string, string> {
+  try {
+    const env: any = (import.meta as any)?.env
+    const fromEnv = env?.VITE_KV_API_KEY as string | undefined
+    let fromLocal: string | undefined
+    if (typeof window !== 'undefined') {
+      fromLocal = window.localStorage?.getItem('KV_API_KEY') ?? undefined
+    }
+    const token = fromLocal || fromEnv
+    return token ? { Authorization: `Bearer ${token}` } : {}
+  } catch {
+    return {}
+  }
+}
+async function persistDocumentToWorker(doc: Document): Promise<void> {
+  try {
+    const resp = await fetch(`/api/documents/${encodeURIComponent(doc.id)}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...getKVAuthHeader()
+      },
+      body: JSON.stringify({ document: doc })
+    })
+    if (!resp.ok) {
+      // best-effort only
+       
+      console.warn('[onedrive-service] Persist to /api/documents failed', resp.status, resp.statusText)
+    }
+  } catch (err) {
+     
+    console.warn('[onedrive-service] Persist to /api/documents error', err)
+  }
+}
+
 interface OneDriveItem {
   id: string
   name: string
@@ -166,6 +202,11 @@ export class OneDriveService {
             volatility: 'medium'
           })
 
+          try {
+            await persistDocumentToWorker(finalDocument)
+          } catch {
+            // best-effort
+          }
           documents.push(finalDocument)
         } catch (error) {
           console.error(`Failed to process file ${file.name}:`, error)

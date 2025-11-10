@@ -52,6 +52,53 @@ const isFunction = <T,>(value: Setter<T>): value is (oldValue?: T) => T => {
   return typeof value === 'function'
 }
 
+async function setWithBestEffortRetries(
+  storage: CloudflareKVAdapter,
+  key: string,
+  value: unknown,
+  retries = 2
+): Promise<void> {
+  let attempt = 0
+   
+  while (true) {
+    try {
+      await storage.set(key, value)
+      return
+    } catch (error) {
+      attempt += 1
+      console.error(`[use-kv] Failed to set key "${key}" (attempt ${attempt}):`, error)
+      if (attempt > retries) {
+        return
+      }
+      const backoff = 100 * Math.pow(2, attempt - 1)
+      await new Promise(resolve => setTimeout(resolve, backoff))
+    }
+  }
+}
+
+async function deleteWithBestEffortRetries(
+  storage: CloudflareKVAdapter,
+  key: string,
+  retries = 2
+): Promise<void> {
+  let attempt = 0
+   
+  while (true) {
+    try {
+      await storage.delete(key)
+      return
+    } catch (error) {
+      attempt += 1
+      console.error(`[use-kv] Failed to delete key "${key}" (attempt ${attempt}):`, error)
+      if (attempt > retries) {
+        return
+      }
+      const backoff = 100 * Math.pow(2, attempt - 1)
+      await new Promise(resolve => setTimeout(resolve, backoff))
+    }
+  }
+}
+
 export function useKV<T = string>(key: string, initialValue?: NoInfer<T>) {
   const initialRef = useRef(initialValue)
   const [value, setValue] = useState<T | undefined>(initialValue)
@@ -61,13 +108,13 @@ export function useKV<T = string>(key: string, initialValue?: NoInfer<T>) {
     let cancelled = false
     const loadValue = async () => {
       try {
-        const loaded = await storage.get(key) as T | undefined
+        const loaded = (await storage.get(key)) as T | undefined
         if (cancelled) return
         if (loaded !== undefined) {
           setValue(loaded)
         } else if (initialRef.current !== undefined) {
           setValue(initialRef.current)
-          await storage.set(key, initialRef.current)
+          await setWithBestEffortRetries(storage, key, initialRef.current)
         }
       } catch (error) {
         console.error(`[use-kv] Failed to load key "${key}":`, error)
@@ -77,22 +124,24 @@ export function useKV<T = string>(key: string, initialValue?: NoInfer<T>) {
       }
     }
     loadValue()
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [key, storage])
 
   const setStoredValue = useCallback(
     (nextValue: Setter<T | undefined>) => {
       setValue(prev => {
         const resolved = isFunction(nextValue) ? nextValue(prev) : nextValue
+
         if (resolved !== undefined) {
-          storage.set(key, resolved).catch(error => {
-            console.error(`[use-kv] Failed to set key "${key}":`, error)
-          })
+          // Fire-and-forget with bounded retries; state stays optimistic but
+          // transient KV errors are less likely to cause data loss.
+          void setWithBestEffortRetries(storage, key, resolved)
         } else {
-          storage.delete(key).catch(error => {
-            console.error(`[use-kv] Failed to delete key "${key}":`, error)
-          })
+          void deleteWithBestEffortRetries(storage, key)
         }
+
         return resolved
       })
     },
@@ -100,9 +149,7 @@ export function useKV<T = string>(key: string, initialValue?: NoInfer<T>) {
   )
 
   const deleteValue = useCallback(() => {
-    storage.delete(key).catch(error => {
-      console.error(`[use-kv] Failed to delete key "${key}":`, error)
-    })
+    void deleteWithBestEffortRetries(storage, key)
     setValue(undefined)
   }, [key, storage])
 

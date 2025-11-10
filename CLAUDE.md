@@ -81,7 +81,7 @@ const [documents, setDocuments] = useKV<Document[]>('rag-documents', [])
 const [documents, setDocuments] = useStorage<Document[]>('rag-documents', [])
 ```
 
-**See**: `docs/CLOUDFLARE_MIGRATION.md` for detailed architecture information.
+**See**: `docs/CLOUDFLARE.md` for detailed architecture information.
 
 ### Multi-Agent RAG System
 

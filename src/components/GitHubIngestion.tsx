@@ -4,6 +4,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Progress } from '@/components/ui/progress'
 import { githubService } from '@/lib/integrations/github-service'
 import { GitHubRepo, Document } from '@/types'
 import { GithubLogo, Check, Warning, Key } from '@phosphor-icons/react'
@@ -85,44 +86,50 @@ export function GitHubIngestion({ onDocumentsIngested }: GitHubIngestionProps) {
     }
   }
 
-  const handleIngest = async () => {
-    if (!validationResult?.valid) {
-      toast.error('Please validate the repository first')
-      return
-    }
-
-    setIsIngesting(true)
-
-    try {
-      // Store token securely before ingesting (gracefully degrade if KV not available)
-      if (config.token) {
-        try {
-          await secureTokenStorage.setToken('github', config.token)
-        } catch (error) {
-          // KV not available in dev - token won't be persisted but ingestion can continue
-          console.warn('Could not persist GitHub token (KV storage not available):', error)
-        }
+  const [progress, setProgress] = useState<{ current: number; total: number; file: string } | null>(null)
+  
+    const handleIngest = async () => {
+      if (!validationResult?.valid) {
+        toast.error('Please validate the repository first')
+        return
       }
-
-      const documents = await githubService.ingestRepo(config)
-      onDocumentsIngested(documents)
-      toast.success(`Ingested ${documents.length} files from repository`)
-      
-      setConfig({
-        owner: '',
-        repo: '',
-        branch: 'main',
-        path: '',
-        token: '',
-      })
-      setValidationResult(null)
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
-      toast.error(errorMessage)
-    } finally {
-      setIsIngesting(false)
+  
+      setIsIngesting(true)
+      setProgress(null)
+  
+      try {
+        // Store token securely before ingesting (gracefully degrade if KV not available)
+        if (config.token) {
+          try {
+            await secureTokenStorage.setToken('github', config.token)
+          } catch (error) {
+            // KV not available in dev - token won't be persisted but ingestion can continue
+            console.warn('Could not persist GitHub token (KV storage not available):', error)
+          }
+        }
+  
+        const documents = await githubService.ingestRepo(config, (current, total, file) => {
+          setProgress({ current, total, file })
+        })
+        onDocumentsIngested(documents)
+        toast.success(`Ingested ${documents.length} files from repository`)
+        
+        setConfig({
+          owner: '',
+          repo: '',
+          branch: 'main',
+          path: '',
+          token: '',
+        })
+        setValidationResult(null)
+        setProgress(null)
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+        toast.error(errorMessage)
+      } finally {
+        setIsIngesting(false)
+      }
     }
-  }
 
   return (
     <Card>
@@ -252,37 +259,46 @@ export function GitHubIngestion({ onDocumentsIngested }: GitHubIngestionProps) {
         </form>
 
         {validationResult && (
-          <Alert variant={validationResult.valid ? 'default' : 'destructive'}>
-            <div className="flex items-center gap-2">
-              {validationResult.valid ? (
-                <Check size={16} className="text-primary" />
-              ) : (
-                <Warning size={16} />
-              )}
-              <AlertDescription>
-                {validationResult.valid
-                  ? 'Repository is accessible'
-                  : validationResult.error || 'Validation failed'}
-              </AlertDescription>
-            </div>
-          </Alert>
-        )}
-
-        <div className="flex gap-2">
-          <Button
-            onClick={handleValidate}
-            disabled={isValidating || !config.owner || !config.repo}
-            variant="outline"
-          >
-            {isValidating ? 'Validating...' : 'Validate'}
-          </Button>
-          <Button
-            onClick={handleIngest}
-            disabled={!validationResult?.valid || isIngesting}
-          >
-            {isIngesting ? 'Ingesting...' : 'Ingest Repository'}
-          </Button>
-        </div>
+                  <Alert variant={validationResult.valid ? 'default' : 'destructive'}>
+                    <div className="flex items-center gap-2">
+                      {validationResult.valid ? (
+                        <Check size={16} className="text-primary" />
+                      ) : (
+                        <Warning size={16} />
+                      )}
+                      <AlertDescription>
+                        {validationResult.valid
+                          ? 'Repository is accessible'
+                          : validationResult.error || 'Validation failed'}
+                      </AlertDescription>
+                    </div>
+                  </Alert>
+                )}
+        
+                {progress && (
+                  <div className="space-y-2">
+                    <Progress value={(progress.current / progress.total) * 100} />
+                    <p className="text-sm text-muted-foreground">
+                      Processing {progress.current}/{progress.total}: {progress.file}
+                    </p>
+                  </div>
+                )}
+        
+                <div className="flex gap-2">
+                  <Button
+                    onClick={handleValidate}
+                    disabled={isValidating || !config.owner || !config.repo}
+                    variant="outline"
+                  >
+                    {isValidating ? 'Validating...' : 'Validate'}
+                  </Button>
+                  <Button
+                    onClick={handleIngest}
+                    disabled={!validationResult?.valid || isIngesting}
+                  >
+                    {isIngesting ? 'Ingesting...' : 'Ingest Repository'}
+                  </Button>
+                </div>
       </CardContent>
     </Card>
   )

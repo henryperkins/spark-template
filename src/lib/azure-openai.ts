@@ -394,7 +394,7 @@ export class AzureOpenAIService {
       } else {
         // Non-streaming path
         try {
-          const result = await this.responsesClient.createResponse({
+          let result = await this.responsesClient.createResponse({
             messages: this.toResponseMessages(userMessages),
             instructions: systemInstructions,
             maxOutputTokens: options?.maxTokens,
@@ -407,6 +407,9 @@ export class AzureOpenAIService {
                 ? { type: 'json_object' }
                 : { type: 'text' }
           })
+          if (result && result.id && result.status && result.status !== 'completed') {
+            result = await this.pollResponseUntilDone(result.id, result, this.config.responsesTimeoutMs)
+          }
           return result.outputText
         } catch (error) {
           this.logResponsesClient400(error, options?.responseFormat === 'json_object')
@@ -478,7 +481,7 @@ export class AzureOpenAIService {
     // RESPONSES API PATH
     if (this.responsesClient) {
       try {
-        const result = await this.responsesClient.createResponse({
+        let result = await this.responsesClient.createResponse({
           messages: this.toResponseMessages(userMessages),
           instructions: systemInstructions,
           maxOutputTokens: options?.maxTokens,
@@ -491,6 +494,9 @@ export class AzureOpenAIService {
               ? { type: 'json_object' }
               : { type: 'text' }
         })
+        if (result && result.id && result.status && result.status !== 'completed') {
+          result = await this.pollResponseUntilDone(result.id, result, this.config.responsesTimeoutMs)
+        }
 
         const usage = result.usage
           ? {
@@ -676,12 +682,15 @@ export class AzureOpenAIService {
 
     // Use Responses API when available for enhanced metadata
     if (this.responsesClient) {
-      const result = await this.responsesClient.createResponse({
+      let result = await this.responsesClient.createResponse({
         messages: this.toResponseMessages(userMessages),
         instructions: systemInstructions,
         // Critical: RAG sync path should never queue in background
         background: false
       })
+      if (result && result.id && result.status && result.status !== 'completed') {
+        result = await this.pollResponseUntilDone(result.id, result, this.config.responsesTimeoutMs)
+      }
 
       return {
         text: result.outputText,
@@ -813,6 +822,33 @@ export class AzureOpenAIService {
     const base = 500 * Math.pow(2, attempt) // 500, 1000, 2000...
     const jitter = Math.random() * 250
     return Math.min(base + jitter, 8000)
+  }
+
+  // Poll Responses API until a terminal status or timeout, to avoid returning
+  // reasoning-only 'incomplete' responses to callers expecting final output.
+  private isTerminalResponsesStatus(status: string | undefined): boolean {
+    return status === 'completed' || status === 'failed' || status === 'cancelled'
+  }
+
+  private async pollResponseUntilDone(id: string, last: any, timeoutMs?: number): Promise<any> {
+    const deadline = Date.now() + Math.max(2000, (timeoutMs ?? 10000))
+    const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+    let delay = 200
+    try {
+      while (!this.isTerminalResponsesStatus(last?.status) && Date.now() < deadline) {
+        try {
+          last = await this.responsesClient!.retrieveResponse(id)
+          if (this.isTerminalResponsesStatus(last?.status)) break
+        } catch {
+          // ignore transient retrieve errors
+        }
+        await sleep(delay)
+        delay = Math.min(Math.floor(delay * 1.5), 1000)
+      }
+    } catch {
+      // ignore polling failures; return last best
+    }
+    return last
   }
 
   /**

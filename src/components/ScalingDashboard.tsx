@@ -33,6 +33,7 @@ import { SearchDebugger } from './SearchDebugger'
 import { toast } from 'sonner'
 import { queryHistoryService, type QueryHistoryEntry } from '@/lib/services/query-history'
 import { useStorage } from '@/hooks/use-kv'
+import { useDocumentsIndex } from '@/hooks/use-documents-index'
 
 interface ScalingDashboardProps {
   documents: Document[]
@@ -57,14 +58,15 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
   const [errorMetrics, setErrorMetrics] = useState<ErrorMetrics | null>(null)
   const [recentHistory, setRecentHistory] = useState<QueryHistoryEntry[]>([])
   const [activeNamespace, setActiveNamespace] = useStorage<string>('active-namespace', '')
-  const documentsWithErrors = useMemo(
+  const { documents: kbDocuments, loading: kbLoading } = useDocumentsIndex({ pageSize: 200 })
+  const kbDocumentsWithErrors = useMemo(
     () =>
-      documents.filter((document) => {
+      kbDocuments.filter((document) => {
         const hasProcessingError = document.processingStatus === 'error'
         const hasErrorMessage = typeof document.errorMessage === 'string' && document.errorMessage.trim().length > 0
         return hasProcessingError || hasErrorMessage
       }),
-    [documents]
+    [kbDocuments]
   )
 
   useEffect(() => {
@@ -356,7 +358,7 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
               <div className="flex flex-col gap-2 sm:flex-row sm:gap-3">
                 <Button
                   onClick={handleIncrementalRefresh}
-                  disabled={refreshing || documents.length === 0}
+                  disabled={refreshing || kbDocuments.length === 0}
                   className="w-full sm:flex-1"
                 >
                   <ArrowsClockwise size={16} className="mr-2" />
@@ -364,7 +366,7 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
                 </Button>
                 <Button
                   onClick={handleFullRefresh}
-                  disabled={refreshing || documents.length === 0}
+                  disabled={refreshing || kbDocuments.length === 0}
                   variant="secondary"
                   className="w-full sm:flex-1"
                 >
@@ -676,9 +678,9 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
               <CardTitle className="flex items-center gap-2">
                 <WarningCircle size={20} />
                 Error Tracking
-                {documentsWithErrors.length > 0 && (
+                {kbDocumentsWithErrors.length > 0 && (
                   <Badge variant="destructive" className="ml-auto">
-                    {documentsWithErrors.length} doc issue{documentsWithErrors.length === 1 ? '' : 's'}
+                    {kbDocumentsWithErrors.length} doc issue{kbDocumentsWithErrors.length === 1 ? '' : 's'}
                   </Badge>
                 )}
               </CardTitle>
@@ -825,9 +827,9 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
 
               <div className="space-y-2">
                 <h4 className="font-medium text-sm">Knowledge Base Documents</h4>
-                {documentsWithErrors.length > 0 ? (
+                {kbDocumentsWithErrors.length > 0 ? (
                   <div className="space-y-2">
-                    {documentsWithErrors.map((document) => (
+                    {kbDocumentsWithErrors.map((document) => (
                       <div key={document.id} className="p-3 bg-destructive/10 rounded-lg text-xs space-y-2">
                         <div className="flex items-center justify-between gap-2">
                           <span className="font-semibold text-destructive">{document.name}</span>
@@ -849,7 +851,7 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
                             </Badge>
                           )}
                           <Badge variant="secondary" className="text-[10px]">
-                            {document.chunks.length} chunk{document.chunks.length === 1 ? '' : 's'}
+                            {document.chunkCount} chunk{document.chunkCount === 1 ? '' : 's'}
                           </Badge>
                           <Badge variant="secondary" className="text-[10px]">
                             Uploaded {formatUploadDate(document.uploadedAt)}
@@ -900,12 +902,12 @@ export function ScalingDashboard({ documents }: ScalingDashboardProps) {
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
                   <div className="space-y-1">
                     <div className="text-sm text-muted-foreground">Documents</div>
-                    <div className="text-2xl font-bold">{documents.length}</div>
+                    <div className="text-2xl font-bold">{kbDocuments.length}</div>
                   </div>
                   <div className="space-y-1">
                     <div className="text-sm text-muted-foreground">Total Chunks</div>
                     <div className="text-2xl font-bold">
-                      {documents.reduce((acc, doc) => acc + doc.chunks.length, 0)}
+                      {kbDocuments.reduce((acc, doc) => acc + (doc.chunkCount || 0), 0)}
                     </div>
                   </div>
                   {refreshMetrics && (

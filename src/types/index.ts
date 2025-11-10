@@ -12,6 +12,27 @@ export interface Document {
   source?: 'upload' | 'github' | 'website' | 'dropbox' | 'onedrive'
   sourceUrl?: string
   sourceMetadata?: Record<string, unknown>
+  originalContent?: string
+}
+
+export interface DocumentIndex {
+  id: string
+  name: string
+  size: number
+  uploadedAt: string
+  type: string
+  source?: 'upload' | 'github' | 'website' | 'dropbox' | 'onedrive'
+  sourceUrl?: string
+  processingStatus: 'pending' | 'processing' | 'completed' | 'error'
+  azureIndexed?: boolean
+  errorMessage?: string
+  chunkCount: number
+  hasVectors?: boolean
+}
+
+export interface DocumentMeta extends Omit<DocumentIndex, 'chunkCount' | 'hasVectors'> {
+  sourceMetadata?: Record<string, unknown>
+  originalContent?: string
 }
 
 export interface DocumentChunk {

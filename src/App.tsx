@@ -7,11 +7,13 @@ import { Brain, FileText, ChatCircle, CloudArrowUp, ChartBar, PlugsConnected, Tr
 import { azureServiceManager } from '@/lib/azure-service-manager'
 import { cacheManager } from '@/lib/cache-manager'
 import { errorTracking } from '@/lib/services/error-tracker'
+import { intelligentChunkDocument } from '@/lib/rag'
+import { runtime } from '@/lib/config'
 
 const QueryInterface = lazy(() => import('@/components/QueryInterface').then(m => ({ default: m.QueryInterface })))
 const DocumentUpload = lazy(() => import('@/components/DocumentUpload').then(m => ({ default: m.DocumentUpload })))
 const Integrations = lazy(() => import('@/components/Integrations').then(m => ({ default: m.Integrations })))
-const DocumentList = lazy(() => import('@/components/DocumentList').then(m => ({ default: m.DocumentList })))
+const DocumentListV2 = lazy(() => import('@/components/DocumentListV2').then(m => ({ default: m.DocumentListV2 })))
 const ScalingDashboard = lazy(() => import('@/components/ScalingDashboard').then(m => ({ default: m.ScalingDashboard })))
 const AzureConfiguration = lazy(() => import('@/components/AzureConfiguration').then(m => ({ default: m.AzureConfiguration })))
 const ArchitectureDiagram = lazy(() => import('@/components/ArchitectureDiagram').then(m => ({ default: m.ArchitectureDiagram })))
@@ -23,13 +25,15 @@ const LoadingSpinner = () => (
 )
 
 function App() {
-  const [documents, setDocuments] = useStorage<Document[]>('rag-documents', [])
   const [azureConfig] = useStorage<AzureConfig | null>('azure-config', null)
 
   useEffect(() => {
-    // Initialize Azure services if config exists
-    if (azureConfig) {
-      azureServiceManager.initialize(azureConfig).catch(error => {
+    // Try environment-based config first (Option A), fall back to localStorage config
+    const envConfig = runtime.buildAzureConfigFromEnv()
+    const configToUse = envConfig || azureConfig
+
+    if (configToUse) {
+      azureServiceManager.initialize(configToUse).catch(error => {
         errorTracking.record(error, {
           type: 'runtime',
           agent: 'App.tsx',
@@ -39,14 +43,6 @@ function App() {
       })
     }
   }, [azureConfig])
-
-  const handleDocumentUploaded = (newDocument: Document) => {
-    setDocuments((prev = []) => [...prev, newDocument])
-  }
-
-  const handleDocumentsIngested = (newDocuments: Document[]) => {
-    setDocuments((prev = []) => [...prev, ...newDocuments])
-  }
 
   const handleDeleteDocument = async (documentId: string) => {
     if (azureServiceManager.isConfigured()) {
@@ -60,61 +56,97 @@ function App() {
     await cacheManager.invalidateDocument(documentId)
     await cacheManager.invalidateByPrefix('query-expansion')
     await cacheManager.invalidateByPrefix('rag-query')
-
-    setDocuments((prev = []) => prev.filter(doc => doc.id !== documentId))
   }
-
-  const handleEditDocumentContent = async (
-    documentId: string,
-    newContent: string
-  ): Promise<void> => {
-    const target = (documents || []).find(d => d.id === documentId)
-    if (!target) return
-
-    try {
-      let updated: Document
-
-      if (azureServiceManager.isConfigured()) {
-        updated = await azureServiceManager.updateDocumentWithAzure(target, newContent, {
-          preserveMetadata: true
-        })
-      } else {
-        const { intelligentChunkDocument } = await import('@/lib/rag')
-        const { chunks } = await intelligentChunkDocument(newContent, target.id, target.name)
-        updated = {
-          ...target,
-          chunks,
-          processed: true,
-          azureIndexed: false,
-          processingStatus: 'completed',
-          errorMessage: undefined
-        }
-      }
-
-      setDocuments((prev = []) =>
-        (prev || []).map(doc => (doc.id === documentId ? updated : doc))
-      )
-
-      await cacheManager.invalidateDocument(documentId)
-      await cacheManager.invalidateByPrefix('query-expansion')
-      await cacheManager.invalidateByPrefix('rag-query')
-    } catch (error) {
-      console.error('Failed to update document:', error)
-      setDocuments((prev = []) =>
-        (prev || []).map(doc =>
-          doc.id === documentId
-            ? {
-                ...doc,
-                processingStatus: 'error',
-                errorMessage:
-                  error instanceof Error ? error.message : 'Update failed'
-              }
-            : doc
-        )
+ 
+  // Edit handler: fetch meta/chunks from Worker, update locally or via Azure, then persist back to Worker
+  const handleEditDocumentContent = async (documentId: string, newContent: string) => {
+    // Load existing details
+    const detailsResp = await fetch(`/api/documents/${encodeURIComponent(documentId)}`)
+    if (!detailsResp.ok) {
+      const errText = await detailsResp.text().catch(() => '')
+      throw new Error(
+        `Failed to load document: ${detailsResp.status} ${detailsResp.statusText}${errText ? ` - ${errText}` : ''}`
       )
     }
+    const details = await detailsResp.json()
+    const meta = details.meta || {}
+    const existingChunks = Array.isArray(details.chunks) ? details.chunks : []
+ 
+    // Build base document from meta/chunks
+    const baseDoc: Document = {
+      id: documentId,
+      name: meta.name,
+      size: meta.size,
+      uploadedAt: meta.uploadedAt,
+      type: meta.type,
+      chunks: existingChunks,
+      processed: meta.processingStatus === 'completed' || existingChunks.length > 0,
+      azureIndexed: meta.azureIndexed,
+      processingStatus: meta.processingStatus,
+      errorMessage: undefined,
+      source: meta.source,
+      sourceUrl: meta.sourceUrl,
+      sourceMetadata: meta.sourceMetadata,
+      originalContent: meta.originalContent
+    }
+ 
+    let updated: Document
+ 
+    if (azureServiceManager.isConfigured()) {
+      updated = await azureServiceManager.updateDocumentWithAzure(baseDoc, newContent, {
+        preserveMetadata: true
+      })
+    } else {
+      const { chunks } = await intelligentChunkDocument(newContent, baseDoc.id, baseDoc.name)
+      updated = {
+        ...baseDoc,
+        chunks,
+        processed: true,
+        processingStatus: 'completed',
+        azureIndexed: false,
+        errorMessage: undefined
+      }
+    }
+ 
+    // Helper to provide Authorization header for Worker mutations
+    const getKVAuthHeader = (): Record<string, string> => {
+      try {
+        const env: any = (import.meta as any)?.env
+        const fromEnv = env?.VITE_KV_API_KEY as string | undefined
+        let fromLocal: string | undefined
+        if (typeof window !== 'undefined') {
+          fromLocal = window.localStorage?.getItem('KV_API_KEY') ?? undefined
+        }
+        const token = fromLocal || fromEnv
+        return token ? { Authorization: `Bearer ${token}` } : {}
+      } catch {
+        return {}
+      }
+    }
+ 
+    // Persist updated document back to Worker (updates meta + chunks and documents:index)
+    const persistResp = await fetch(`/api/documents/${encodeURIComponent(documentId)}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...getKVAuthHeader()
+      },
+      body: JSON.stringify({ document: updated })
+    })
+    if (!persistResp.ok) {
+      console.warn(
+        '[App] Persist updated document failed',
+        persistResp.status,
+        persistResp.statusText
+      )
+    }
+ 
+    // Invalidate caches
+    await cacheManager.invalidateDocument(documentId)
+    await cacheManager.invalidateByPrefix('query-expansion')
+    await cacheManager.invalidateByPrefix('rag-query')
   }
-
+ 
   const NAV_ICON_SIZE = 18
 
   const navigationTabs = [
@@ -124,7 +156,7 @@ function App() {
       icon: <ChatCircle size={NAV_ICON_SIZE} />,
       content: (
         <Suspense fallback={<LoadingSpinner />}>
-          <QueryInterface documents={documents || []} />
+          <QueryInterface />
         </Suspense>
       )
     },
@@ -134,7 +166,7 @@ function App() {
       icon: <FileText size={NAV_ICON_SIZE} />,
       content: (
         <Suspense fallback={<LoadingSpinner />}>
-          <DocumentUpload onDocumentUploaded={handleDocumentUploaded} />
+          <DocumentUpload onDocumentUploaded={() => {}} />
         </Suspense>
       )
     },
@@ -144,7 +176,7 @@ function App() {
       icon: <PlugsConnected size={NAV_ICON_SIZE} />,
       content: (
         <Suspense fallback={<LoadingSpinner />}>
-          <Integrations onDocumentsIngested={handleDocumentsIngested} />
+          <Integrations onDocumentsIngested={() => {}} />
         </Suspense>
       )
     },
@@ -154,8 +186,7 @@ function App() {
       icon: <Brain size={NAV_ICON_SIZE} />,
       content: (
         <Suspense fallback={<LoadingSpinner />}>
-          <DocumentList
-            documents={documents || []}
+          <DocumentListV2
             onDeleteDocument={handleDeleteDocument}
             onEditDocument={handleEditDocumentContent}
           />
@@ -168,7 +199,7 @@ function App() {
       icon: <ChartBar size={NAV_ICON_SIZE} />,
       content: (
         <Suspense fallback={<LoadingSpinner />}>
-          <ScalingDashboard documents={documents || []} />
+          <ScalingDashboard documents={[]} />
         </Suspense>
       )
     },

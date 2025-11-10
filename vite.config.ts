@@ -18,7 +18,17 @@ export default defineConfig({
   ],
   assetsInclude: ['**/*.wasm'],
   optimizeDeps: {
-    exclude: ['@dqbd/tiktoken']
+    exclude: ['@dqbd/tiktoken', 'pdfjs-dist']
+  },
+  build: {
+    target: 'esnext',
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'pdfjs-dist': ['pdfjs-dist']
+        }
+      }
+    }
   },
   resolve: {
     alias: {

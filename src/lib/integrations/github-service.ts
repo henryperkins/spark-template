@@ -5,6 +5,42 @@ import { embeddingManager } from '@/lib/embedding-manager'
 import { cacheManager } from '@/lib/cache-manager'
 import { secureTokenStorage } from '@/lib/services/secure-token-storage'
 
+// KV auth + persist helpers (mirror DocumentUpload logic)
+function getKVAuthHeader(): Record<string, string> {
+  try {
+    const env: any = (import.meta as any)?.env
+    const fromEnv = env?.VITE_KV_API_KEY as string | undefined
+    let fromLocal: string | undefined
+    if (typeof window !== 'undefined') {
+      fromLocal = window.localStorage?.getItem('KV_API_KEY') ?? undefined
+    }
+    const token = fromLocal || fromEnv
+    return token ? { Authorization: `Bearer ${token}` } : {}
+  } catch {
+    return {}
+  }
+}
+async function persistDocumentToWorker(doc: Document): Promise<void> {
+  try {
+    const resp = await fetch(`/api/documents/${encodeURIComponent(doc.id)}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...getKVAuthHeader()
+      },
+      body: JSON.stringify({ document: doc })
+    })
+    if (!resp.ok) {
+      // best-effort only
+       
+      console.warn('[github-service] Persist to /api/documents failed', resp.status, resp.statusText)
+    }
+  } catch (err) {
+     
+    console.warn('[github-service] Persist to /api/documents error', err)
+  }
+}
+
 /**
  * Robust base64 decoder that works in both browser and Node/vitest.
  * - Uses atob when available (browser/JSDOM)
@@ -173,80 +209,95 @@ export class GitHubService {
            !filename.includes('.')
   }
 
-  async ingestRepo(config: GitHubRepo): Promise<Document[]> {
-    const { owner, repo, branch = 'main', path = '', token } = config
-      const resolvedToken = await this.resolveToken(token)
-    try {
-      let files = await this.getAllFilesViaTree(owner, repo, branch, resolvedToken)
-      if (path) {
-        files = files.filter(f => f.path.startsWith(path))
-      }
-      const documents: Document[] = []
-      
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i]
-        try {
-          await this.delay(100)
-          const content = await this.getFileContent(owner, repo, file.path, branch, resolvedToken)
-          const documentId = `github-${file.sha}`
-          
-          const { chunks } = await intelligentChunkDocument(content, documentId, file.name)
-          
-          const document: Document = {
-            id: documentId,
-            name: file.path,
-            size: file.size,
-            uploadedAt: new Date().toISOString(),
-            type: 'text/plain',
-            chunks,
-            processed: true,
-            processingStatus: 'pending',
-            source: 'github',
-            sourceUrl: `https://github.com/${owner}/${repo}/blob/${branch}/${file.path}`,
-            sourceMetadata: {
-              owner,
-              repo,
-              branch,
-              path: file.path,
-            },
-          }
-
-          let finalDocument = document
-
-          if (azureServiceManager.isConfigured()) {
+  async ingestRepo(config: GitHubRepo, onProgress?: (current: number, total: number, file: string) => void): Promise<Document[]> {
+      const { owner, repo, branch = 'main', path = '', token } = config
+        const resolvedToken = await this.resolveToken(token)
+      try {
+        let files = await this.getAllFilesViaTree(owner, repo, branch, resolvedToken)
+        if (path) {
+          files = files.filter(f => f.path.startsWith(path))
+        }
+        const total = files.length
+        const documents: Document[] = []
+        
+        // Process files in parallel batches of 5 to respect rate limits
+        const batchSize = 5
+        for (let i = 0; i < files.length; i += batchSize) {
+          const batch = files.slice(i, i + batchSize)
+          const batchPromises = batch.map(async (file, batchIndex) => {
             try {
-              finalDocument = await azureServiceManager.processDocumentWithAzure(document)
+              const content = await this.getFileContent(owner, repo, file.path, branch, resolvedToken)
+              const documentId = `github-${file.sha}`
+              
+              const { chunks } = await intelligentChunkDocument(content, documentId, file.name)
+              
+              const document: Document = {
+                id: documentId,
+                name: file.path,
+                size: file.size,
+                uploadedAt: new Date().toISOString(),
+                type: 'text/plain',
+                chunks,
+                processed: true,
+                processingStatus: 'pending',
+                source: 'github',
+                sourceUrl: `https://github.com/${owner}/${repo}/blob/${branch}/${file.path}`,
+                sourceMetadata: {
+                  owner,
+                  repo,
+                  branch,
+                  path: file.path,
+                },
+              }
+  
+              let finalDocument = document
+  
+              if (azureServiceManager.isConfigured()) {
+                try {
+                  finalDocument = await azureServiceManager.processDocumentWithAzure(document)
+                } catch (error) {
+                  console.error(`Azure processing failed for ${file.path}:`, error)
+                }
+              }
+  
+              await embeddingManager.setMetadata({
+                version: 'v2025.01',
+                lastRefreshed: new Date().toISOString(),
+                checksum: await embeddingManager.calculateChecksum(content),
+                modelVersion: 'text-embedding-ada-002',
+                chunkCount: chunks.length,
+                documentId: finalDocument.id,
+                documentName: finalDocument.name,
+                volatility: 'low'
+              })
+              
+              try {
+                await persistDocumentToWorker(finalDocument)
+              } catch {
+                // best-effort
+              }
+              documents.push(finalDocument)
+              const progress = i + batchIndex + 1
+              console.log(`Processed ${progress}/${total}: ${file.path}`)
+              onProgress?.(progress, total, file.path)
             } catch (error) {
-              console.error(`Azure processing failed for ${file.path}:`, error)
+              console.error(`Failed to process file ${file.path}:`, error)
             }
-          }
-
-          await embeddingManager.setMetadata({
-            version: 'v2025.01',
-            lastRefreshed: new Date().toISOString(),
-            checksum: await embeddingManager.calculateChecksum(content),
-            modelVersion: 'text-embedding-ada-002',
-            chunkCount: chunks.length,
-            documentId: finalDocument.id,
-            documentName: finalDocument.name,
-            volatility: 'low'
           })
           
-          documents.push(finalDocument)
-          console.log(`Processed ${i + 1}/${files.length}: ${file.path}`)
-        } catch (error) {
-          console.error(`Failed to process file ${file.path}:`, error)
+          await Promise.all(batchPromises)
+          // Small delay between batches to be nice to API
+          await this.delay(1000)
         }
+  
+        await cacheManager.invalidateByPrefix('query-expansion')
+        await cacheManager.invalidateByPrefix('rag-query')
+        
+        return documents
+      } catch (error) {
+        throw new Error(`Failed to ingest GitHub repo: ${error instanceof Error ? error.message : 'Unknown error'}`)
       }
-
-      await cacheManager.invalidateByPrefix('query-expansion')
-      await cacheManager.invalidateByPrefix('rag-query')
-      
-      return documents
-    } catch (error) {
-      throw new Error(`Failed to ingest GitHub repo: ${error instanceof Error ? error.message : 'Unknown error'}`)
     }
-  }
 
   async validateConfig(config: GitHubRepo): Promise<{ valid: boolean; error?: string }> {
     try {

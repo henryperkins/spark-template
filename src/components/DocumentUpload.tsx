@@ -27,8 +27,41 @@ interface UploadProgress {
   error?: string
 }
 
-// 20 MB limit by default to avoid browser memory spikes and timeouts
+ // 20 MB limit by default to avoid browser memory spikes and timeouts
 const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024
+
+function getKVAuthHeader(): Record<string, string> {
+  const env: any = (import.meta as any)?.env
+  const fromEnv = env?.VITE_KV_API_KEY as string | undefined
+  let fromLocal: string | undefined
+  if (typeof window !== 'undefined') {
+    fromLocal = window.localStorage?.getItem('KV_API_KEY') ?? undefined
+  }
+  const token = fromLocal || fromEnv
+  console.log('[getKVAuthHeader] Token:', token) // Debug log
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+async function persistDocumentToWorker(doc: Document): Promise<void> {
+  try {
+    const headers = {
+      'Content-Type': 'application/json',
+      ...getKVAuthHeader()
+    }
+    console.log('[persistDocumentToWorker] Headers:', headers) // Debug log
+    const resp = await fetch(`/api/documents/${encodeURIComponent(doc.id)}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ document: doc })
+    })
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '')
+      console.warn('[DocumentUpload] Persist to /api/documents failed', resp.status, resp.statusText, text)
+    }
+  } catch (err) {
+    console.warn('[DocumentUpload] Persist to /api/documents error', err)
+  }
+}
 
 export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
   const [dragActive, setDragActive] = useState(false)
@@ -60,9 +93,9 @@ export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
         // Enqueue file; actual chunk uploads handled by useUploadQueue + processQueue.
         await addFile(file)
         updateProgress(5, 'processing')
-        // The ingestion pipeline (intelligentChunkDocument, etc.) will run once finalized.
-        // For now, return a placeholder Document; App will refresh from storage.
-        return {
+
+        // Create and persist a placeholder so it appears in the index while upload finalizes
+        const placeholder: Document = {
           id: documentId,
           name: file.name,
           size: file.size,
@@ -72,6 +105,12 @@ export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
           processed: false,
           processingStatus: 'pending'
         }
+        try {
+          await persistDocumentToWorker(placeholder)
+        } catch {
+          // best-effort only
+        }
+        return placeholder
       }
 
       // Small files: read directly and process
@@ -162,6 +201,13 @@ export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
 
       await cacheManager.invalidateByPrefix('query-expansion')
       await cacheManager.invalidateByPrefix('rag-query')
+
+      // Persist to Worker so DocumentListV2 (index API) reflects this upload
+      try {
+        await persistDocumentToWorker(finalDocument)
+      } catch {
+        // best-effort only; UI remains optimistic
+      }
 
       return finalDocument
     }

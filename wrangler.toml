@@ -72,11 +72,33 @@ preview_id = "ddc0a1afeb0141719657098396b17bd7"  # Preview namespace ID
 # Environment variables (non-sensitive, exposed to client via VITE_ prefix)
 [vars]
 VITE_APP_ENV = "production"
+VITE_DEFAULT_MODEL = "gpt-5-mini"
+VITE_USE_WORKER_KV = "true"
+
+# Azure OpenAI Configuration (non-sensitive endpoints only)
 VITE_AZURE_OPENAI_ENDPOINT = "https://thefoundry.openai.azure.com/"
-VITE_AZURE_SEARCH_ENDPOINT = "https://thesearch.search.windows.net"
 VITE_AZURE_OPENAI_DEPLOYMENT = "gpt-5-mini"
 VITE_AZURE_OPENAI_EMBEDDING_DEPLOYMENT = "text-embedding-3-large"
+# VITE_AZURE_OPENAI_KEY - Set in .env (local) or wrangler secret (production)
+
+# Azure Search Configuration (non-sensitive endpoints only)
+VITE_AZURE_SEARCH_ENDPOINT = "https://thesearch.search.windows.net"
 VITE_AZURE_SEARCH_INDEX = "documents"
+VITE_AZURE_SEARCH_PROXY = "true"
+
+# Cloudflare Configuration (non-sensitive IDs only)
+VITE_CLOUDFLARE_ACCOUNT_ID = "a77e479f6736120eadd99973dbeb705e"
+VITE_CLOUDFLARE_KV_NAMESPACE_ID = "51e4b1c9344342039c6d3046ea6652ae"
+# VITE_CLOUDFLARE_API_TOKEN - Set in .env (local) only, not needed in production
+
+# Authentication & Security - SECRETS REMOVED
+# Set these in .env for local development (already gitignored)
+# VITE_KV_API_KEY - Set in .env
+# VITE_ENCRYPTION_KEY - Set in .env
+
+# Worker-side environment variables (used by proxy, not exposed to client)
+AZURE_SEARCH_ENDPOINT = "https://thesearch.search.windows.net"
+AZURE_SEARCH_INDEX = "documents"
 
 # Secrets (sensitive values - use: npx wrangler secret put <KEY_NAME>)
 # After deployment, run these commands:
@@ -85,6 +107,6 @@ VITE_AZURE_SEARCH_INDEX = "documents"
 # npx wrangler secret put VITE_AZURE_SEARCH_KEY (if using Azure)
 # npx wrangler secret put LOGS_API_KEY       # used to authorize /api/logs (Bearer token)
 # npx wrangler secret put KV_API_KEY         # used to authorize /api/kv (Bearer token) → must match Authorization: Bearer sent by the client
-# npx wrangler secret put AZURE_API_KEY      # used to authorize /api/azure-search (Bearer token)
+# npx wrangler secret put AZURE_SEARCH_KEY    # used by worker proxy for /api/azure-search
 # npx wrangler secret put MIGRATION_KEY      # used to authorize /api/migrate (Bearer token)
 # npx wrangler secret put OPENAI_API_KEY     # enables /api/llm forwarding to OpenAI

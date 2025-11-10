@@ -6,6 +6,7 @@ import { AgentStepEvent } from '@/lib/services/telemetry'
 import { llmService } from '@/lib/services/llm-service'
 import { findRelevantChunks } from '@/lib/rag'
 import { errorTracking } from '@/lib/services/error-tracker'
+import { azureServiceManager } from '@/lib/azure-service-manager'
 
 export interface StreamingMessage {
   id: string
@@ -21,7 +22,7 @@ export interface StreamingMessage {
 
 interface UseStreamingQueryOptions {
   agenticMode: boolean
-  documents: Document[]
+  documents?: Document[]
   orchestrator?: AgenticOrchestrator
   onWorkflowUpdate?: (steps: AgentWorkflowStep[]) => void
 }
@@ -70,7 +71,7 @@ export function useStreamingQuery(options: UseStreamingQueryOptions) {
       if (agenticMode && orchestrator) {
         // Agentic mode: Use orchestrator (which handles its own workflow)
         const runId = userMessage.id
-        agenticResult = await orchestrator.processQuery(query, documents, {
+        agenticResult = await orchestrator.processQuery(query, documents || [], {
           runId,
           onWorkflowUpdate,
           onStepEvent: (event: AgentStepEvent) => {
@@ -114,16 +115,16 @@ export function useStreamingQuery(options: UseStreamingQueryOptions) {
         ))
 
       } else {
-        // Non-agentic mode: Use direct RAG with streaming
-        sources = await findRelevantChunks(query, documents, 5, 'hybrid', {
-          onAzureFallback: () => {
-            azureFallbackDetected = true
-          }
-        })
+        // Non-agentic mode: AzureSearch-first with local fallback
+        const azureConfigured = azureServiceManager.isConfigured()
 
-        // Build context from sources
-        const context = sources.map(s => s.content).join('\n\n')
-        const prompt = `Based on the following context, answer the question concisely and accurately.
+        if (azureConfigured) {
+          // Retrieve from Azure AI Search
+          sources = await azureServiceManager.searchWithAzure(query, 'hybrid')
+
+          // Build context and stream via LLM service (UI must route LLM calls through LLMService)
+          const context = sources.map(s => s.content).join('\n\n')
+          const prompt = `Based on the following context, answer the question concisely and accurately.
 
 Context:
 ${context}
@@ -132,60 +133,146 @@ Question: ${query}
 
 Answer:`
 
-        let accumulatedContent = ''
-
-        // Stream the response
-        try {
-          const stream = llmService.generateTextStream(prompt, {
-            maxTokens: 1000,
-            temperature: 0.7
-          })
-
-          for await (const chunk of stream) {
-            if (abortControllerRef.current?.signal.aborted) {
-              break
+          let accumulatedContent = ''
+          try {
+            const stream = llmService.generateTextStream(prompt, {
+              maxTokens: 1000,
+              temperature: 0.7
+            })
+            for await (const chunk of stream) {
+              if (abortControllerRef.current?.signal.aborted) break
+              accumulatedContent += chunk
+              setMessages(prev => prev.map(msg =>
+                msg.id === assistantMessage.id
+                  ? { ...msg, content: accumulatedContent }
+                  : msg
+              ))
+              await new Promise(resolve => setTimeout(resolve, 20))
             }
-
-            accumulatedContent += chunk
-
-            // Update message with streaming content
-            setMessages(prev => prev.map(msg =>
-              msg.id === assistantMessage.id
-                ? { ...msg, content: accumulatedContent }
-                : msg
-            ))
-
-            // Small delay for smooth visual streaming
-            await new Promise(resolve => setTimeout(resolve, 20))
+          } catch (streamError) {
+            console.warn('[streaming] Azure path stream failed, using fallback:', streamError)
+            const fallbackResponse = await llmService.generateText(prompt, {
+              maxTokens: 1000,
+              temperature: 0.7
+            })
+            accumulatedContent = fallbackResponse
           }
-        } catch (streamError) {
-          console.warn('[streaming] Stream failed, using fallback:', streamError)
-          // Fallback to non-streaming if stream fails
-          const fallbackResponse = await llmService.generateText(prompt, {
-            maxTokens: 1000,
-            temperature: 0.7
-          })
-          accumulatedContent = fallbackResponse
-        }
 
-        // Mark as complete with final metadata
-        setMessages(prev => prev.map(msg =>
-          msg.id === assistantMessage.id
-            ? {
-                ...msg,
-                content: accumulatedContent,
-                isStreaming: false,
-                sources: sources.length > 0 ? sources : undefined,
-                azureUsed: sources.some(s => s.azureScore !== undefined),
-                azureFallback: azureFallbackDetected
+          setMessages(prev => prev.map(msg =>
+            msg.id === assistantMessage.id
+              ? {
+                  ...msg,
+                  content: accumulatedContent,
+                  isStreaming: false,
+                  sources: sources.length > 0 ? sources : undefined,
+                  azureUsed: true,
+                  azureFallback: azureFallbackDetected
+                }
+              : msg
+          ))
+
+        } else {
+          // Local fallback: load documents from Worker API if not provided
+          let localDocuments = documents
+          if (!localDocuments || localDocuments.length === 0) {
+            try {
+              const idxResp = await fetch('/api/documents?page=1&pageSize=200')
+              if (idxResp.ok) {
+                const idxData = await idxResp.json()
+                const ids: string[] = (idxData.documents || []).map((d: any) => d.id)
+                const detailed: Document[] = []
+                for (const id of ids) {
+                  try {
+                    const r = await fetch(`/api/documents/${id}`)
+                    if (!r.ok) continue
+                    const d = await r.json()
+                    const meta = d.meta || {}
+                    const chunks = d.chunks || []
+                    detailed.push({
+                      id: meta.id || id,
+                      name: meta.name,
+                      size: meta.size,
+                      uploadedAt: meta.uploadedAt,
+                      type: meta.type,
+                      chunks,
+                      processed: meta.processingStatus === 'completed' || !!(chunks && chunks.length > 0),
+                      azureIndexed: meta.azureIndexed,
+                      processingStatus: meta.processingStatus,
+                      errorMessage: meta.errorMessage,
+                      source: meta.source,
+                      sourceUrl: meta.sourceUrl,
+                      sourceMetadata: meta.sourceMetadata
+                    } as Document)
+                  } catch {
+                    // skip faulty doc
+                  }
+                }
+                localDocuments = detailed
               }
-            : msg
-        ))
+            } catch {
+              // ignore fetch errors; will continue with empty list
+            }
+          }
+
+          sources = await findRelevantChunks(query, localDocuments || [], 5, 'hybrid', {
+            onAzureFallback: () => {
+              azureFallbackDetected = true
+            }
+          })
+
+          const context = sources.map(s => s.content).join('\n\n')
+          const prompt = `Based on the following context, answer the question concisely and accurately.
+
+Context:
+${context}
+
+Question: ${query}
+
+Answer:`
+
+          let accumulatedContent = ''
+          try {
+            const stream = llmService.generateTextStream(prompt, {
+              maxTokens: 1000,
+              temperature: 0.7
+            })
+
+            for await (const chunk of stream) {
+              if (abortControllerRef.current?.signal.aborted) break
+              accumulatedContent += chunk
+              setMessages(prev => prev.map(msg =>
+                msg.id === assistantMessage.id
+                  ? { ...msg, content: accumulatedContent }
+                  : msg
+              ))
+              await new Promise(resolve => setTimeout(resolve, 20))
+            }
+          } catch (streamError) {
+            console.warn('[streaming] Stream failed, using fallback:', streamError)
+            const fallbackResponse = await llmService.generateText(prompt, {
+              maxTokens: 1000,
+              temperature: 0.7
+            })
+            accumulatedContent = fallbackResponse
+          }
+
+          setMessages(prev => prev.map(msg =>
+            msg.id === assistantMessage.id
+              ? {
+                  ...msg,
+                  content: accumulatedContent,
+                  isStreaming: false,
+                  sources: sources.length > 0 ? sources : undefined,
+                  azureUsed: false,
+                  azureFallback: azureFallbackDetected
+                }
+              : msg
+          ))
+        }
 
         // Log query to history (non-agentic)
         const totalDuration = Date.now() - startTime
         const { queryHistoryService } = await import('@/lib/services/query-history')
-        const { azureServiceManager } = await import('@/lib/azure-service-manager')
 
         queryHistoryService.add({
           id: userMessage.id,
@@ -193,12 +280,12 @@ Answer:`
           query,
           routing: {
             strategy: 'hybrid',
-            reasoning: 'Non-agentic mode with streaming: default hybrid search',
+            reasoning: azureConfigured ? 'AzureSearch-first retrieval' : 'Local hybrid search over client documents',
             confidence: 1.0
           },
           resultCount: sources.length,
           topScore: sources[0]?.relevanceScore || 0,
-          azureUsed: azureServiceManager.isConfigured(),
+          azureUsed: azureConfigured,
           azureFallback: azureFallbackDetected,
           totalDuration
         }).catch(error => {

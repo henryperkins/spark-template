@@ -11,7 +11,9 @@ export class AzureSearchService {
   }
 
   private shouldProxy(): boolean {
-    return typeof window !== 'undefined'
+    // Only use proxy if explicitly enabled via environment variable
+    // For Option A (direct Azure calls), we want to call Azure directly from the browser
+    return typeof window !== 'undefined' && import.meta.env.VITE_AZURE_SEARCH_PROXY === 'true'
   }
 
   private getBearerToken(): string | undefined {
@@ -26,8 +28,8 @@ export class AzureSearchService {
       // ignore storage access errors (Safari ITP, disabled storage, etc.)
     }
     // Fallback for build-time key (e.g., for demos, CI)
-    if (import.meta.env.VITE_AZURE_API_KEY) {
-      return import.meta.env.VITE_AZURE_API_KEY as string
+    if (import.meta.env.VITE_AZURE_SEARCH_KEY) {
+      return import.meta.env.VITE_AZURE_SEARCH_KEY as string
     }
     return undefined
   }
@@ -143,12 +145,24 @@ export class AzureSearchService {
       console.error('Azure Search testConnection error:', error)
       // Check if it's a CORS error
       if (error instanceof TypeError && error.message.includes('Failed to fetch')) {
+        const origin = typeof window !== 'undefined' ? window.location.origin : 'your domain'
+        const portalUrl = 'https://portal.azure.com/#blade/HubsExtension/BrowseResource/resourceType/Microsoft.Search%2FsearchServices'
+        const serviceName = this.config.endpoint.replace('https://', '').replace('.search.windows.net', '')
+        
         const err = {
           success: false,
-          error: 'CORS Error: Azure Search must be configured to allow requests from your origin. ' +
-                 'In Azure Portal, go to your Search service → Settings → CORS, and add your origin ' +
-                 '(e.g., http://localhost:5001 or your production URL). Note: Testing from localhost may ' +
-                 'require enabling CORS for development. Alternatively, test the connection from a deployed environment.'
+          error: `CORS Error: Azure Search blocks requests from ${origin}
+
+Quick Fix (2 minutes):
+1. Open Azure Portal: ${portalUrl}
+2. Select your Search service: "${serviceName}"
+3. Go to Settings → CORS
+4. Add origin: ${origin}
+5. Click Save and wait 2-3 minutes
+
+Alternative Solutions:
+• Enable proxy mode: Set VITE_AZURE_SEARCH_PROXY=true in your environment
+• See full guide: https://github.com/your-repo/docs/CORS-RESOLUTION.md`
         }
         try { errorTracking.record(new Error(err.error), { type: 'retrieval', agent: 'AzureSearch', code: 'search_cors' }) } catch {
           // Ignore error tracking failures

@@ -44,7 +44,7 @@ Document name: ${fileName}
 Content sample (first 500 chars):\n${contentSample}`
 
     try {
-      const value = await llmService.generateJson(systemPrompt, chunkingDecisionSchema, { maxTokens: 300 })
+      const value = await llmService.generateJson(systemPrompt, chunkingDecisionSchema, { maxTokens: 900 })
       return { ok: true, value }
     } catch (err) {
       if (err instanceof LLMError && err.code === 'EPARSE') {

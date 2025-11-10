@@ -16,9 +16,10 @@ import { SafeMarkdown } from './SafeMarkdown'
 import { useStreamingQuery } from '@/hooks/use-streaming-query'
 import { queryHistoryService } from '@/lib/services/query-history'
 import { cn } from '@/lib/utils'
+import { azureServiceManager } from '@/lib/azure-service-manager'
 
 interface QueryInterfaceProps {
-  documents: Document[]
+  documents?: Document[]
 }
 
 export function QueryInterface({ documents }: QueryInterfaceProps) {
@@ -146,12 +147,12 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Ask a question about your documents..."
-              disabled={loading || documents.length === 0}
+              disabled={loading}
               className="flex-1"
             />
             <Button
               type="submit"
-              disabled={loading || !query.trim() || documents.length === 0}
+              disabled={loading || !query.trim()}
               className="w-full sm:w-auto"
             >
               {loading ? (
@@ -162,7 +163,7 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
             </Button>
           </form>
 
-          {documents.length === 0 && (
+          {!azureServiceManager.isConfigured() && (documents?.length || 0) === 0 && (
             <div className="mt-3 rounded-lg border border-border/50 bg-muted/20 p-3">
               <p className="text-sm font-medium text-foreground mb-1">
                 Add content to unlock high-quality answers

@@ -429,6 +429,18 @@ export class ResponsesClient {
       stream: flags.stream
     }
 
+    // Ensure we always cap output tokens with a sane default to avoid unbounded responses.
+    if (
+      body.max_output_tokens === undefined &&
+      (options.maxOutputTokens ?? this.config.defaultMaxOutputTokens)
+    ) {
+      const cap =
+        options.maxOutputTokens ?? this.config.defaultMaxOutputTokens
+      if (cap && cap > 0) {
+        body.max_output_tokens = cap
+      }
+    }
+
     // Some Azure-hosted models (e.g. gpt-5-mini / strict variants) reject unsupported params
     // like `temperature`/`top_p`. Respect that by only sending these when non-strict.
     const isStrictModel =
@@ -566,6 +578,12 @@ export class ResponsesClient {
 
     return body
   }
+
+  /**
+   * Normalize a raw Responses API JSON into a stable text string.
+   * This is primarily used when we get `status: 'incomplete'` with only
+   * reasoning output and no concrete `output_text` yet.
+   */
 
   private async fetchWithAuth(
     path: string,
@@ -887,17 +905,17 @@ export class ResponsesClient {
       }
     }
 
-    // 3) Prefer reasoning items explicitly before general text extraction
-    const reasoningChunks = this.extractReasoningChunks(json.output)
-    if (reasoningChunks.length) {
-      const joined = reasoningChunks.join('')
-      if (joined.trim()) return joined
-    }
-
-    // 4) Gather assistant/tool text regardless of the exact content shape
+    // 3) Prefer actual assistant/tool text first (JSON/text) over reasoning previews
     const outputChunks = this.collectTextFromOutput(json.output)
     if (outputChunks.length) {
       const joined = outputChunks.join('')
+      if (joined.trim()) return joined
+    }
+
+    // 4) Fallback: reasoning items only if no concrete output text was found
+    const reasoningChunks = this.extractReasoningChunks(json.output)
+    if (reasoningChunks.length) {
+      const joined = reasoningChunks.join('')
       if (joined.trim()) return joined
     }
 
@@ -984,35 +1002,51 @@ export class ResponsesClient {
       return []
     }
     const chunks: string[] = []
+
     for (const item of output) {
       if (!item || typeof item !== 'object') continue
-      if (typeof item.output_text === 'string') {
+
+      // Direct text fields on the item
+      if (typeof item.output_text === 'string' && item.output_text.trim()) {
         chunks.push(item.output_text)
       }
-      if (typeof item.text === 'string' && item.type !== 'input_text') {
+      if (
+        typeof item.text === 'string' &&
+        item.text.trim() &&
+        item.type !== 'input_text'
+      ) {
         chunks.push(item.text)
       }
+
+      // Some variants expose text as an array of strings
       if (Array.isArray(item.text)) {
         for (const textPart of item.text) {
-          if (typeof textPart === 'string' && textPart.length) {
+          if (typeof textPart === 'string' && textPart.trim()) {
             chunks.push(textPart)
           }
         }
       }
+
+      // message.content: walk nested content nodes
       if (item.content !== undefined) {
         chunks.push(...this.collectTextFromContentNode(item.content))
       }
+
+      // reasoning.summary-style items
       if (Array.isArray(item.summary)) {
         for (const part of item.summary) {
-          if (typeof part?.text === 'string') {
+          if (typeof part?.text === 'string' && part.text.trim()) {
             chunks.push(part.text)
           }
         }
       }
+
+      // Nested output arrays
       if (Array.isArray(item.output)) {
         chunks.push(...this.collectTextFromOutput(item.output))
       }
     }
+
     return chunks.filter(text => typeof text === 'string' && text.length > 0)
   }
 

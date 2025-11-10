@@ -21,6 +21,9 @@ markdown-output
 coverage/
 .pytest_cache/
 
+# Documentation
+docs/archive/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

@@ -207,23 +207,23 @@ export class CloudflareKV implements CloudflareKVAdapter {
   }
 
   async set(key: string, value: unknown): Promise<void> {
-    try {
-      const encodedKey = encodeURIComponent(key)
-      const body = typeof value === 'string' ? value : JSON.stringify(value)
-      const path = this.useWorkerAPI ? `/${encodedKey}` : `/values/${encodedKey}`
-      const method = this.useWorkerAPI ? 'POST' : 'PUT'
-
-      await this.request(path, {
-        method,
-        body,
-      })
-
-      console.debug(`${LOG_PREFIX} Set key "${key}" (${body.length} bytes)`)
-    } catch (error) {
-      console.error(`${LOG_PREFIX} Failed to set key "${key}":`, error)
-      throw error
+      try {
+        const encodedKey = encodeURIComponent(key)
+        const body = JSON.stringify(value)
+        const path = this.useWorkerAPI ? `/${encodedKey}` : `/values/${encodedKey}`
+        const method = this.useWorkerAPI ? 'POST' : 'PUT'
+  
+        await this.request(path, {
+          method,
+          body,
+        })
+  
+        console.debug(`${LOG_PREFIX} Set key "${key}" (${body.length} bytes)`)
+      } catch (error) {
+        console.error(`${LOG_PREFIX} Failed to set key "${key}":`, error)
+        throw error
+      }
     }
-  }
 
   async delete(key: string): Promise<void> {
     try {
