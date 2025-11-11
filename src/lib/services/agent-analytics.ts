@@ -125,11 +125,28 @@ class AgentAnalytics {
       agent: event.agent,
       action: event.action,
       stepIndex: event.stepIndex,
-      duration: event.duration,
-      failureReason: event.failureReason,
       severity,
       code,
       timestamp: new Date().toISOString()
+    } as {
+      type: 'agent_step_alert'
+      runId: string
+      query: string
+      agent: string
+      action: string
+      stepIndex: number
+      severity: 'warning' | 'error'
+      code: AgentAlertCode
+      timestamp: string
+      duration?: number
+      failureReason?: string
+    }
+
+    if (typeof event.duration === 'number') {
+      alertPayload.duration = event.duration
+    }
+    if (event.failureReason) {
+      alertPayload.failureReason = event.failureReason
     }
 
     void analyticsBackend.send('agent_step_alert', alertPayload)

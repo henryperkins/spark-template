@@ -6,21 +6,15 @@ import type { KBContext } from './agent-context'
 
 export type QueryComplexity = 'simple' | 'moderate' | 'complex'
 
-export interface QueryClassification {
-  complexity: QueryComplexity
-  reasoning: string
-  recommendedStrategy: 'direct' | 'planned' | 'iterative'
-  requiresDecomposition: boolean
-  estimatedSubQueries?: number
-}
-
-const queryClassificationSchema: z.ZodType<QueryClassification> = z.object({
+const queryClassificationSchema = z.object({
   complexity: z.enum(['simple', 'moderate', 'complex']),
   reasoning: z.string().min(5),
   recommendedStrategy: z.enum(['direct', 'planned', 'iterative']),
   requiresDecomposition: z.boolean(),
   estimatedSubQueries: z.number().int().min(1).max(6).optional()
 })
+
+export type QueryClassification = z.infer<typeof queryClassificationSchema>
 
 export class QueryClassifierAgent {
   /**

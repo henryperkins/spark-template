@@ -391,7 +391,7 @@ export function createQueryExecutionContext(
   const tokenTotal = options?.tokenBudget || 50000 // Default 50k tokens
   const timeTotal = options?.timeBudgetMs || 60000 // Default 60s
 
-  return {
+  const context: QueryExecutionContext = {
     runId,
     query,
     kb,
@@ -422,8 +422,10 @@ export function createQueryExecutionContext(
     llmCalls: [],
     warnings: [],
     azureFallback: false,
-    session: options?.session
+    ...(options?.session ? { session: options.session } : {})
   }
+
+  return context
 }
 
 /**
@@ -497,7 +499,7 @@ export function canAffordTime(
  * Prices in USD per 1M tokens.
  */
 export function getModelPricing(model: string): { prompt: number; completion: number } {
-  const pricing: Record<string, { prompt: number; completion: number }> = {
+  const pricing = {
     'gpt-4': { prompt: 30, completion: 60 },
     'gpt-4-turbo': { prompt: 10, completion: 30 },
     'gpt-4o': { prompt: 5, completion: 15 },
@@ -509,10 +511,12 @@ export function getModelPricing(model: string): { prompt: number; completion: nu
     'text-embedding-ada-002': { prompt: 0.1, completion: 0 },
     'text-embedding-3-small': { prompt: 0.02, completion: 0 },
     'text-embedding-3-large': { prompt: 0.13, completion: 0 }
-  }
+  } as const satisfies Record<string, { prompt: number; completion: number }>
 
   // Exact hit
-  if (pricing[model]) return pricing[model]
+  if (model in pricing) {
+    return pricing[model as keyof typeof pricing]
+  }
 
   // Heuristic fallback for common aliases/suffixes (Azure or vendor-specific names)
   const m = model.toLowerCase()

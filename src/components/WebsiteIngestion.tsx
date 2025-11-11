@@ -103,15 +103,21 @@ export function WebsiteIngestion({ onDocumentsIngested }: WebsiteIngestionProps)
 
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <Label htmlFor="max-depth">Max Depth: {config.maxDepth}</Label>
+            <Label htmlFor="max-depth">Max Depth: {config.maxDepth ?? 2}</Label>
           </div>
           <Slider
             id="max-depth"
             min={1}
             max={5}
             step={1}
-            value={[config.maxDepth || 2]}
-            onValueChange={(value) => setConfig({ ...config, maxDepth: value[0] })}
+            value={[config.maxDepth ?? 2]}
+            onValueChange={(value) => {
+              const nextDepth = typeof value[0] === 'number' ? value[0] : config.maxDepth ?? 2
+              setConfig(prev => ({
+                ...prev,
+                maxDepth: nextDepth
+              }))
+            }}
           />
           <p className="text-xs text-muted-foreground">
             Number of link levels to follow from the starting URL
@@ -120,15 +126,21 @@ export function WebsiteIngestion({ onDocumentsIngested }: WebsiteIngestionProps)
 
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <Label htmlFor="max-pages">Max Pages: {config.maxPages}</Label>
+            <Label htmlFor="max-pages">Max Pages: {config.maxPages ?? 50}</Label>
           </div>
           <Slider
             id="max-pages"
             min={10}
             max={200}
             step={10}
-            value={[config.maxPages || 50]}
-            onValueChange={(value) => setConfig({ ...config, maxPages: value[0] })}
+            value={[config.maxPages ?? 50]}
+            onValueChange={(value) => {
+              const nextPages = typeof value[0] === 'number' ? value[0] : config.maxPages ?? 50
+              setConfig(prev => ({
+                ...prev,
+                maxPages: nextPages
+              }))
+            }}
           />
           <p className="text-xs text-muted-foreground">
             Maximum number of pages to scrape

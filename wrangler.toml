@@ -4,6 +4,7 @@
 name = "agentic-rag"
 main = "worker/index.ts"
 compatibility_date = "2025-11-02"
+compatibility_flags = ["nodejs_als"]
 workers_dev = true
 
 # Enable Logpush for Worker logs

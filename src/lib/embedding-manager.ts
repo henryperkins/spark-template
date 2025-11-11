@@ -121,7 +121,10 @@ export class EmbeddingManager {
 
     for (let i = 0; i < documents.length; i++) {
       const document = documents[i]
-      
+      if (!document) {
+        continue
+      }
+
       if (onProgress) {
         onProgress({ current: i + 1, total: documents.length, documentName: document.name })
       }
@@ -169,7 +172,10 @@ export class EmbeddingManager {
 
     for (let i = 0; i < documents.length; i++) {
       const document = documents[i]
-      
+      if (!document) {
+        continue
+      }
+
       if (onProgress) {
         onProgress({ current: i + 1, total: documents.length, documentName: document.name })
       }

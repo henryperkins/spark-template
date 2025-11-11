@@ -276,7 +276,7 @@ export function useUploadQueue() {
             continue
           }
 
-          await markItem(item.id, { status: 'uploading', error: undefined })
+          await markItem(item.id, { status: 'uploading' })
 
           let uploadedChunks = item.chunks.filter((c) => c.uploaded).length
 
@@ -358,8 +358,7 @@ export function useUploadQueue() {
               await finalizeWorkerUpload(item)
               await markItem(item.id, {
                 status: 'completed',
-                progress: 100,
-                error: undefined
+                progress: 100
               })
             } catch (error) {
               await markItem(item.id, {

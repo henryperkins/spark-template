@@ -65,6 +65,9 @@ export class JSONRepairAgent implements IJSONRepairAgent {
     // Try each attempt with schema validation
     for (let i = 0; i < attempts.length; i++) {
       const t = attempts[i]
+      if (t === undefined) {
+        continue
+      }
       try {
         const parsed = JSON.parse(t)
         const value = input.schema.parse(parsed)
@@ -74,10 +77,16 @@ export class JSONRepairAgent implements IJSONRepairAgent {
       }
     }
 
+    const contextLabel = input.contextLabel
+    const labelSuffix =
+      typeof contextLabel === 'string' && contextLabel.length > 0
+        ? ` for ${contextLabel}`
+        : ''
+
     return {
       ok: false,
       error: {
-        message: `Failed to repair JSON${input.contextLabel ? ` for ${input.contextLabel}` : ''}`,
+        message: `Failed to repair JSON${labelSuffix}`,
         originalSnippet: snippet.slice(0, 200)
       }
     }
@@ -85,4 +94,3 @@ export class JSONRepairAgent implements IJSONRepairAgent {
 }
 
 export const jsonRepairAgent = new JSONRepairAgent()
-

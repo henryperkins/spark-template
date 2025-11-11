@@ -30,14 +30,16 @@ export function QueryInterface({ documents }: QueryInterfaceProps) {
   const [recentQueries, setRecentQueries] = useState<string[]>([])
 
   // Use streaming query hook
-  const { messages, loading, executeStreamingQuery } = useStreamingQuery({
+  const streamingQueryOptions = {
     agenticMode,
-    documents,
     orchestrator,
-    onWorkflowUpdate: (steps) => {
+    onWorkflowUpdate: (steps: AgentWorkflowStep[]) => {
       setActiveWorkflow(steps)
-    }
-  })
+    },
+    ...(documents ? { documents } : {})
+  }
+
+  const { messages, loading, executeStreamingQuery } = useStreamingQuery(streamingQueryOptions)
 
   useEffect(() => {
     let isMounted = true

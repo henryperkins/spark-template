@@ -21,12 +21,21 @@ export class SearchRestClient {
   private defaultIndex?: string
 
   constructor(options: SearchRestClientOptions) {
+    if (!options.endpoint) {
+      throw new Error('Azure Search endpoint is required')
+    }
     this.endpoint = options.endpoint.replace(/\/+$/, '')
     this.apiVersion = options.apiVersion ?? '2025-09-01'
-    this.apiKey = options.apiKey
+    if (options.apiKey) {
+      this.apiKey = options.apiKey
+    }
     this.useRBAC = options.useRBAC ?? false
-    this.bearerProvider = options.bearerProvider
-    this.defaultIndex = options.defaultIndex
+    if (options.bearerProvider) {
+      this.bearerProvider = options.bearerProvider
+    }
+    if (options.defaultIndex) {
+      this.defaultIndex = options.defaultIndex
+    }
   }
 
   private async authHeaders(): Promise<Record<string, string>> {

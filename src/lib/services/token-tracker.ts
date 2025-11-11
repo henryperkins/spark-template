@@ -151,14 +151,26 @@ class TokenTracker {
     'default': { promptCostPer1k: 0.01, completionCostPer1k: 0.03 }
   }
 
+  private getPricingEntry(key: string): ModelPricing {
+    const entry = this.modelPricing[key]
+    if (entry) {
+      return entry
+    }
+    const fallback = this.modelPricing['default']
+    if (!fallback) {
+      throw new Error('Default pricing entry is not configured')
+    }
+    return fallback
+  }
+
   private getPricingForModel(model: string): ModelPricing {
     const normalized = (model || '').toLowerCase()
-    if (normalized.includes('gpt-4o-mini')) return this.modelPricing['gpt-4o-mini']
-    if (normalized.includes('gpt-4o')) return this.modelPricing['gpt-4o']
-    if (normalized.includes('gpt-4-turbo')) return this.modelPricing['gpt-4-turbo']
-    if (normalized.includes('gpt-4')) return this.modelPricing['gpt-4']
-    if (normalized.includes('gpt-3.5')) return this.modelPricing['gpt-3.5-turbo']
-    return this.modelPricing['default']
+    if (normalized.includes('gpt-4o-mini')) return this.getPricingEntry('gpt-4o-mini')
+    if (normalized.includes('gpt-4o')) return this.getPricingEntry('gpt-4o')
+    if (normalized.includes('gpt-4-turbo')) return this.getPricingEntry('gpt-4-turbo')
+    if (normalized.includes('gpt-4')) return this.getPricingEntry('gpt-4')
+    if (normalized.includes('gpt-3.5')) return this.getPricingEntry('gpt-3.5-turbo')
+    return this.getPricingEntry('default')
   }
 
   private calculateCost(promptTokens: number, completionTokens: number, pricing: ModelPricing): number {
@@ -255,7 +267,7 @@ class TokenTracker {
   }
 
   getDailyUsage(date?: string): DailyUsageSummary {
-    const targetDate = date || new Date().toISOString().split('T')[0]
+    const targetDate = date ?? new Date().toISOString().slice(0, 10)
     const dayMetrics = this.usageMetrics.filter(m =>
       m.timestamp.startsWith(targetDate)
     )

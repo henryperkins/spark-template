@@ -2,7 +2,6 @@ import React, { type ReactNode, useMemo } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
 import {
   Brain,
   TreeStructure,
@@ -129,6 +128,9 @@ export function AgentWorkflowVisualizer({ steps, className, isLive = false }: Ag
     enableReducedMotionForLargeWorkflows: true
   })
 
+  const previousStepsRef = React.useRef<AgentWorkflowStep[]>(steps)
+  const [liveAnnouncement, setLiveAnnouncement] = React.useState('')
+
   // Auto-expand latest step in live mode
   React.useEffect(() => {
     if (isLive && steps.length > 0) {
@@ -138,6 +140,49 @@ export function AgentWorkflowVisualizer({ steps, className, isLive = false }: Ag
       }
     }
   }, [steps.length, isLive, windowStart, expandedSteps, toggleStep])
+
+  React.useEffect(() => {
+    if (!isLive) {
+      previousStepsRef.current = steps
+      if (liveAnnouncement) {
+        setLiveAnnouncement('')
+      }
+      return
+    }
+
+    const previousSteps = previousStepsRef.current
+    if (steps.length === 0 && previousSteps.length > 0) {
+      setLiveAnnouncement('Workflow cleared.')
+    } else if (steps.length > previousSteps.length) {
+      const latestStepIndex = steps.length - 1
+      const latestStep = latestStepIndex >= 0 ? steps[latestStepIndex] : undefined
+      if (!latestStep) {
+        return
+      }
+      const statusKey: AgentWorkflowStep['status'] = latestStep.status
+      const statusLabel = STATUS_META[statusKey]?.label ?? statusKey
+      setLiveAnnouncement(
+        `Step ${steps.length} added: ${latestStep.agent} ${statusLabel}.`
+      )
+    } else if (steps.length === previousSteps.length && steps.length > 0) {
+      for (let index = 0; index < steps.length; index++) {
+        const currentStep = steps[index]
+        const previousStep = previousSteps[index]
+        if (!currentStep || !previousStep) {
+          continue
+        }
+        if (currentStep.status !== previousStep.status) {
+          const statusLabel = STATUS_META[currentStep.status]?.label ?? currentStep.status
+          setLiveAnnouncement(
+            `Step ${index + 1} ${currentStep.agent} now ${statusLabel}.`
+          )
+          break
+        }
+      }
+    }
+
+    previousStepsRef.current = steps
+  }, [steps, isLive, liveAnnouncement])
 
   const getAgentIcon = (agentName: string) => {
     switch (agentName.toLowerCase()) {
@@ -431,6 +476,9 @@ export function AgentWorkflowVisualizer({ steps, className, isLive = false }: Ag
         role="region"
         aria-label={regionLabel}
       >
+        <div aria-live="polite" aria-atomic="true" className="sr-only">
+          {liveAnnouncement}
+        </div>
         <div className="sr-only">
           {steps.length === 0
             ? 'No workflow steps yet.'
@@ -460,14 +508,57 @@ export function AgentWorkflowVisualizer({ steps, className, isLive = false }: Ag
         {steps.length === 0 ? (
           <div className="text-xs text-muted-foreground">Workflow updates will appear here.</div>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-3" role="list">
             <AnimatePresence initial={false}>
               {visibleSteps.map((step, visibleIndex) => {
                 const actualIndex = windowStart + visibleIndex
+                const detailRegionId = `agent-step-${actualIndex}-details`
+                const headerId = `agent-step-${actualIndex}-header`
                 const stepIsExpanded = isExpanded(visibleIndex)
                 const statusMeta = STATUS_META[step.status] ?? STATUS_META.pending
                 const detailContent = renderDetailContent(step)
                 const hasDetails = Boolean(detailContent)
+
+                const handleToggle = () => {
+                  if (!hasDetails) return
+                  toggleStep(visibleIndex)
+                }
+
+                const primaryInfo = (
+                  <span className="flex items-center gap-2 flex-1 min-w-0">
+                    <Badge variant="secondary" className="text-xs flex-shrink-0">
+                      {step.agent}
+                    </Badge>
+                    <span className="text-sm text-muted-foreground truncate">
+                      {step.action}
+                    </span>
+                    {renderHeaderSummary(step)}
+                  </span>
+                )
+
+                const secondaryInfo = (
+                  <span className="flex items-center gap-2 flex-shrink-0 text-xs text-muted-foreground">
+                    <Badge variant="outline" className={cn('text-[11px]', statusMeta.badgeClass)}>
+                      <span className="flex items-center gap-1">
+                        {statusMeta.icon}
+                        {statusMeta.label}
+                      </span>
+                    </Badge>
+                    <span className="flex items-center gap-1">
+                      <Clock size={12} />
+                      {formatDuration(step.duration)}
+                    </span>
+                    {hasDetails && (
+                      <span className="text-[11px]">
+                        {stepIsExpanded ? 'Hide details' : 'View details'}
+                      </span>
+                    )}
+                  </span>
+                )
+
+                const exitProps = shouldReduceMotion
+                  ? {}
+                  : { exit: { opacity: 0, y: -10 } }
 
                 return (
                   <motion.div
@@ -475,9 +566,10 @@ export function AgentWorkflowVisualizer({ steps, className, isLive = false }: Ag
                     layout={!shouldReduceMotion}
                     initial={shouldReduceMotion ? false : { opacity: 0, y: 10 }}
                     animate={shouldReduceMotion ? false : { opacity: 1, y: 0 }}
-                    exit={shouldReduceMotion ? undefined : { opacity: 0, y: -10 }}
                     transition={shouldReduceMotion ? { duration: 0 } : { duration: 0.2 }}
                     className="relative"
+                    role="listitem"
+                    {...exitProps}
                   >
                     {visibleIndex < visibleSteps.length - 1 && (
                       <motion.div
@@ -507,56 +599,59 @@ export function AgentWorkflowVisualizer({ steps, className, isLive = false }: Ag
                       </div>
 
                       <div className="flex-1 min-w-0">
-                        <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
-                          <div className="flex items-center gap-2 flex-1 min-w-0">
-                            <Badge variant="secondary" className="text-xs flex-shrink-0">
-                              {step.agent}
-                            </Badge>
-                            <span className="text-sm text-muted-foreground truncate">
-                              {step.action}
-                            </span>
-                            {renderHeaderSummary(step)}
-                          </div>
-
-                          <div className="flex items-center gap-2 flex-shrink-0">
-                            <Badge variant="outline" className={cn('text-[11px]', statusMeta.badgeClass)}>
-                              <span className="flex items-center gap-1">
-                                {statusMeta.icon}
-                                {statusMeta.label}
-                              </span>
-                            </Badge>
-                            <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                              <Clock size={12} />
-                              {formatDuration(step.duration)}
-                            </div>
-                            {hasDetails && (
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-7 px-2 text-xs"
-                                onClick={() => toggleStep(visibleIndex)}
-                                aria-expanded={stepIsExpanded}
-                                aria-controls={`agent-step-${actualIndex}-details`}
-                              >
-                                {stepIsExpanded ? 'Hide details' : 'View details'}
-                              </Button>
-                            )}
-                          </div>
-                        </div>
-
-                        <AnimatePresence initial={false}>
-                          {hasDetails && stepIsExpanded && (
-                            <motion.div
-                              initial={shouldReduceMotion ? false : { opacity: 0, height: 0 }}
-                              animate={shouldReduceMotion ? false : { opacity: 1, height: 'auto' }}
-                              exit={shouldReduceMotion ? undefined : { opacity: 0, height: 0 }}
-                              transition={shouldReduceMotion ? { duration: 0 } : { duration: 0.2 }}
-                              className="mt-2 bg-muted/60 p-3 rounded"
+                        {hasDetails ? (
+                          <>
+                            <button
+                              type="button"
+                              id={headerId}
+                              onClick={handleToggle}
+                              aria-controls={detailRegionId}
+                              aria-expanded={stepIsExpanded}
+                              className={cn(
+                                'w-full rounded-md px-2 py-1 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+                                stepIsExpanded && 'bg-muted/50'
+                              )}
                             >
-                              {detailContent}
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
+                              <span className="flex flex-wrap items-center justify-between gap-2">
+                                {primaryInfo}
+                                {secondaryInfo}
+                              </span>
+                              <span className="sr-only">
+                                Press Enter or Space to toggle step details.
+                              </span>
+                            </button>
+
+                            <AnimatePresence initial={false}>
+                              {stepIsExpanded && (
+                                <motion.div
+                                  id={detailRegionId}
+                                  role="region"
+                                  aria-labelledby={headerId}
+                                  initial={shouldReduceMotion ? false : { opacity: 0, height: 0 }}
+                                  animate={shouldReduceMotion ? false : { opacity: 1, height: 'auto' }}
+                                  transition={shouldReduceMotion ? { duration: 0 } : { duration: 0.2 }}
+                                  className="mt-2 bg-muted/60 p-3 rounded"
+                                  {...(shouldReduceMotion ? {} : { exit: { opacity: 0, height: 0 } })}
+                                >
+                                  {detailContent}
+                                </motion.div>
+                              )}
+                            </AnimatePresence>
+                          </>
+                        ) : (
+                          <div
+                            id={headerId}
+                            className="rounded-md px-2 py-1"
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              {primaryInfo}
+                              {secondaryInfo}
+                            </div>
+                            <span className="sr-only">
+                              No additional details available for this step.
+                            </span>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </motion.div>

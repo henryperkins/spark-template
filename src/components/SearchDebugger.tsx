@@ -126,8 +126,7 @@ export function SearchDebugger({ documents }: SearchDebuggerProps) {
         explainQuery,
         documents,
         5,
-        routing.strategy,
-        { namespaceId: undefined }
+        routing.strategy
       )
 
       setExplainResult({

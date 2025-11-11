@@ -62,6 +62,12 @@ export function useStreamingQuery(options: UseStreamingQueryOptions) {
 
     setMessages(prev => [...prev, userMessage, assistantMessage])
 
+    const updateAssistantMessage = (updater: (message: StreamingMessage) => StreamingMessage) => {
+      setMessages(prev =>
+        prev.map(msg => (msg.id === assistantMessage.id ? updater(msg) : msg))
+      )
+    }
+
     try {
       let sources: Source[] = []
       let agenticResult: AgenticRAGResult | undefined
@@ -71,17 +77,19 @@ export function useStreamingQuery(options: UseStreamingQueryOptions) {
       if (agenticMode && orchestrator) {
         // Agentic mode: Use orchestrator (which handles its own workflow)
         const runId = userMessage.id
-        agenticResult = await orchestrator.processQuery(query, documents || [], {
+        const processOptions = {
           runId,
-          onWorkflowUpdate,
           onStepEvent: (event: AgentStepEvent) => {
             if (event.status === 'failed') {
               console.error('[agent-step failed]', event)
             } else if (import.meta.env?.MODE !== 'production') {
               console.debug('[agent-step]', event.agent, event.action, event.status)
             }
-          }
-        })
+          },
+          ...(onWorkflowUpdate ? { onWorkflowUpdate } : {})
+        }
+
+        agenticResult = await orchestrator.processQuery(query, documents || [], processOptions)
 
         if (agenticResult) {
           sources = agenticResult.sources
@@ -100,19 +108,22 @@ export function useStreamingQuery(options: UseStreamingQueryOptions) {
         }
 
         // Update final message with all metadata
-        setMessages(prev => prev.map(msg =>
-          msg.id === assistantMessage.id
-            ? {
-                ...msg,
-                content: agenticResult?.response || 'No response generated.',
-                isStreaming: false,
-                sources: sources.length > 0 ? sources : undefined,
-                azureUsed: sources.some(s => s.azureScore !== undefined),
-                agenticResult,
-                azureFallback: azureFallbackDetected
-              }
-            : msg
-        ))
+        updateAssistantMessage(msg => {
+          const updated: StreamingMessage = {
+            ...msg,
+            content: agenticResult?.response || 'No response generated.',
+            isStreaming: false,
+            azureUsed: sources.some(s => s.azureScore !== undefined),
+            azureFallback: azureFallbackDetected
+          }
+          if (sources.length > 0) {
+            updated.sources = sources
+          }
+          if (agenticResult) {
+            updated.agenticResult = agenticResult
+          }
+          return updated
+        })
 
       } else {
         // Non-agentic mode: AzureSearch-first with local fallback
@@ -142,11 +153,7 @@ Answer:`
             for await (const chunk of stream) {
               if (abortControllerRef.current?.signal.aborted) break
               accumulatedContent += chunk
-              setMessages(prev => prev.map(msg =>
-                msg.id === assistantMessage.id
-                  ? { ...msg, content: accumulatedContent }
-                  : msg
-              ))
+              updateAssistantMessage(msg => ({ ...msg, content: accumulatedContent }))
               await new Promise(resolve => setTimeout(resolve, 20))
             }
           } catch (streamError) {
@@ -158,18 +165,19 @@ Answer:`
             accumulatedContent = fallbackResponse
           }
 
-          setMessages(prev => prev.map(msg =>
-            msg.id === assistantMessage.id
-              ? {
-                  ...msg,
-                  content: accumulatedContent,
-                  isStreaming: false,
-                  sources: sources.length > 0 ? sources : undefined,
-                  azureUsed: true,
-                  azureFallback: azureFallbackDetected
-                }
-              : msg
-          ))
+          updateAssistantMessage(msg => {
+            const updated: StreamingMessage = {
+              ...msg,
+              content: accumulatedContent,
+              isStreaming: false,
+              azureUsed: true,
+              azureFallback: azureFallbackDetected
+            }
+            if (sources.length > 0) {
+              updated.sources = sources
+            }
+            return updated
+          })
 
         } else {
           // Local fallback: load documents from Worker API if not provided
@@ -240,11 +248,7 @@ Answer:`
             for await (const chunk of stream) {
               if (abortControllerRef.current?.signal.aborted) break
               accumulatedContent += chunk
-              setMessages(prev => prev.map(msg =>
-                msg.id === assistantMessage.id
-                  ? { ...msg, content: accumulatedContent }
-                  : msg
-              ))
+              updateAssistantMessage(msg => ({ ...msg, content: accumulatedContent }))
               await new Promise(resolve => setTimeout(resolve, 20))
             }
           } catch (streamError) {
@@ -256,18 +260,19 @@ Answer:`
             accumulatedContent = fallbackResponse
           }
 
-          setMessages(prev => prev.map(msg =>
-            msg.id === assistantMessage.id
-              ? {
-                  ...msg,
-                  content: accumulatedContent,
-                  isStreaming: false,
-                  sources: sources.length > 0 ? sources : undefined,
-                  azureUsed: false,
-                  azureFallback: azureFallbackDetected
-                }
-              : msg
-          ))
+          updateAssistantMessage(msg => {
+            const updated: StreamingMessage = {
+              ...msg,
+              content: accumulatedContent,
+              isStreaming: false,
+              azureUsed: false,
+              azureFallback: azureFallbackDetected
+            }
+            if (sources.length > 0) {
+              updated.sources = sources
+            }
+            return updated
+          })
         }
 
         // Log query to history (non-agentic)
@@ -301,15 +306,11 @@ Answer:`
         code: 'stream_error'
       })
 
-      setMessages(prev => prev.map(msg =>
-        msg.id === assistantMessage.id
-          ? {
-              ...msg,
-              content: 'Sorry, there was an error processing your query. Please try again.',
-              isStreaming: false
-            }
-          : msg
-      ))
+      updateAssistantMessage(msg => ({
+        ...msg,
+        content: 'Sorry, there was an error processing your query. Please try again.',
+        isStreaming: false
+      }))
 
       console.error('[streaming-query error]', error)
     } finally {

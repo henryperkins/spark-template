@@ -118,7 +118,25 @@ export class GitHubService {
       }
       
       if (i === retries - 1) {
-        throw new Error(`GitHub API error: ${response.statusText}`)
+        const remaining = response.headers.get('X-RateLimit-Remaining')
+        const reset = response.headers.get('X-RateLimit-Reset')
+
+        if (response.status === 403 || response.status === 429 || remaining === '0') {
+          const resetHint =
+            reset && /^\d+$/.test(reset)
+              ? ` Retry after ${new Date(parseInt(reset, 10) * 1000).toLocaleTimeString()}.`
+              : ''
+          throw new Error(`GitHub API rate limit reached.${resetHint}`)
+        }
+
+        const abuse = response.headers.get('X-RateLimit-Policy') || ''
+        if (response.status === 403 && abuse) {
+          throw new Error(
+            'GitHub API abuse detection triggered. Please slow down requests or use authenticated access.'
+          )
+        }
+
+        throw new Error(`GitHub API error: ${response.status} ${response.statusText}`)
       }
       
       await this.delay(1000 * Math.pow(2, i))

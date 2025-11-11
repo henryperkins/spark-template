@@ -13,6 +13,20 @@ interface StoredVerifier {
  * These entries should be short-lived and may be cleaned up by a separate job.
  */
 const VERIFIER_PREFIX = 'oauth:verifier:'
+const CREDENTIAL_PREFIX = 'oauth:credentials:'
+
+const OAUTH_CORS_HEADERS: Record<string, string> = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+}
+
+interface StoredOAuthCredentials {
+  accessToken: string
+  refreshToken?: string
+  expiresAt?: number
+  storedAt: string
+}
 
 /**
  * Store PKCE code verifier and state in KV before redirecting to provider.
@@ -200,6 +214,133 @@ function sanitizeError(message: string): string {
   return message.slice(0, 200)
 }
 
+export async function handleOneDriveToken(request: Request, env: Env): Promise<Response> {
+  if (request.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: OAUTH_CORS_HEADERS })
+  }
+
+  if (request.method !== 'GET') {
+    return new Response('Method not allowed', { status: 405, headers: OAUTH_CORS_HEADERS })
+  }
+
+  if (!env.RAG_KV) {
+    return new Response(JSON.stringify({ error: 'token_storage_kv_not_configured' }), {
+      status: 503,
+      headers: { ...OAUTH_CORS_HEADERS, 'Content-Type': 'application/json' }
+    })
+  }
+
+  const creds = await readOAuthCredentials(env, 'onedrive')
+  if (!creds) {
+    return new Response(JSON.stringify({ error: 'onedrive_token_missing' }), {
+      status: 404,
+      headers: { ...OAUTH_CORS_HEADERS, 'Content-Type': 'application/json' }
+    })
+  }
+
+  return new Response(JSON.stringify({
+    accessToken: creds.accessToken,
+    expiresAt: creds.expiresAt ?? null
+  }), {
+    status: 200,
+    headers: { ...OAUTH_CORS_HEADERS, 'Content-Type': 'application/json' }
+  })
+}
+
+export async function handleOneDriveRefresh(request: Request, env: Env): Promise<Response> {
+  if (request.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: OAUTH_CORS_HEADERS })
+  }
+
+  if (request.method !== 'POST') {
+    return new Response('Method not allowed', { status: 405, headers: OAUTH_CORS_HEADERS })
+  }
+
+  if (!env.RAG_KV) {
+    return new Response(JSON.stringify({ error: 'token_storage_kv_not_configured' }), {
+      status: 503,
+      headers: { ...OAUTH_CORS_HEADERS, 'Content-Type': 'application/json' }
+    })
+  }
+
+  const current = await readOAuthCredentials(env, 'onedrive')
+  if (!current?.refreshToken) {
+    return new Response(JSON.stringify({ error: 'onedrive_refresh_token_missing' }), {
+      status: 409,
+      headers: { ...OAUTH_CORS_HEADERS, 'Content-Type': 'application/json' }
+    })
+  }
+
+  const clientId = env.ONEDRIVE_CLIENT_ID
+  const clientSecret = env.ONEDRIVE_CLIENT_SECRET
+
+  if (!clientId || !clientSecret) {
+    return new Response(JSON.stringify({ error: 'onedrive_oauth_not_configured' }), {
+      status: 500,
+      headers: { ...OAUTH_CORS_HEADERS, 'Content-Type': 'application/json' }
+    })
+  }
+
+  const tokenEndpoint = 'https://login.microsoftonline.com/common/oauth2/v2.0/token'
+  const redirectBase = env.WORKER_URL && safeBase(env.WORKER_URL)
+  if (!redirectBase) {
+    return new Response(JSON.stringify({ error: 'onedrive_oauth_redirect_not_configured' }), {
+      status: 500,
+      headers: { ...OAUTH_CORS_HEADERS, 'Content-Type': 'application/json' }
+    })
+  }
+
+  const body = new URLSearchParams({
+    client_id: clientId,
+    client_secret: clientSecret,
+    refresh_token: current.refreshToken,
+    grant_type: 'refresh_token',
+    redirect_uri: `${redirectBase}/api/oauth/onedrive/callback`
+  })
+
+  const resp = await fetch(tokenEndpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body
+  })
+
+  if (!resp.ok) {
+    return new Response(JSON.stringify({ error: `onedrive_refresh_http_${resp.status}` }), {
+      status: 502,
+      headers: { ...OAUTH_CORS_HEADERS, 'Content-Type': 'application/json' }
+    })
+  }
+
+  const json = (await resp.json()) as {
+    access_token?: string
+    refresh_token?: string
+    expires_in?: number
+    error?: string
+  }
+
+  if (!json.access_token) {
+    return new Response(JSON.stringify({ error: json.error || 'onedrive_refresh_no_access_token' }), {
+      status: 502,
+      headers: { ...OAUTH_CORS_HEADERS, 'Content-Type': 'application/json' }
+    })
+  }
+
+  await storeServiceToken(env, 'onedrive', json.access_token)
+  await storeOAuthCredentials(env, 'onedrive', {
+    accessToken: json.access_token,
+    refreshToken: json.refresh_token ?? current.refreshToken,
+    expiresIn: json.expires_in
+  })
+
+  return new Response(JSON.stringify({
+    accessToken: json.access_token,
+    expiresIn: json.expires_in ?? null
+  }), {
+    status: 200,
+    headers: { ...OAUTH_CORS_HEADERS, 'Content-Type': 'application/json' }
+  })
+}
+
 /**
  * GitHub: Exchange code + PKCE for access token using Worker-side secret.
  * Stores token in secureTokenStorage (via direct KV put under secure prefix).
@@ -280,13 +421,23 @@ async function exchangeDropboxCodeForToken(env: Env, code: string, codeVerifier:
     throw new Error(`dropbox_oauth_http_${resp.status}`)
   }
 
-  const json = (await resp.json()) as { access_token?: string; error?: string }
+  const json = (await resp.json()) as {
+    access_token?: string
+    refresh_token?: string
+    expires_in?: number
+    error?: string
+  }
 
   if (!json.access_token) {
     throw new Error(json.error || 'dropbox_oauth_no_access_token')
   }
 
   await storeServiceToken(env, 'dropbox', json.access_token)
+  await storeOAuthCredentials(env, 'dropbox', {
+    accessToken: json.access_token,
+    refreshToken: json.refresh_token,
+    expiresIn: json.expires_in
+  })
 }
 
 /**
@@ -335,8 +486,130 @@ async function exchangeOneDriveCodeForToken(env: Env, code: string, codeVerifier
   if (!json.access_token) {
     throw new Error(json.error || 'onedrive_oauth_no_access_token')
   }
+  
+  export async function handleDropboxToken(request: Request, env: Env): Promise<Response> {
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: OAUTH_CORS_HEADERS })
+    }
+  
+    if (request.method !== 'GET') {
+      return new Response('Method not allowed', { status: 405, headers: OAUTH_CORS_HEADERS })
+    }
+  
+    if (!env.RAG_KV) {
+      return new Response(JSON.stringify({ error: 'token_storage_kv_not_configured' }), {
+        status: 503,
+        headers: { ...OAUTH_CORS_HEADERS, 'Content-Type': 'application/json' }
+      })
+    }
+  
+    const creds = await readOAuthCredentials(env, 'dropbox')
+    if (!creds) {
+      return new Response(JSON.stringify({ error: 'dropbox_token_missing' }), {
+        status: 404,
+        headers: { ...OAUTH_CORS_HEADERS, 'Content-Type': 'application/json' }
+      })
+    }
+  
+    return new Response(JSON.stringify({
+      accessToken: creds.accessToken,
+      expiresAt: creds.expiresAt ?? null
+    }), {
+      status: 200,
+      headers: { ...OAUTH_CORS_HEADERS, 'Content-Type': 'application/json' }
+    })
+  }
+  
+  export async function handleDropboxRefresh(request: Request, env: Env): Promise<Response> {
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: OAUTH_CORS_HEADERS })
+    }
+  
+    if (request.method !== 'POST') {
+      return new Response('Method not allowed', { status: 405, headers: OAUTH_CORS_HEADERS })
+    }
+  
+    if (!env.RAG_KV) {
+      return new Response(JSON.stringify({ error: 'token_storage_kv_not_configured' }), {
+        status: 503,
+        headers: { ...OAUTH_CORS_HEADERS, 'Content-Type': 'application/json' }
+      })
+    }
+  
+    const current = await readOAuthCredentials(env, 'dropbox')
+    if (!current?.refreshToken) {
+      return new Response(JSON.stringify({ error: 'dropbox_refresh_token_missing' }), {
+        status: 409,
+        headers: { ...OAUTH_CORS_HEADERS, 'Content-Type': 'application/json' }
+      })
+    }
+  
+    const clientId = env.DROPBOX_CLIENT_ID
+    const clientSecret = env.DROPBOX_CLIENT_SECRET
+  
+    if (!clientId || !clientSecret) {
+      return new Response(JSON.stringify({ error: 'dropbox_oauth_not_configured' }), {
+        status: 500,
+        headers: { ...OAUTH_CORS_HEADERS, 'Content-Type': 'application/json' }
+      })
+    }
+  
+    const body = new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: current.refreshToken,
+      client_id: clientId,
+      client_secret: clientSecret
+    })
+  
+    const resp = await fetch('https://api.dropboxapi.com/oauth2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body
+    })
+  
+    if (!resp.ok) {
+      return new Response(JSON.stringify({ error: `dropbox_refresh_http_${resp.status}` }), {
+        status: 502,
+        headers: { ...OAUTH_CORS_HEADERS, 'Content-Type': 'application/json' }
+      })
+    }
+  
+    const json = (await resp.json()) as {
+      access_token?: string
+      refresh_token?: string
+      expires_in?: number
+      error?: string
+    }
+  
+    if (!json.access_token) {
+      return new Response(JSON.stringify({ error: json.error || 'dropbox_refresh_no_access_token' }), {
+        status: 502,
+        headers: { ...OAUTH_CORS_HEADERS, 'Content-Type': 'application/json' }
+      })
+    }
+  
+    await storeServiceToken(env, 'dropbox', json.access_token)
+    await storeOAuthCredentials(env, 'dropbox', {
+      accessToken: json.access_token,
+      refreshToken: json.refresh_token ?? current.refreshToken,
+      expiresIn: json.expires_in
+    })
+  
+    return new Response(JSON.stringify({
+      accessToken: json.access_token,
+      expiresIn: json.expires_in ?? null
+    }), {
+      status: 200,
+      headers: { ...OAUTH_CORS_HEADERS, 'Content-Type': 'application/json' }
+    })
+  }
 
   await storeServiceToken(env, 'onedrive', json.access_token)
+  await storeOAuthCredentials(env, 'onedrive', {
+    accessToken: json.access_token,
+    refreshToken: json.refresh_token,
+    expiresIn: json.expires_in
+  })
 }
 
 /**
@@ -351,7 +624,60 @@ async function storeServiceToken(env: Env, service: string, token: string): Prom
   // Reuse the prefix from SecureTokenStorage (hardcoded here to avoid import cycles).
   const key = `secure:token:${service}`
 
-  // Tokens are stored as-is here; SecureTokenStorage encrypts/decrypts when accessed from SPA/Worker.
-  // If you want Worker-side encryption as well, you can mirror that logic here.
-  await (env.RAG_KV as any).put(key, token)
+  // Persist as JSON string so clients requesting type=json receive a valid payload.
+  await (env.RAG_KV as any).put(key, JSON.stringify(token))
+}
+
+async function storeOAuthCredentials(
+  env: Env,
+  service: Provider,
+  payload: { accessToken: string; refreshToken?: string | null; expiresIn?: number | null }
+): Promise<void> {
+  if (!env.RAG_KV) {
+    throw new Error('token_storage_kv_not_configured')
+  }
+
+  const record: StoredOAuthCredentials = {
+    accessToken: payload.accessToken,
+    refreshToken: payload.refreshToken ?? undefined,
+    expiresAt: typeof payload.expiresIn === 'number' && payload.expiresIn > 0
+      ? Date.now() + payload.expiresIn * 1000
+      : undefined,
+    storedAt: new Date().toISOString()
+  }
+
+  await (env.RAG_KV as any).put(
+    `${CREDENTIAL_PREFIX}${service}`,
+    JSON.stringify(record)
+  )
+}
+
+async function readOAuthCredentials(env: Env, service: Provider): Promise<StoredOAuthCredentials | null> {
+  if (!env.RAG_KV) {
+    return null
+  }
+
+  const raw = await (env.RAG_KV as any).get(`${CREDENTIAL_PREFIX}${service}`, { type: 'json' })
+  if (!raw) {
+    return null
+  }
+
+  if (typeof raw === 'string') {
+    return {
+      accessToken: raw,
+      storedAt: new Date().toISOString()
+    }
+  }
+
+  const parsed = raw as Partial<StoredOAuthCredentials>
+  if (!parsed.accessToken) {
+    return null
+  }
+
+  return {
+    accessToken: parsed.accessToken,
+    refreshToken: parsed.refreshToken,
+    expiresAt: parsed.expiresAt,
+    storedAt: parsed.storedAt ?? new Date().toISOString()
+  }
 }

@@ -260,6 +260,9 @@ export function computeCosineSimilarity(a: number[], b: number[]): number {
   for (let i = 0; i < a.length; i++) {
     const va = a[i]
     const vb = b[i]
+    if (va === undefined || vb === undefined) {
+      continue
+    }
     dot += va * vb
     na += va * va
     nb += vb * vb

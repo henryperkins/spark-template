@@ -20,10 +20,9 @@
     "noImplicitOverride": true,
     "noImplicitReturns": true,
     "noImplicitThis": true,
-    /* TODO Phase 2: Enable advanced strict flags after refactoring */
-    // "noUncheckedIndexedAccess": true,            // Requires bounds checking (77 errors)
+    "noUncheckedIndexedAccess": true,
     // "noPropertyAccessFromIndexSignature": true,  // Requires bracket notation for env vars
-    // "exactOptionalPropertyTypes": true,          // Requires undefined handling in 20+ files
+    "exactOptionalPropertyTypes": true,
     /* Bundler mode */
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,

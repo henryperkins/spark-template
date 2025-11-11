@@ -17,8 +17,12 @@ export class LLMError extends Error {
     super(message)
     this.name = 'LLMError'
     this.code = code
-    this.cause = cause
-    this.rawText = rawText
+    if (cause !== undefined) {
+      this.cause = cause
+    }
+    if (rawText !== undefined) {
+      this.rawText = rawText
+    }
   }
 }
 
@@ -70,19 +74,25 @@ export class LLMService {
   ): Omit<CompletionOptions, 'model'> & { maxTokens?: number; responseFormat?: 'text' | 'json_object' } {
     const isStrict = this.isStrictDeployment(options.model)
 
-    if (isStrict) {
-      // Omit temperature and topP for strict deployments
-      return {
-        maxTokens: options.maxTokens
+    const sanitized: Omit<CompletionOptions, 'model'> & {
+      maxTokens?: number
+      responseFormat?: 'text' | 'json_object'
+    } = {}
+
+    if (options.maxTokens !== undefined) {
+      sanitized.maxTokens = options.maxTokens
+    }
+
+    if (!isStrict) {
+      if (options.temperature !== undefined) {
+        sanitized.temperature = options.temperature
+      }
+      if (options.topP !== undefined) {
+        sanitized.topP = options.topP
       }
     }
 
-    // For flexible deployments, pass all options
-    return {
-      maxTokens: options.maxTokens,
-      temperature: options.temperature,
-      topP: options.topP
-    }
+    return sanitized
   }
 
   private refillTokens(): void {
@@ -172,11 +182,11 @@ export class LLMService {
       completionTokens,
       totalTokens,
       estimatedCost: cost,
-      temperature: options.temperature,
-      maxTokens: options.maxTokens,
       duration,
-      reasoningTokens: typeof usage?.reasoningTokens === 'number' ? usage.reasoningTokens : undefined,
-      reasoningPreview
+      ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
+      ...(options.maxTokens !== undefined ? { maxTokens: options.maxTokens } : {}),
+      ...(typeof usage?.reasoningTokens === 'number' ? { reasoningTokens: usage.reasoningTokens } : {}),
+      ...(reasoningPreview ? { reasoningPreview } : {})
     }
 
     // Push into active query context for budgeting/telemetry.
@@ -197,8 +207,8 @@ export class LLMService {
       completionTokens: metadata.completionTokens,
       totalTokens: metadata.totalTokens,
       estimatedCost: metadata.estimatedCost,
-      temperature: metadata.temperature,
-      maxTokens: metadata.maxTokens
+      ...(metadata.temperature !== undefined ? { temperature: metadata.temperature } : {}),
+      ...(metadata.maxTokens !== undefined ? { maxTokens: metadata.maxTokens } : {})
     }
 
     // Persist via tokenTracker using the same authoritative-or-derived numbers.
@@ -558,8 +568,9 @@ export class LLMService {
 
     // 2) Look for ```json fenced block.
     const md = text.match(/```json?\s*[\r\n]+([\s\S]*?)```/i)
-    if (md) {
-      const fenced = md[1].trim()
+    const fencedMatch = md?.[1]
+    if (typeof fencedMatch === 'string') {
+      const fenced = fencedMatch.trim()
       if (fenced) {
         try {
           return JSON.parse(fenced)
@@ -658,11 +669,12 @@ export class LLMService {
     try {
       if (azureServiceManager.hasOpenAI()) {
         const start = Date.now()
-        const stream = azureServiceManager.generateStream(prompt, {
-          maxTokens: options.maxTokens,
-          temperature: options.temperature,
-          topP: options.topP
-        })
+        const streamOptions = {
+          ...(options.maxTokens !== undefined ? { maxTokens: options.maxTokens } : {}),
+          ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
+          ...(options.topP !== undefined ? { topP: options.topP } : {})
+        }
+        const stream = azureServiceManager.generateStream(prompt, streamOptions)
         let collected = ''
         for await (const chunk of stream) {
           // basic timeout guard by chunk pacing

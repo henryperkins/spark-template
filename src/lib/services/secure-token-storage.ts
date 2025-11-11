@@ -34,8 +34,8 @@ export class SecureTokenStorage {
     combined.set(iv)
     combined.set(new Uint8Array(encrypted), iv.length)
     let binary = ''
-    for (let i = 0; i < combined.byteLength; i++) {
-      binary += String.fromCharCode(combined[i])
+    for (const byte of combined) {
+      binary += String.fromCharCode(byte)
     }
     return btoa(binary)
   }
@@ -75,8 +75,17 @@ export class SecureTokenStorage {
       false,
       ['deriveBits', 'deriveKey']
     )
+
+    // Derive a stable, non-trivial salt from the key material itself.
+    // This avoids a fixed zero salt while keeping behavior deterministic per deployment.
+    const saltSource = await crypto.subtle.digest(
+      'SHA-256',
+      new TextEncoder().encode(`spark-template-salt:${rawKeyString}`)
+    )
+    const salt = new Uint8Array(saltSource).slice(0, 16)
+
     return await crypto.subtle.deriveKey(
-      { name: 'PBKDF2', salt: new Uint8Array(16), iterations: 100000, hash: 'SHA-256' },
+      { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
       keyMaterial,
       { name: 'AES-GCM', length: 256 },
       false,

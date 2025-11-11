@@ -77,11 +77,18 @@ export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
     // Update progress
     const updateProgress = (progress: number, status: UploadProgress['status'], error?: string) => {
       setUploadProgress(prev =>
-        prev.map(p =>
-          (file?.name ? p.fileName === file.name : false)
-            ? { ...p, progress, status, error }
-            : p
-        )
+        prev.map(p => {
+          if (!(file?.name ? p.fileName === file.name : false)) {
+            return p
+          }
+          const next: UploadProgress = { ...p, progress, status }
+          if (typeof error === 'string' && error.length > 0) {
+            next.error = error
+          } else if ('error' in next) {
+            delete next.error
+          }
+          return next
+        })
       )
     }
 
@@ -224,9 +231,27 @@ export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
     }))
     setUploadProgress(initialProgress)
 
+    const seen = new Set<string>()
+    const markError = (fileName: string, message: string) => {
+      setUploadProgress(prev =>
+        prev.map(p =>
+          p.fileName === fileName
+            ? { ...p, progress: 100, status: 'error', error: message }
+            : p
+        )
+      )
+    }
+
     const processedDocuments: Document[] = []
 
     for (const file of Array.from(files)) {
+      const key = `${file.name}:${file.size}`
+      if (seen.has(key)) {
+        markError(file.name, 'Duplicate file skipped')
+        continue
+      }
+      seen.add(key)
+
       if (file.type === 'text/plain' || file.type === 'application/pdf' || file.name.endsWith('.md')) {
         // File size guard
         if (file.size > MAX_FILE_SIZE_BYTES) {
@@ -251,6 +276,8 @@ export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
         } catch (error) {
           console.error('Error processing file:', error)
         }
+      } else {
+        markError(file.name, 'Unsupported file type. Allowed: .txt, .md, .pdf')
       }
     }
     

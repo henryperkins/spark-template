@@ -15,7 +15,7 @@ import { AgentStepEvent, telemetry, type AgentStepMetadata } from '../services/t
 import { setActiveQueryContext, getActiveQueryContext } from './context-registry'
 import { agentAnalytics } from '../services/agent-analytics'
 import { errorTracking } from '../services/error-tracker'
-import { queryHistoryService } from '../services/query-history'
+import { queryHistoryService, type QueryHistoryEntry } from '../services/query-history'
 import { tokenTracker } from '../services/token-tracker'
 import { llmService } from '../services/llm-service'
 import {
@@ -68,6 +68,14 @@ export interface ProcessQueryOptions {
   runId?: string
   onWorkflowUpdate?: (workflow: AgentWorkflowStep[]) => void
   onStepEvent?: (event: AgentStepEvent) => void
+}
+
+const buildMetadata = (metadata: AgentStepMetadata): AgentStepMetadata | undefined => {
+  const entries = Object.entries(metadata).filter(([, value]) => value !== undefined)
+  if (entries.length === 0) {
+    return undefined
+  }
+  return Object.fromEntries(entries) as AgentStepMetadata
 }
 
 export class AgenticOrchestrator {
@@ -135,21 +143,31 @@ export class AgenticOrchestrator {
         // Update budget from token tracker before emitting
         syncTokenBudget()
 
+        const { llm: providedLLM, metadata, timestamp, ...rest } = event
+
         // Respect any llm metadata explicitly provided by the caller (e.g., executeStep),
         // and only fall back to the last LLM metadata when the event did not set it.
-        const llm = event.llm ?? (llmService.getLastLLMMetadata() || undefined)
+        const llm = providedLLM ?? llmService.getLastLLMMetadata() ?? undefined
+        const cleanedMetadata = metadata ? buildMetadata(metadata) : undefined
 
         const enriched: AgentStepEvent = {
           type: 'agent_step_status',
           runId,
           query,
-          timestamp: event.timestamp ?? new Date().toISOString(),
-          ...event,
-          llm,
+          timestamp: timestamp ?? new Date().toISOString(),
+          ...rest,
           // Add cumulative token/cost from context
           cumulativeTokens: context.tokenBudget.consumed,
           cumulativeCost: context.tokenBudget.costConsumed
         }
+
+        if (llm) {
+          enriched.llm = llm
+        }
+        if (cleanedMetadata) {
+          enriched.metadata = cleanedMetadata
+        }
+
         telemetry.trackAgentStep(enriched)
         agentAnalytics.recordStepEvent(enriched)
         options.onStepEvent?.(enriched)
@@ -165,13 +183,18 @@ export class AgenticOrchestrator {
         emitWorkflowUpdate,
         event => {
           // Enrich with classification metadata (Gap #2)
+          const classificationResult = (event as { result?: QueryClassification }).result
+          const classificationMetadata: AgentStepMetadata = {}
+          if (classificationResult?.complexity) {
+            classificationMetadata.complexity = classificationResult.complexity
+          }
+          if (classificationResult?.requiresDecomposition !== undefined) {
+            classificationMetadata.requiresDecomposition = classificationResult.requiresDecomposition
+          }
+          const metadata = buildMetadata(classificationMetadata)
           emitStepEvent({
             ...event,
-            metadata: {
-              complexity: (event as { result?: QueryClassification }).result?.complexity,
-              requiresDecomposition: (event as { result?: QueryClassification }).result
-                ?.requiresDecomposition
-            }
+            ...(metadata ? { metadata } : {})
           })
         }
       )
@@ -199,17 +222,23 @@ export class AgenticOrchestrator {
               classification.estimatedSubQueries,
               kb
             ), // Pass KB
-          emitWorkflowUpdate,
-          event => {
-            emitStepEvent({
-              ...event,
-              metadata: {
-                subQueryCount: (event as { result?: QueryPlan }).result?.subQueries.length,
-                executionStrategy: (event as { result?: QueryPlan }).result?.executionStrategy
-              }
-            })
+        emitWorkflowUpdate,
+        event => {
+          const planResult = (event as { result?: QueryPlan }).result
+          const planMetadata: AgentStepMetadata = {}
+          if (planResult?.subQueries.length) {
+            planMetadata.subQueryCount = planResult.subQueries.length
           }
-        )
+          if (planResult?.executionStrategy) {
+            planMetadata.executionStrategy = planResult.executionStrategy
+          }
+          const metadata = buildMetadata(planMetadata)
+          emitStepEvent({
+            ...event,
+            ...(metadata ? { metadata } : {})
+          })
+        }
+      )
         const planningDuration = Date.now() - planningStart
         recordPhaseTime(context, 'planning', planningDuration)
         context.plan = plan
@@ -241,9 +270,9 @@ export class AgenticOrchestrator {
             : 0,
           duration: retrievalDuration,
           degraded: azureFallback,
-          degradationReason: azureFallback
-            ? 'Azure retrieval fallback used during sub-queries'
-            : undefined
+          ...(azureFallback
+            ? { degradationReason: 'Azure retrieval fallback used during sub-queries' }
+            : {})
         }
       } else {
         // Routing phase with timing
@@ -255,12 +284,18 @@ export class AgenticOrchestrator {
           () => this.routingAgent.selectStrategy(query, kb), // Pass KB
           emitWorkflowUpdate,
           event => {
+            const decision = (event as { result?: RoutingDecision }).result
+            const routingMetadata: AgentStepMetadata = {}
+            if (decision?.strategy) {
+              routingMetadata.strategy = decision.strategy
+            }
+            if (decision?.confidence !== undefined) {
+              routingMetadata.routingConfidence = decision.confidence
+            }
+            const metadata = buildMetadata(routingMetadata)
             emitStepEvent({
               ...event,
-              metadata: {
-                strategy: (event as { result?: RoutingDecision }).result?.strategy,
-                routingConfidence: (event as { result?: RoutingDecision }).result?.confidence
-              }
+              ...(metadata ? { metadata } : {})
             })
           }
         )
@@ -274,31 +309,37 @@ export class AgenticOrchestrator {
           workflow,
           'Retrieval',
           `Execute ${routing.strategy} search`,
-          () =>
-            findRelevantChunksWithMeta(query, documents, 5, routing!.strategy, {
+          () => {
+            const namespaceId = azureServiceManager.getNamespaceId()
+            return findRelevantChunksWithMeta(query, documents, 5, routing!.strategy, {
               onAzureFallback: () => {
                 azureFallback = true
                 context.azureFallback = true
               },
-              namespaceId: azureServiceManager.getNamespaceId()
-            }),
+              ...(namespaceId ? { namespaceId } : {})
+            })
+          },
           emitWorkflowUpdate,
           event => {
             const result = (event as {
               result?: { sources: Source[]; metadata: RetrievalMetadata }
             }).result
             const meta = result?.metadata
-            emitStepEvent({
-              ...event,
-              metadata: meta
-                ? {
-                    strategy: meta.strategy,
-                    sourceCount: meta.sourceCount,
-                    avgRelevanceScore: meta.avgRelevanceScore,
-                    degraded: meta.degraded
-                  }
-                : undefined
-            })
+            if (meta) {
+              const retrievalMetadata: AgentStepMetadata = {
+                strategy: meta.strategy,
+                sourceCount: meta.sourceCount,
+                avgRelevanceScore: meta.avgRelevanceScore,
+                degraded: meta.degraded
+              }
+              const metadata = buildMetadata(retrievalMetadata)
+              emitStepEvent({
+                ...event,
+                ...(metadata ? { metadata } : {})
+              })
+            } else {
+              emitStepEvent(event)
+            }
           }
         )
         allSources = retrievalResult.sources
@@ -346,22 +387,26 @@ export class AgenticOrchestrator {
             ), // Pass KB
           emitWorkflowUpdate,
           event => {
+            const validationResult = (event as {
+              result?: ValidationResult
+            }).result
+            const validationMetadata: AgentStepMetadata = {}
+            if (validationResult?.faithfulnessScore !== undefined) {
+              validationMetadata.faithfulnessScore = validationResult.faithfulnessScore
+            }
+            if (validationResult?.relevanceScore !== undefined) {
+              validationMetadata.relevanceScore = validationResult.relevanceScore
+            }
+            if (validationResult?.isValid !== undefined) {
+              validationMetadata.validationPassed = validationResult.isValid
+            }
+            if (validationResult?.issues.length) {
+              validationMetadata.issueCount = validationResult.issues.length
+            }
+            const metadata = buildMetadata(validationMetadata)
             emitStepEvent({
               ...event,
-              metadata: {
-                faithfulnessScore: (event as {
-                  result?: ValidationResult
-                }).result?.faithfulnessScore,
-                relevanceScore: (event as {
-                  result?: ValidationResult
-                }).result?.relevanceScore,
-                validationPassed: (event as {
-                  result?: ValidationResult
-                }).result?.isValid,
-                issueCount: (event as {
-                  result?: ValidationResult
-                }).result?.issues.length
-              }
+              ...(metadata ? { metadata } : {})
             })
           }
         )
@@ -404,12 +449,18 @@ export class AgenticOrchestrator {
               ),
             emitWorkflowUpdate,
             event => {
+              const refinementResult = (event as { result?: ReActResult }).result
+              const refinementMetadata: AgentStepMetadata = {}
+              if (refinementResult?.iterations !== undefined) {
+                refinementMetadata.iterations = refinementResult.iterations
+              }
+              if (refinementResult?.improved !== undefined) {
+                refinementMetadata.improved = refinementResult.improved
+              }
+              const metadata = buildMetadata(refinementMetadata)
               emitStepEvent({
                 ...event,
-                metadata: {
-                  iterations: (event as { result?: ReActResult }).result?.iterations,
-                  improved: (event as { result?: ReActResult }).result?.improved
-                }
+                ...(metadata ? { metadata } : {})
               })
             }
           )
@@ -490,77 +541,82 @@ export class AgenticOrchestrator {
       // Generate execution summary from context
       const executionSummary = getExecutionSummary(context)
 
-      const result = {
+      const result: AgenticRAGResult = {
         response,
         sources: allSources,
         classification,
-        routing,
-        plan,
-        validation,
-        refinement,
-        expansion,
         workflow,
         totalDuration,
         azureFallback,
-        executionSummary
+        executionSummary,
+        ...(routing ? { routing } : {}),
+        ...(plan ? { plan } : {}),
+        ...(validation ? { validation } : {}),
+        ...(refinement ? { refinement } : {}),
+        ...(expansion ? { expansion } : {})
       }
 
       // Log to query history (async, don't block return)
+      const namespaceId = azureServiceManager.getNamespaceId()
+      const historyPayload: QueryHistoryEntry = {
+        id: runId,
+        timestamp: new Date().toISOString(),
+        query,
+        routing: routing
+          ? {
+              strategy: routing.strategy,
+              reasoning: routing.reasoning,
+              confidence: routing.confidence
+            }
+          : {
+              strategy: 'hybrid',
+              reasoning: 'Query decomposed into sub-queries',
+              confidence: 1.0
+            },
+        resultCount: allSources.length,
+        topScore: allSources[0]?.relevanceScore ?? 0,
+        azureUsed: azureServiceManager.isConfigured(),
+        azureFallback,
+        totalDuration,
+        retrievalDuration: retrievalDurationMs,
+        retrievalAvgScore:
+          allSources.length > 0
+            ? allSources.reduce((sum, source) => sum + source.relevanceScore, 0) /
+              allSources.length
+            : 0,
+        workflow: workflow.map(step => ({
+          agent: step.agent,
+          action: step.action,
+          duration: step.duration || 0,
+          status: step.status
+        })),
+        complexity: classification.complexity,
+        requiresDecomposition: classification.requiresDecomposition,
+        executionSummary
+      }
+
+      if (validation) {
+        historyPayload.validation = {
+          faithfulnessScore: validation.faithfulnessScore,
+          relevanceScore: validation.relevanceScore,
+          isValid: validation.isValid
+        }
+      }
+      if (namespaceId) {
+        historyPayload.namespace = namespaceId
+      }
+      if (context.retrievalMetadata?.storeType) {
+        historyPayload.storeType = context.retrievalMetadata.storeType
+      }
+      if (context.retrievalMetadata?.driftDetected !== undefined) {
+        historyPayload.driftDetected = context.retrievalMetadata.driftDetected
+      }
+      if (context.retrievalMetadata?.driftReasons) {
+        historyPayload.driftReasons = context.retrievalMetadata.driftReasons
+      }
+
       queryHistoryService
-        .add({
-          id: runId,
-          timestamp: new Date().toISOString(),
-          query,
-          routing: routing
-            ? {
-                strategy: routing.strategy,
-                reasoning: routing.reasoning,
-                confidence: routing.confidence
-              }
-            : {
-                strategy: 'hybrid',
-                reasoning:
-                  'Query decomposed into sub-queries',
-                confidence: 1.0
-              },
-          resultCount: allSources.length,
-          topScore: allSources[0]?.relevanceScore || 0,
-          azureUsed: azureServiceManager.isConfigured(),
-          azureFallback,
-          totalDuration,
-          retrievalDuration: retrievalDurationMs,
-          retrievalAvgScore:
-            allSources.length > 0
-              ? allSources.reduce(
-                  (s, x) => s + x.relevanceScore,
-                  0
-                ) / allSources.length
-              : 0,
-          workflow: workflow.map(s => ({
-            agent: s.agent,
-            action: s.action,
-            duration: s.duration || 0,
-            status: s.status
-          })),
-          complexity: classification.complexity,
-          requiresDecomposition:
-            classification.requiresDecomposition,
-          validation: validation
-            ? {
-                faithfulnessScore:
-                  validation.faithfulnessScore,
-                relevanceScore:
-                  validation.relevanceScore,
-                isValid: validation.isValid
-              }
-            : undefined,
-          executionSummary,
-          // NEW: Vector/Hybrid retrieval metadata (best-effort; may be undefined)
-          namespace: azureServiceManager.getNamespaceId(),
-          storeType: context.retrievalMetadata?.storeType,
-          driftDetected: context.retrievalMetadata?.driftDetected,
-          driftReasons: context.retrievalMetadata?.driftReasons
-        })
+        .add(historyPayload)
         .catch(error => {
           console.error(
             'Failed to log query to history:',
@@ -650,8 +706,8 @@ export class AgenticOrchestrator {
             completionTokens: lastCall.completionTokens,
             totalTokens: lastCall.totalTokens,
             estimatedCost: lastCall.estimatedCost,
-            temperature: lastCall.temperature,
-            maxTokens: lastCall.maxTokens
+            ...(lastCall.temperature !== undefined ? { temperature: lastCall.temperature } : {}),
+            ...(lastCall.maxTokens !== undefined ? { maxTokens: lastCall.maxTokens } : {})
           }
         }
       }
@@ -709,8 +765,8 @@ export class AgenticOrchestrator {
             completionTokens: lastCall.completionTokens,
             totalTokens: lastCall.totalTokens,
             estimatedCost: lastCall.estimatedCost,
-            temperature: lastCall.temperature,
-            maxTokens: lastCall.maxTokens
+            ...(lastCall.temperature !== undefined ? { temperature: lastCall.temperature } : {}),
+            ...(lastCall.maxTokens !== undefined ? { maxTokens: lastCall.maxTokens } : {})
           }
         }
       }
@@ -770,9 +826,13 @@ export class AgenticOrchestrator {
                 emitStepEvent
               )
 
-              return findRelevantChunks(sq.query, documents, 3, routingDecision.strategy, {
-                onAzureFallback,
-              })
+	              return findRelevantChunks(
+	                sq.query,
+	                documents,
+	                3,
+	                routingDecision.strategy,
+	                onAzureFallback ? { onAzureFallback } : undefined
+	              )
             },
             emitWorkflowUpdate,
             emitStepEvent
@@ -802,9 +862,14 @@ export class AgenticOrchestrator {
           workflow,
           'Retrieval',
           `Execute sub-query: ${sq.query.substring(0, 40)}...`,
-          () => findRelevantChunks(sq.query, documents, 3, routingDecision.strategy, {
-            onAzureFallback,
-          }),
+	          () =>
+	            findRelevantChunks(
+	              sq.query,
+	              documents,
+	              3,
+	              routingDecision.strategy,
+	              onAzureFallback ? { onAzureFallback } : undefined
+	            ),
           emitWorkflowUpdate,
           emitStepEvent
         )
@@ -831,9 +896,10 @@ export class AgenticOrchestrator {
     }
 
     try {
+      const namespaceId = azureServiceManager.getNamespaceId()
       return await findRelevantChunks(query, documents, 5, strategy, {
-        onAzureFallback,
-        namespaceId: azureServiceManager.getNamespaceId()
+        ...(onAzureFallback ? { onAzureFallback } : {}),
+        ...(namespaceId ? { namespaceId } : {})
       })
     } catch (error) {
       console.warn('Primary retrieval path failed, using local fallback:', error)
@@ -848,9 +914,8 @@ export class AgenticOrchestrator {
 
       onAzureFallback?.()
 
-      return findRelevantChunksLocal(query, documents, 5, strategy, {
-        namespaceId: azureServiceManager.getNamespaceId()
-      })
+      const namespaceId = azureServiceManager.getNamespaceId()
+      return findRelevantChunksLocal(query, documents, 5, strategy, namespaceId ? { namespaceId } : undefined)
     }
   }
 

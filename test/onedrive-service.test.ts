@@ -57,16 +57,12 @@ describe('OneDriveService', () => {
         })
       )
 
-      await (service as any).fetchWithAuth('https://graph.microsoft.com/v1.0/test', 'test-token')
+      await (service as any).fetchWithAuth('https://graph.microsoft.com/v1.0/test', { value: 'test-token' })
 
-      expect(fetchSpy).toHaveBeenCalledWith(
-        'https://graph.microsoft.com/v1.0/test',
-        expect.objectContaining({
-          headers: expect.objectContaining({
-            'Authorization': 'Bearer test-token'
-          })
-        })
-      )
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      const call = fetchSpy.mock.calls[0]
+      const headers = new Headers(call[1]?.headers as HeadersInit)
+      expect(headers.get('Authorization')).toBe('Bearer test-token')
     })
 
     it('throws error on non-OK responses', async () => {
@@ -75,7 +71,7 @@ describe('OneDriveService', () => {
       )
 
       await expect(
-        (service as any).fetchWithAuth('https://graph.microsoft.com/v1.0/test', 'bad-token')
+        (service as any).fetchWithAuth('https://graph.microsoft.com/v1.0/test', { value: 'bad-token' }, {}, 1)
       ).rejects.toThrow('OneDrive API error')
     })
 
@@ -84,15 +80,15 @@ describe('OneDriveService', () => {
         new Response(JSON.stringify({}), { status: 200 })
       )
 
-      await (service as any).fetchWithAuth('https://graph.microsoft.com/v1.0/test', 'token', {
+      await (service as any).fetchWithAuth('https://graph.microsoft.com/v1.0/test', { value: 'token' }, {
         headers: { 'Custom-Header': 'value' }
       })
 
       const callArgs = fetchSpy.mock.calls[0]
-      const headers = callArgs[1]?.headers as Record<string, string>
+      const headers = new Headers(callArgs[1]?.headers as HeadersInit)
 
-      expect(headers['Authorization']).toBe('Bearer token')
-      expect(headers['Custom-Header']).toBe('value')
+      expect(headers.get('Authorization')).toBe('Bearer token')
+      expect(headers.get('Custom-Header')).toBe('value')
     })
   })
 
@@ -114,7 +110,7 @@ describe('OneDriveService', () => {
         }), { status: 200 })
       )
 
-      const files = await (service as any).listFiles('token')
+      const files = await (service as any).listFiles({ value: 'token' })
 
       expect(files).toHaveLength(1)
       expect(files[0].name).toBe('test.txt')
@@ -131,7 +127,7 @@ describe('OneDriveService', () => {
         }), { status: 200 })
       )
 
-      await (service as any).listFiles('token', 'documents/work')
+      await (service as any).listFiles({ value: 'token' }, 'documents/work')
 
       expect(fetchSpy).toHaveBeenCalledWith(
         expect.stringContaining('documents%2Fwork'),
@@ -159,7 +155,7 @@ describe('OneDriveService', () => {
         }), { status: 200 })
       )
 
-      const files = await (service as any).listFiles('token')
+      const files = await (service as any).listFiles({ value: 'token' })
 
       expect(files).toHaveLength(2)
       expect(files[0].name).toBe('file1.txt')
@@ -187,7 +183,7 @@ describe('OneDriveService', () => {
         }), { status: 200 })
       )
 
-      const files = await (service as any).listFiles('token')
+      const files = await (service as any).listFiles({ value: 'token' })
 
       expect(files).toHaveLength(2)
       expect(fetchSpy).toHaveBeenCalledTimes(2)
@@ -205,7 +201,7 @@ describe('OneDriveService', () => {
         }), { status: 200 })
       )
 
-      const files = await (service as any).listFiles('token')
+      const files = await (service as any).listFiles({ value: 'token' })
 
       expect(files).toHaveLength(2)
       expect(files.some((f: any) => f.name === 'image.png')).toBe(false)
@@ -225,7 +221,7 @@ describe('OneDriveService', () => {
         '@microsoft.graph.downloadUrl': 'https://download.example.com/file'
       }
 
-      const content = await (service as any).downloadFile('token', item)
+      const content = await (service as any).downloadFile({ value: 'token' }, item)
 
       expect(content).toBe('File content')
       expect(fetchSpy).toHaveBeenCalledWith('https://download.example.com/file')
@@ -242,17 +238,13 @@ describe('OneDriveService', () => {
         size: 100
       }
 
-      const content = await (service as any).downloadFile('token', item)
+      const content = await (service as any).downloadFile({ value: 'token' }, item)
 
       expect(content).toBe('File content via API')
-      expect(fetchSpy).toHaveBeenCalledWith(
-        'https://graph.microsoft.com/v1.0/me/drive/items/123/content',
-        expect.objectContaining({
-          headers: expect.objectContaining({
-            'Authorization': 'Bearer token'
-          })
-        })
-      )
+      const call = fetchSpy.mock.calls[0]
+      expect(call[0]).toBe('https://graph.microsoft.com/v1.0/me/drive/items/123/content')
+      const headers = new Headers(call[1]?.headers as HeadersInit)
+      expect(headers.get('Authorization')).toBe('Bearer token')
     })
 
     it('throws error on download failure with direct URL', async () => {
@@ -268,7 +260,7 @@ describe('OneDriveService', () => {
       }
 
       await expect(
-        (service as any).downloadFile('token', item)
+        (service as any).downloadFile({ value: 'token' }, item)
       ).rejects.toThrow('Failed to download file')
     })
 
@@ -284,7 +276,7 @@ describe('OneDriveService', () => {
       }
 
       await expect(
-        (service as any).downloadFile('token', item)
+        (service as any).downloadFile({ value: 'token' }, item)
       ).rejects.toThrow('OneDrive API error')
     })
   })

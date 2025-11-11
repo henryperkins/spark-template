@@ -1,4 +1,4 @@
-import { useEffect, lazy, Suspense } from 'react'
+import { useEffect, lazy, Suspense, useMemo, useCallback } from 'react'
 import { useStorage } from '@/hooks/use-kv'
 import { ResponsiveNavigation } from '@/components/ResponsiveNavigation'
 import { ThemeToggle } from '@/components/ThemeToggle'
@@ -9,14 +9,30 @@ import { cacheManager } from '@/lib/cache-manager'
 import { errorTracking } from '@/lib/services/error-tracker'
 import { intelligentChunkDocument } from '@/lib/rag'
 import { runtime } from '@/lib/config'
+import { SectionErrorBoundary } from '@/components/SectionErrorBoundary'
 
-const QueryInterface = lazy(() => import('@/components/QueryInterface').then(m => ({ default: m.QueryInterface })))
-const DocumentUpload = lazy(() => import('@/components/DocumentUpload').then(m => ({ default: m.DocumentUpload })))
-const Integrations = lazy(() => import('@/components/Integrations').then(m => ({ default: m.Integrations })))
-const DocumentListV2 = lazy(() => import('@/components/DocumentListV2').then(m => ({ default: m.DocumentListV2 })))
-const ScalingDashboard = lazy(() => import('@/components/ScalingDashboard').then(m => ({ default: m.ScalingDashboard })))
-const AzureConfiguration = lazy(() => import('@/components/AzureConfiguration').then(m => ({ default: m.AzureConfiguration })))
-const ArchitectureDiagram = lazy(() => import('@/components/ArchitectureDiagram').then(m => ({ default: m.ArchitectureDiagram })))
+const loadQueryInterface = () =>
+  import('@/components/QueryInterface').then(m => ({ default: m.QueryInterface }))
+const loadDocumentUpload = () =>
+  import('@/components/DocumentUpload').then(m => ({ default: m.DocumentUpload }))
+const loadIntegrations = () =>
+  import('@/components/Integrations').then(m => ({ default: m.Integrations }))
+const loadDocumentListV2 = () =>
+  import('@/components/DocumentListV2').then(m => ({ default: m.DocumentListV2 }))
+const loadScalingDashboard = () =>
+  import('@/components/ScalingDashboard').then(m => ({ default: m.ScalingDashboard }))
+const loadAzureConfiguration = () =>
+  import('@/components/AzureConfiguration').then(m => ({ default: m.AzureConfiguration }))
+const loadArchitectureDiagram = () =>
+  import('@/components/ArchitectureDiagram').then(m => ({ default: m.ArchitectureDiagram }))
+
+const QueryInterface = lazy(loadQueryInterface)
+const DocumentUpload = lazy(loadDocumentUpload)
+const Integrations = lazy(loadIntegrations)
+const DocumentListV2 = lazy(loadDocumentListV2)
+const ScalingDashboard = lazy(loadScalingDashboard)
+const AzureConfiguration = lazy(loadAzureConfiguration)
+const ArchitectureDiagram = lazy(loadArchitectureDiagram)
 
 const LoadingSpinner = () => (
   <div className="flex items-center justify-center p-8">
@@ -44,7 +60,7 @@ function App() {
     }
   }, [azureConfig])
 
-  const handleDeleteDocument = async (documentId: string) => {
+  const handleDeleteDocument = useCallback(async (documentId: string) => {
     if (azureServiceManager.isConfigured()) {
       try {
         await azureServiceManager.deleteDocumentFromAzure(documentId)
@@ -56,10 +72,10 @@ function App() {
     await cacheManager.invalidateDocument(documentId)
     await cacheManager.invalidateByPrefix('query-expansion')
     await cacheManager.invalidateByPrefix('rag-query')
-  }
+  }, [])
  
   // Edit handler: fetch meta/chunks from Worker, update locally or via Azure, then persist back to Worker
-  const handleEditDocumentContent = async (documentId: string, newContent: string) => {
+  const handleEditDocumentContent = useCallback(async (documentId: string, newContent: string) => {
     // Load existing details
     const detailsResp = await fetch(`/api/documents/${encodeURIComponent(documentId)}`)
     if (!detailsResp.ok) {
@@ -81,9 +97,9 @@ function App() {
       type: meta.type,
       chunks: existingChunks,
       processed: meta.processingStatus === 'completed' || existingChunks.length > 0,
-      azureIndexed: meta.azureIndexed,
+      azureIndexed: meta.azureIndexed ?? undefined,
       processingStatus: meta.processingStatus,
-      errorMessage: undefined,
+      ...(typeof meta.errorMessage === 'string' ? { errorMessage: meta.errorMessage } : {}),
       source: meta.source,
       sourceUrl: meta.sourceUrl,
       sourceMetadata: meta.sourceMetadata,
@@ -103,8 +119,7 @@ function App() {
         chunks,
         processed: true,
         processingStatus: 'completed',
-        azureIndexed: false,
-        errorMessage: undefined
+        azureIndexed: false
       }
     }
  
@@ -145,85 +160,120 @@ function App() {
     await cacheManager.invalidateDocument(documentId)
     await cacheManager.invalidateByPrefix('query-expansion')
     await cacheManager.invalidateByPrefix('rag-query')
-  }
+  }, [])
  
   const NAV_ICON_SIZE = 18
 
-  const navigationTabs = [
+  const navigationTabs = useMemo(() => [
     {
       value: 'query',
       label: 'Query',
       icon: <ChatCircle size={NAV_ICON_SIZE} />,
-      content: (
-        <Suspense fallback={<LoadingSpinner />}>
-          <QueryInterface />
-        </Suspense>
-      )
+      render: () => (
+        <SectionErrorBoundary section="Query interface">
+          <Suspense fallback={<LoadingSpinner />}>
+            <QueryInterface />
+          </Suspense>
+        </SectionErrorBoundary>
+      ),
+      preload: () => {
+        void loadQueryInterface()
+      }
     },
     {
       value: 'upload',
       label: 'Upload',
       icon: <FileText size={NAV_ICON_SIZE} />,
-      content: (
-        <Suspense fallback={<LoadingSpinner />}>
-          <DocumentUpload onDocumentUploaded={() => {}} />
-        </Suspense>
-      )
+      render: () => (
+        <SectionErrorBoundary section="Document upload">
+          <Suspense fallback={<LoadingSpinner />}>
+            <DocumentUpload onDocumentUploaded={() => {}} />
+          </Suspense>
+        </SectionErrorBoundary>
+      ),
+      preload: () => {
+        void loadDocumentUpload()
+      }
     },
     {
       value: 'integrations',
       label: 'Integrations',
       icon: <PlugsConnected size={NAV_ICON_SIZE} />,
-      content: (
-        <Suspense fallback={<LoadingSpinner />}>
-          <Integrations onDocumentsIngested={() => {}} />
-        </Suspense>
-      )
+      render: () => (
+        <SectionErrorBoundary section="Integrations hub">
+          <Suspense fallback={<LoadingSpinner />}>
+            <Integrations onDocumentsIngested={() => {}} />
+          </Suspense>
+        </SectionErrorBoundary>
+      ),
+      preload: () => {
+        void loadIntegrations()
+      }
     },
     {
       value: 'knowledge',
       label: 'Knowledge',
       icon: <Brain size={NAV_ICON_SIZE} />,
-      content: (
-        <Suspense fallback={<LoadingSpinner />}>
-          <DocumentListV2
-            onDeleteDocument={handleDeleteDocument}
-            onEditDocument={handleEditDocumentContent}
-          />
-        </Suspense>
-      )
+      render: () => (
+        <SectionErrorBoundary section="Knowledge base">
+          <Suspense fallback={<LoadingSpinner />}>
+            <DocumentListV2
+              onDeleteDocument={handleDeleteDocument}
+              onEditDocument={handleEditDocumentContent}
+            />
+          </Suspense>
+        </SectionErrorBoundary>
+      ),
+      preload: () => {
+        void loadDocumentListV2()
+      }
     },
     {
       value: 'scaling',
       label: 'Scaling',
       icon: <ChartBar size={NAV_ICON_SIZE} />,
-      content: (
-        <Suspense fallback={<LoadingSpinner />}>
-          <ScalingDashboard documents={[]} />
-        </Suspense>
-      )
+      render: () => (
+        <SectionErrorBoundary section="Scaling dashboard">
+          <Suspense fallback={<LoadingSpinner />}>
+            <ScalingDashboard documents={[]} />
+          </Suspense>
+        </SectionErrorBoundary>
+      ),
+      preload: () => {
+        void loadScalingDashboard()
+      }
     },
     {
       value: 'azure',
       label: 'Azure',
       icon: <CloudArrowUp size={NAV_ICON_SIZE} />,
-      content: (
-        <Suspense fallback={<LoadingSpinner />}>
-          <AzureConfiguration />
-        </Suspense>
-      )
+      render: () => (
+        <SectionErrorBoundary section="Azure configuration">
+          <Suspense fallback={<LoadingSpinner />}>
+            <AzureConfiguration />
+          </Suspense>
+        </SectionErrorBoundary>
+      ),
+      preload: () => {
+        void loadAzureConfiguration()
+      }
     },
     {
       value: 'architecture',
       label: 'Architecture',
       icon: <TreeStructure size={NAV_ICON_SIZE} />,
-      content: (
-        <Suspense fallback={<LoadingSpinner />}>
-          <ArchitectureDiagram />
-        </Suspense>
-      )
+      render: () => (
+        <SectionErrorBoundary section="Architecture diagram">
+          <Suspense fallback={<LoadingSpinner />}>
+            <ArchitectureDiagram />
+          </Suspense>
+        </SectionErrorBoundary>
+      ),
+      preload: () => {
+        void loadArchitectureDiagram()
+      }
     }
-  ]
+  ], [handleDeleteDocument, handleEditDocumentContent])
 
   return (
     <div className="min-h-screen bg-background">

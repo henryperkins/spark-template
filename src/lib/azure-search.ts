@@ -734,8 +734,9 @@ Alternative Solutions:
         const dimensionMismatch = /mismatch in vector dimensions/i.test(errorText)
         const providedMatch = /provided vector has a length of '(\d+)'/i.exec(errorText)
         if (dimensionMismatch && allowSchemaRefresh) {
-          const providedDimensions = providedMatch
-            ? Number.parseInt(providedMatch[1], 10)
+          const matchValue = providedMatch?.[1]
+          const providedDimensions = matchValue
+            ? Number.parseInt(matchValue, 10)
             : (documents[0]?.contentVector?.length ?? this.getDefaultVectorDimensions())
           // Perform a full rebuild to safely change vector dimensions.
           const rebuildResult = await this.rebuildIndex(providedDimensions)
@@ -991,16 +992,26 @@ Alternative Solutions:
 
       const result: { value: Array<Record<string, unknown>> } = await response.json()
 
-      let sources: Source[] = result.value.map((doc: Record<string, unknown>) => ({
-        documentId: doc.documentId as string,
-        documentName: doc.documentName as string,
-        chunkId: doc.id as string,
-        content: doc.content as string,
-        relevanceScore: doc['@search.score'] ? (doc['@search.score'] as number) / 100 : 0.85,
-        azureScore: (doc['@search.score'] as number | undefined) ?? 85,
-        semanticCaption: (doc['@search.captions'] as Array<{ text?: string }> | undefined)?.[0]?.text,
-        semanticRerankerScore: doc['@search.rerankerScore'] as number | undefined
-      }))
+      let sources: Source[] = result.value.map((doc: Record<string, unknown>) => {
+        const source: Source = {
+          documentId: doc.documentId as string,
+          documentName: doc.documentName as string,
+          chunkId: doc.id as string,
+          content: doc.content as string,
+          relevanceScore: doc['@search.score'] ? (doc['@search.score'] as number) / 100 : 0.85
+        }
+        const azureScore = doc['@search.score'] as number | undefined
+        source.azureScore = azureScore ?? 85
+        const semanticCaption = (doc['@search.captions'] as Array<{ text?: string }> | undefined)?.[0]?.text
+        if (semanticCaption) {
+          source.semanticCaption = semanticCaption
+        }
+        const rerankerScore = doc['@search.rerankerScore'] as number | undefined
+        if (rerankerScore !== undefined) {
+          source.semanticRerankerScore = rerankerScore
+        }
+        return source
+      })
 
       if (this.config.contextCompression?.enabled && this.config.contextCompression.method !== 'none') {
         sources = await this.applyContextualCompression(sources, query)

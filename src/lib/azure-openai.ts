@@ -1,6 +1,6 @@
 import { AzureConfig } from '@/types'
 import { estimateTokens, truncateContext } from '@/lib/prompt-utils'
-import { ResponsesClient, ResponsesClientConfig } from './responses-client'
+import { ResponsesClient, ResponsesClientConfig, type CreateResponseOptions, type ResponsesUsage } from './responses-client'
 import { errorTracking } from '@/lib/services/error-tracker'
 
 // Embedding model limits with safety margin
@@ -8,6 +8,35 @@ const EMBEDDING_MODEL = 'text-embedding-3-large'
 const EMBEDDING_MAX_CTX = 8192
 const EMBEDDING_SAFETY_MARGIN = 0.8
 const EMBEDDING_MAX_TOKENS = Math.floor(EMBEDDING_MAX_CTX * EMBEDDING_SAFETY_MARGIN) // ~6553
+
+const assignIfDefined = <T, K extends keyof T>(
+  target: T,
+  key: K,
+  value: T[K] | undefined
+): void => {
+  if (value !== undefined) {
+    target[key] = value
+  }
+}
+
+const mapResponsesUsage = (
+  usage?: ResponsesUsage
+): { promptTokens?: number; completionTokens?: number; totalTokens?: number; reasoningTokens?: number } | undefined => {
+  if (!usage) {
+    return undefined
+  }
+
+  const mapped: { promptTokens?: number; completionTokens?: number; totalTokens?: number; reasoningTokens?: number } =
+    {}
+  assignIfDefined(mapped, 'promptTokens', usage.inputTokens)
+  assignIfDefined(mapped, 'completionTokens', usage.outputTokens)
+  assignIfDefined(mapped, 'totalTokens', usage.totalTokens)
+  assignIfDefined(mapped, 'reasoningTokens', usage.reasoningTokens)
+
+  return Object.keys(mapped).length > 0 ? mapped : undefined
+}
+
+type UsageSummary = Exclude<ReturnType<typeof mapResponsesUsage>, undefined>
 
 type SafeChatOptions = {
   maxTokens?: number
@@ -89,12 +118,12 @@ export class AzureOpenAIService {
       apiKey: this.config.apiKey,
       defaultModel,
       apiVersion: this.config.responsesApiVersion || 'v1',
-      timeoutMs: this.config.responsesTimeoutMs,
       // Standardized default output budget for Responses API.
-      defaultMaxOutputTokens: 1536,
-      defaultStore: this.config.responsesStore,
-      defaultBackground: this.config.responsesBackground
+      defaultMaxOutputTokens: 1536
     }
+    assignIfDefined(cfg, 'timeoutMs', this.config.responsesTimeoutMs)
+    assignIfDefined(cfg, 'defaultStore', this.config.responsesStore)
+    assignIfDefined(cfg, 'defaultBackground', this.config.responsesBackground)
 
     this.responsesClient = new ResponsesClient(cfg)
   }
@@ -375,38 +404,58 @@ export class AzureOpenAIService {
     if (this.responsesClient) {
       if (options?.stream && options.onChunk) {
         // Streaming path
-        for await (const delta of this.responsesClient.streamText({
+        const streamOptions: CreateResponseOptions = {
           messages: this.toResponseMessages(userMessages),
-          instructions: systemInstructions,
-          maxOutputTokens: options.maxTokens,
-          temperature: options.temperature,
-          topP: options.topP,
           // Ensure streaming is not treated as background
           background: false,
           responseFormat:
             options.responseFormat === 'json_object'
               ? { type: 'json_object' }
               : { type: 'text' }
-        })) {
+        }
+        if (systemInstructions) {
+          streamOptions.instructions = systemInstructions
+        }
+        if (options.maxTokens !== undefined) {
+          streamOptions.maxOutputTokens = options.maxTokens
+        }
+        if (options.temperature !== undefined) {
+          streamOptions.temperature = options.temperature
+        }
+        if (options.topP !== undefined) {
+          streamOptions.topP = options.topP
+        }
+
+        for await (const delta of this.responsesClient.streamText(streamOptions)) {
           options.onChunk?.(delta)
         }
         return ''
       } else {
         // Non-streaming path
         try {
-          let result = await this.responsesClient.createResponse({
+          const createOptions: CreateResponseOptions = {
             messages: this.toResponseMessages(userMessages),
-            instructions: systemInstructions,
-            maxOutputTokens: options?.maxTokens,
-            temperature: options?.temperature,
-            topP: options?.topP,
             // Critical: keep sync calls out of background mode
             background: false,
             responseFormat:
               options?.responseFormat === 'json_object'
                 ? { type: 'json_object' }
                 : { type: 'text' }
-          })
+          }
+          if (systemInstructions) {
+            createOptions.instructions = systemInstructions
+          }
+          if (options?.maxTokens !== undefined) {
+            createOptions.maxOutputTokens = options.maxTokens
+          }
+          if (options?.temperature !== undefined) {
+            createOptions.temperature = options.temperature
+          }
+          if (options?.topP !== undefined) {
+            createOptions.topP = options.topP
+          }
+
+          let result = await this.responsesClient.createResponse(createOptions)
           if (result && result.id && result.status && result.status !== 'completed') {
             result = await this.pollResponseUntilDone(result.id, result, this.config.responsesTimeoutMs)
           }
@@ -481,33 +530,38 @@ export class AzureOpenAIService {
     // RESPONSES API PATH
     if (this.responsesClient) {
       try {
-        let result = await this.responsesClient.createResponse({
+        const createOptions: CreateResponseOptions = {
           messages: this.toResponseMessages(userMessages),
-          instructions: systemInstructions,
-          maxOutputTokens: options?.maxTokens,
-          temperature: options?.temperature,
-          topP: options?.topP,
           // Critical: keep sync calls out of background mode
           background: false,
           responseFormat:
             options?.responseFormat === 'json_object'
               ? { type: 'json_object' }
               : { type: 'text' }
-        })
+        }
+        assignIfDefined(createOptions, 'instructions', systemInstructions)
+        assignIfDefined(createOptions, 'maxOutputTokens', options?.maxTokens)
+        assignIfDefined(createOptions, 'temperature', options?.temperature)
+        assignIfDefined(createOptions, 'topP', options?.topP)
+
+        let result = await this.responsesClient.createResponse(createOptions)
         if (result && result.id && result.status && result.status !== 'completed') {
           result = await this.pollResponseUntilDone(result.id, result, this.config.responsesTimeoutMs)
         }
 
-        const usage = result.usage
-          ? {
-              promptTokens: result.usage.inputTokens,
-              completionTokens: result.usage.outputTokens,
-              totalTokens: result.usage.totalTokens,
-              reasoningTokens: result.usage.reasoningTokens
-            }
-          : undefined
-
-        return { text: result.outputText, usage, reasoningPreview: result.reasoningPreview }
+        const usage = mapResponsesUsage(result.usage)
+        const response: {
+          text: string
+          usage?: UsageSummary
+          reasoningPreview?: string
+        } = { text: result.outputText }
+        if (usage) {
+          response.usage = usage
+        }
+        if (result.reasoningPreview !== undefined) {
+          response.reasoningPreview = result.reasoningPreview
+        }
+        return response
       } catch (error) {
         this.logResponsesClient400(error, options?.responseFormat === 'json_object')
         const status = (error as any)?.status as number | undefined
@@ -528,14 +582,21 @@ export class AzureOpenAIService {
           }
           const data = await res.json()
           const text: string = data?.choices?.[0]?.message?.content ?? ''
-          const usage = data?.usage
-            ? {
-                promptTokens: usageNumber(usageValue(data.usage.prompt_tokens)),
-                completionTokens: usageNumber(usageValue(data.usage.completion_tokens)),
-                totalTokens: usageNumber(usageValue(data.usage.total_tokens))
-              }
-            : undefined
-          return { text, usage }
+          let usage: UsageSummary | undefined
+          if (data?.usage) {
+            const usagePayload: ResponsesUsage = {}
+            assignIfDefined(usagePayload, 'inputTokens', usageNumber(usageValue(data.usage.prompt_tokens)))
+            assignIfDefined(usagePayload, 'outputTokens', usageNumber(usageValue(data.usage.completion_tokens)))
+            assignIfDefined(usagePayload, 'totalTokens', usageNumber(usageValue(data.usage.total_tokens)))
+            usage = mapResponsesUsage(usagePayload)
+          } else {
+            usage = undefined
+          }
+          const response: { text: string; usage?: UsageSummary } = { text }
+          if (usage) {
+            response.usage = usage
+          }
+          return response
         }
         throw error
       }
@@ -559,15 +620,22 @@ export class AzureOpenAIService {
 
     const data = await res.json()
     const text: string = data?.choices?.[0]?.message?.content ?? ''
-    const usage = data?.usage
-      ? {
-          promptTokens: usageNumber(usageValue(data.usage.prompt_tokens)),
-          completionTokens: usageNumber(usageValue(data.usage.completion_tokens)),
-          totalTokens: usageNumber(usageValue(data.usage.total_tokens))
-        }
-      : undefined
+    let usage: UsageSummary | undefined
+    if (data?.usage) {
+      const usagePayload: ResponsesUsage = {}
+      assignIfDefined(usagePayload, 'inputTokens', usageNumber(usageValue(data.usage.prompt_tokens)))
+      assignIfDefined(usagePayload, 'outputTokens', usageNumber(usageValue(data.usage.completion_tokens)))
+      assignIfDefined(usagePayload, 'totalTokens', usageNumber(usageValue(data.usage.total_tokens)))
+      usage = mapResponsesUsage(usagePayload)
+    } else {
+      usage = undefined
+    }
 
-    return { text, usage }
+    const response: { text: string; usage?: UsageSummary } = { text }
+    if (usage) {
+      response.usage = usage
+    }
+    return response
 
     function usageValue(v: unknown): number | undefined {
       return typeof v === 'number' ? v : undefined
@@ -692,19 +760,23 @@ export class AzureOpenAIService {
         result = await this.pollResponseUntilDone(result.id, result, this.config.responsesTimeoutMs)
       }
 
-      return {
+      const usage = mapResponsesUsage(result.usage)
+      const response: {
+        text: string
+        usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number }
+        responseId?: string
+        messages?: any[]
+        raw?: any
+      } = {
         text: result.outputText,
-        usage: result.usage
-          ? {
-              promptTokens: result.usage.inputTokens,
-              completionTokens: result.usage.outputTokens,
-              totalTokens: result.usage.totalTokens
-            }
-          : undefined,
         responseId: result.id,
         messages: result.messages,
         raw: result.raw
       }
+      if (usage) {
+        response.usage = usage
+      }
+      return response
     }
 
     // Fallback to generateCompletionWithUsage for /chat/completions
@@ -717,7 +789,11 @@ export class AzureOpenAIService {
     ]
 
     const { text, usage } = await this.generateCompletionWithUsage(messages)
-    return { text, usage }
+    const response: { text: string; usage?: UsageSummary } = { text }
+    if (usage) {
+      response.usage = usage
+    }
+    return response
   }
 
   /**
@@ -734,20 +810,32 @@ export class AzureOpenAIService {
       // ignore parse errors
     }
 
+    const requestContext: NonNullable<AzureErrorDetail['requestContext']> = {
+      apiVersion: this.config.apiVersion,
+      deployment: this.config.deploymentName,
+      hasStream: !!body.stream
+    }
+    const maxTokens = body.max_completion_tokens as number | undefined
+    const temperature = body.temperature as number | undefined
+    const topP = body.top_p as number | undefined
+    assignIfDefined(requestContext, 'maxTokens', maxTokens)
+    assignIfDefined(requestContext, 'temperature', temperature)
+    assignIfDefined(requestContext, 'topP', topP)
+
     const detail: AzureErrorDetail = {
       status: res.status,
-      code: parsed?.error?.code,
       message: parsed?.error?.message || res.statusText || 'Azure OpenAI request failed',
-      param: parsed?.error?.param,
-      requestId: res.headers.get('x-ms-request-id') ?? undefined,
-      requestContext: {
-        apiVersion: this.config.apiVersion,
-        deployment: this.config.deploymentName,
-        hasStream: !!body.stream,
-        maxTokens: body.max_completion_tokens as number | undefined,
-        temperature: body.temperature as number | undefined,
-        topP: body.top_p as number | undefined
-      }
+      requestContext
+    }
+    if (parsed?.error?.code) {
+      detail.code = parsed.error.code
+    }
+    if (parsed?.error?.param) {
+      detail.param = parsed.error.param
+    }
+    const requestId = res.headers.get('x-ms-request-id') ?? undefined
+    if (requestId) {
+      detail.requestId = requestId
     }
 
     const err = new Error(
@@ -759,13 +847,18 @@ export class AzureOpenAIService {
     err.azure = detail
 
     try {
-      errorTracking.record(err, {
+      const context: Parameters<typeof errorTracking.record>[1] = {
         type: 'llm',
         agent: 'AzureOpenAI',
-        code: detail.code,
-        status: detail.status,
-        requestId: detail.requestId
-      })
+        status: detail.status
+      }
+      if (detail.code) {
+        context.code = detail.code
+      }
+      if (detail.requestId) {
+        context.requestId = detail.requestId
+      }
+      errorTracking.record(err, context)
     } catch {
       // best-effort
     }
@@ -870,7 +963,13 @@ export class AzureOpenAIService {
       ? systemMessages.map(m => m.content).join('\n\n')
       : undefined
 
-    return { systemInstructions, userMessages }
+    const result: { userMessages: Array<{ role: string; content: string }> | string; systemInstructions?: string } = {
+      userMessages
+    }
+    if (systemInstructions !== undefined) {
+      result.systemInstructions = systemInstructions
+    }
+    return result
   }
 
   /**
@@ -1023,17 +1122,19 @@ export class AzureOpenAIService {
     // Validate tools before sending to API
     this.validateTools(options.tools)
 
-    return this.responsesClient.createResponse({
+    const createOptions: CreateResponseOptions = {
       messages: this.toResponseMessages(userMessages),
-      instructions: systemInstructions,
       tools: options.tools,
-      toolChoice: options.toolChoice,
-      maxOutputTokens: options.maxTokens,
-      temperature: options.temperature,
       // Sync tool calls should not be backgrounded by default
-      background: false,
-      extraBody: options.extraBody
-    })
+      background: false
+    }
+    assignIfDefined(createOptions, 'instructions', systemInstructions)
+    assignIfDefined(createOptions, 'toolChoice', options.toolChoice)
+    assignIfDefined(createOptions, 'maxOutputTokens', options.maxTokens)
+    assignIfDefined(createOptions, 'temperature', options.temperature)
+    assignIfDefined(createOptions, 'extraBody', options.extraBody)
+
+    return this.responsesClient.createResponse(createOptions)
   }
 
   /**
@@ -1056,11 +1157,14 @@ export class AzureOpenAIService {
     const { systemInstructions, userMessages } = this.extractSystemInstructions(options.messages)
 
     // Validate MCP options early for clearer developer errors
-    this.validateMcpOptions({
+    const mcpOptions: { mcpServerUrl: string; mcpServerLabel: string; requireApproval?: 'always' | 'never' } = {
       mcpServerUrl: options.mcpServerUrl,
-      mcpServerLabel: options.mcpServerLabel,
-      requireApproval: options.requireApproval
-    })
+      mcpServerLabel: options.mcpServerLabel
+    }
+    if (options.requireApproval) {
+      mcpOptions.requireApproval = options.requireApproval
+    }
+    this.validateMcpOptions(mcpOptions)
 
     const mcpTool: any = {
       type: 'mcp',
@@ -1073,14 +1177,16 @@ export class AzureOpenAIService {
       mcpTool.headers = options.headers
     }
 
-    return this.responsesClient.createResponse({
+    const createOptions: CreateResponseOptions = {
       messages: this.toResponseMessages(userMessages),
-      instructions: systemInstructions,
       tools: [mcpTool],
-      maxOutputTokens: options.maxTokens,
-      temperature: options.temperature,
       background: false
-    })
+    }
+    assignIfDefined(createOptions, 'instructions', systemInstructions)
+    assignIfDefined(createOptions, 'maxOutputTokens', options.maxTokens)
+    assignIfDefined(createOptions, 'temperature', options.temperature)
+
+    return this.responsesClient.createResponse(createOptions)
   }
 
   /**
@@ -1110,14 +1216,16 @@ export class AzureOpenAIService {
       codeInterpreterTool.container.file_ids = options.fileIds
     }
 
-    return this.responsesClient.createResponse({
+    const createOptions: CreateResponseOptions = {
       messages: this.toResponseMessages(userMessages),
-      instructions: finalInstructions,
       tools: [codeInterpreterTool],
-      maxOutputTokens: options.maxTokens,
-      temperature: options.temperature,
       background: false
-    })
+    }
+    assignIfDefined(createOptions, 'instructions', finalInstructions)
+    assignIfDefined(createOptions, 'maxOutputTokens', options.maxTokens)
+    assignIfDefined(createOptions, 'temperature', options.temperature)
+
+    return this.responsesClient.createResponse(createOptions)
   }
 
   /**
@@ -1133,8 +1241,7 @@ export class AzureOpenAIService {
       throw new Error('Responses API not enabled. Set useResponsesApi=true in config.')
     }
 
-    return this.responsesClient.createResponse({
-      model: options.model,
+    const createOptions: CreateResponseOptions = {
       messages: [
         {
           role: 'user',
@@ -1142,9 +1249,12 @@ export class AzureOpenAIService {
         }
       ],
       tools: [{ type: 'image_generation' }],
-      maxOutputTokens: options.maxTokens,
       background: false
-    })
+    }
+    assignIfDefined(createOptions, 'model', options.model)
+    assignIfDefined(createOptions, 'maxOutputTokens', options.maxTokens)
+
+    return this.responsesClient.createResponse(createOptions)
   }
 
   /**
@@ -1165,13 +1275,15 @@ export class AzureOpenAIService {
 
     const { systemInstructions, userMessages } = this.extractSystemInstructions(messages)
 
-    return this.responsesClient.createBackgroundResponse({
-      messages: this.toResponseMessages(userMessages),
-      instructions: systemInstructions,
-      maxOutputTokens: options?.maxTokens,
-      temperature: options?.temperature,
-      reasoning: options?.reasoning
-    })
+    const backgroundOptions: CreateResponseOptions = {
+      messages: this.toResponseMessages(userMessages)
+    }
+    assignIfDefined(backgroundOptions, 'instructions', systemInstructions)
+    assignIfDefined(backgroundOptions, 'maxOutputTokens', options?.maxTokens)
+    assignIfDefined(backgroundOptions, 'temperature', options?.temperature)
+    assignIfDefined(backgroundOptions, 'reasoning', options?.reasoning)
+
+    return this.responsesClient.createBackgroundResponse(backgroundOptions)
   }
 
   /**
@@ -1214,13 +1326,15 @@ export class AzureOpenAIService {
 
     const { systemInstructions, userMessages } = this.extractSystemInstructions(options.messages)
 
-    return this.responsesClient.createResponse({
+    const createOptions: CreateResponseOptions = {
       previousResponseId: options.previousResponseId,
       messages: this.toResponseMessages(userMessages),
-      instructions: systemInstructions,
-      maxOutputTokens: options.maxTokens,
-      temperature: options.temperature,
       background: false
-    })
+    }
+    assignIfDefined(createOptions, 'instructions', systemInstructions)
+    assignIfDefined(createOptions, 'maxOutputTokens', options.maxTokens)
+    assignIfDefined(createOptions, 'temperature', options.temperature)
+
+    return this.responsesClient.createResponse(createOptions)
   }
 }

@@ -3,6 +3,9 @@
  * Systematic error classification, aggregation, and analysis
  */
 
+import { captureSentryException, withSentryScope } from '@/lib/services/sentry-client'
+import { runtime as runtimeContext } from '@/lib/runtime-context'
+
 export type ErrorType =
   | 'retrieval'
   | 'llm'
@@ -55,17 +58,50 @@ class ErrorTrackingService {
       errorId: crypto.randomUUID(),
       type: context?.type || this.classifyError(error),
       message: error.message,
-      stack: error.stack,
-      agent: context?.agent,
-      query: context?.query,
-      code: context?.code,
-      status: context?.status,
-      requestId: context?.requestId,
-      metadata: context?.metadata,
       timestamp: new Date().toISOString()
     }
 
+    if (error.stack) {
+      errorEvent.stack = error.stack
+    }
+    if (context?.agent) {
+      errorEvent.agent = context.agent
+    }
+    if (context?.query) {
+      errorEvent.query = context.query
+    }
+    if (context?.code) {
+      errorEvent.code = context.code
+    }
+    if (typeof context?.status === 'number') {
+      errorEvent.status = context.status
+    }
+    if (context?.requestId) {
+      errorEvent.requestId = context.requestId
+    }
+    if (context?.metadata) {
+      errorEvent.metadata = context.metadata
+    }
+
     this.errors.push(errorEvent)
+
+    withSentryScope(scope => {
+      scope.setTags({
+        type: errorEvent.type,
+        agent: errorEvent.agent ?? 'unknown'
+      })
+      scope.setExtras({
+        code: errorEvent.code,
+        status: errorEvent.status,
+        requestId: errorEvent.requestId,
+        query: errorEvent.query,
+        metadata: errorEvent.metadata
+      })
+    })
+
+    captureSentryException(error)
+
+    void runtimeContext.telemetry?.track('app.error', errorEvent)
 
     // Maintain retention limit
     if (this.errors.length > this.maxErrorRetention) {

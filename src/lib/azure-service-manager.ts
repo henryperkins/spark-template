@@ -66,7 +66,9 @@ export class AzureServiceManager {
       const openaiResult = await this.openaiService.testConnection()
       status.openai = openaiResult.success ? 'connected' : 'error'
       if (!openaiResult.success) {
-        status.errors!.openai = openaiResult.error
+        if (openaiResult.error) {
+          status.errors!.openai = openaiResult.error
+        }
       }
     } catch (error) {
       status.openai = 'error'
@@ -78,7 +80,9 @@ export class AzureServiceManager {
       const searchResult = await this.searchService.testConnection()
       status.search = searchResult.success ? 'connected' : 'error'
       if (!searchResult.success) {
-        status.errors!.search = searchResult.error
+        if (searchResult.error) {
+          status.errors!.search = searchResult.error
+        }
       }
     } catch (error) {
       status.search = 'error'
@@ -152,14 +156,23 @@ export class AzureServiceManager {
     const startedAt = Date.now()
     ;(async () => {
       try {
-        await this.openaiService!.generateCompletion(messages, {
-          maxTokens: options?.maxTokens,
-          temperature: options?.temperature,
-          topP: options?.topP,
-          responseFormat: options?.responseFormat,
+        const completionOptions: Parameters<AzureOpenAIService['generateCompletion']>[1] = {
           stream: true,
-          onChunk: (c: string) => enqueue(c),
-        })
+          onChunk: (c: string) => enqueue(c)
+        }
+        if (options?.maxTokens !== undefined) {
+          completionOptions.maxTokens = options.maxTokens
+        }
+        if (options?.temperature !== undefined) {
+          completionOptions.temperature = options.temperature
+        }
+        if (options?.topP !== undefined) {
+          completionOptions.topP = options.topP
+        }
+        if (options?.responseFormat) {
+          completionOptions.responseFormat = options.responseFormat
+        }
+        await this.openaiService!.generateCompletion(messages, completionOptions)
       } catch (err) {
         // Capture error to propagate through the async iterator
         errState = err
@@ -238,20 +251,32 @@ export class AzureServiceManager {
       const texts = document.chunks.map(chunk => chunk.content)
       const embeddings = await this.openaiService!.generateBatchEmbeddings(texts, onEmbeddingProgress)
 
-      const updatedChunks: DocumentChunk[] = document.chunks.map((chunk, index) => ({
-        ...chunk,
-        azureEmbedding: embeddings[index],
-        vectorId: `${chunk.id}-vector`
-      }))
+      const updatedChunks: DocumentChunk[] = document.chunks.map((chunk, index) => {
+        const azureEmbedding = embeddings[index]
+        if (!azureEmbedding) {
+          throw new Error(`Embedding missing for chunk ${chunk.id}`)
+        }
+        return {
+          ...chunk,
+          azureEmbedding,
+          vectorId: `${chunk.id}-vector`
+        }
+      })
 
-      const searchDocuments: AzureSearchDocument[] = updatedChunks.map(chunk => ({
-        id: chunk.vectorId!,
-        content: chunk.content,
-        contentVector: chunk.azureEmbedding!,
-        documentId: document.id,
-        documentName: document.name,
-        chunkIndex: chunk.chunkIndex
-      }))
+      const searchDocuments: AzureSearchDocument[] = updatedChunks.map(chunk => {
+        const { vectorId, azureEmbedding } = chunk
+        if (!vectorId || !azureEmbedding) {
+          throw new Error(`Missing Azure vector data for chunk ${chunk.id}`)
+        }
+        return {
+          id: vectorId,
+          content: chunk.content,
+          contentVector: azureEmbedding,
+          documentId: document.id,
+          documentName: document.name,
+          chunkIndex: chunk.chunkIndex
+        }
+      })
 
       const indexResult = await this.searchService!.indexDocuments(searchDocuments)
 
@@ -301,14 +326,15 @@ export class AzureServiceManager {
       const newChunks: DocumentChunk[] = baseChunks.map(chunk => {
         const existing = document.chunks.find(c => c.chunkIndex === chunk.chunkIndex)
         const metadata =
-          preserveMetadata && existing?.metadata
-            ? { ...existing.metadata }
-            : chunk.metadata
+          preserveMetadata && existing?.metadata ? { ...existing.metadata } : chunk.metadata
 
-        return {
-          ...chunk,
-          metadata
+        const nextChunk: DocumentChunk = { ...chunk }
+        if (metadata) {
+          nextChunk.metadata = metadata
+        } else {
+          delete nextChunk.metadata
         }
+        return nextChunk
       })
 
       if (!this.isConfigured()) {
@@ -317,8 +343,7 @@ export class AzureServiceManager {
           chunks: newChunks,
           processed: true,
           azureIndexed: false,
-          processingStatus: 'completed',
-          errorMessage: undefined
+          processingStatus: 'completed'
         }
       }
 
@@ -343,20 +368,32 @@ export class AzureServiceManager {
         options?.onEmbeddingProgress
       )
 
-      const updatedChunks: DocumentChunk[] = newChunks.map((chunk, index) => ({
-        ...chunk,
-        azureEmbedding: embeddings[index],
-        vectorId: `${chunk.id}-vector`
-      }))
+      const updatedChunks: DocumentChunk[] = newChunks.map((chunk, index) => {
+        const azureEmbedding = embeddings[index]
+        if (!azureEmbedding) {
+          throw new Error(`Embedding missing for chunk ${chunk.id}`)
+        }
+        return {
+          ...chunk,
+          azureEmbedding,
+          vectorId: `${chunk.id}-vector`
+        }
+      })
 
-      const searchDocuments: AzureSearchDocument[] = updatedChunks.map(chunk => ({
-        id: chunk.vectorId!,
-        content: chunk.content,
-        contentVector: chunk.azureEmbedding!,
-        documentId: document.id,
-        documentName: document.name,
-        chunkIndex: chunk.chunkIndex
-      }))
+      const searchDocuments: AzureSearchDocument[] = updatedChunks.map(chunk => {
+        const { vectorId, azureEmbedding } = chunk
+        if (!vectorId || !azureEmbedding) {
+          throw new Error(`Missing Azure vector data for chunk ${chunk.id}`)
+        }
+        return {
+          id: vectorId,
+          content: chunk.content,
+          contentVector: azureEmbedding,
+          documentId: document.id,
+          documentName: document.name,
+          chunkIndex: chunk.chunkIndex
+        }
+      })
 
       const indexResult = await this.searchService!.indexDocuments(searchDocuments)
       if (!indexResult.success) {
@@ -379,8 +416,7 @@ export class AzureServiceManager {
         chunks: updatedChunks,
         processed: true,
         azureIndexed: true,
-        processingStatus: 'completed',
-        errorMessage: undefined
+        processingStatus: 'completed'
       }
     } catch (error) {
       console.error('Error updating document with Azure:', error)

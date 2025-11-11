@@ -83,23 +83,30 @@ class QueryHistoryService {
   }
 
   private cloneHistory(entries: QueryHistoryEntry[]): QueryHistoryEntry[] {
-    return entries.map(entry => ({
-      ...entry,
-      workflow: entry.workflow ? entry.workflow.map(step => ({ ...step })) : undefined,
-      validation: entry.validation ? { ...entry.validation } : undefined,
-      routing: { ...entry.routing },
-      executionSummary: entry.executionSummary
-        ? {
-            ...entry.executionSummary,
-            budgetUtilization: {
-              ...(entry.executionSummary.budgetUtilization ?? {})
-            },
-            phaseBreakdown: {
-              ...(entry.executionSummary.phaseBreakdown ?? {})
-            }
+    return entries.map(entry => {
+      const { workflow, validation, executionSummary, routing, ...rest } = entry
+
+      const clone: QueryHistoryEntry = {
+        ...rest,
+        routing: { ...routing },
+        ...(workflow ? { workflow: workflow.map(step => ({ ...step })) } : {}),
+        ...(validation ? { validation: { ...validation } } : {})
+      }
+
+      if (executionSummary) {
+        clone.executionSummary = {
+          ...executionSummary,
+          budgetUtilization: {
+            ...executionSummary.budgetUtilization
+          },
+          phaseBreakdown: {
+            ...executionSummary.phaseBreakdown
           }
-        : undefined,
-    }))
+        }
+      }
+
+      return clone
+    })
   }
 
   private async load(): Promise<QueryHistoryEntry[]> {

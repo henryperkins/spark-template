@@ -92,10 +92,10 @@ export async function hybridSearch(
 
       const result = await store.query({
         queryText: query,
-        queryEmbedding,
         topK: context.maxResults,
         namespace: context.namespace,
-        strategy
+        strategy,
+        ...(queryEmbedding !== undefined ? { queryEmbedding } : {})
       })
       sources = result.sources
       storeType = result.metadata.storeType
@@ -113,7 +113,6 @@ export async function hybridSearch(
           const fallbackResult = await fallbackStore.query({
             queryText: query,
             // In-memory vector path depends on available embeddings on chunks; we don't compute query embedding here
-            queryEmbedding: undefined,
             topK: context.maxResults,
             namespace: context.namespace,
             strategy: alt

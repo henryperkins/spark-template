@@ -54,39 +54,61 @@ interface DropboxListResponse {
   has_more: boolean
 }
 
+interface DropboxTokenState {
+  value: string
+}
+
 export class DropboxService {
-  private async fetchWithAuth(url: string, token: string, options: RequestInit = {}): Promise<Response> {
+  private async fetchWithAuth(
+    url: string,
+    tokenState: DropboxTokenState,
+    options: RequestInit = {},
+    attempt = 0
+  ): Promise<Response> {
+    if (!tokenState.value) {
+      throw new Error('Dropbox access token is missing')
+    }
+
+    const headers = new Headers(options.headers)
+    if (!headers.has('Content-Type')) {
+      headers.set('Content-Type', 'application/json')
+    }
+    headers.set('Authorization', `Bearer ${tokenState.value}`)
+
     const response = await fetch(url, {
       ...options,
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        ...options.headers,
-      },
+      headers
     })
-    
-    if (!response.ok) {
-      throw new Error(`Dropbox API error: ${response.statusText}`)
+
+    if (response.status === 401 && attempt === 0) {
+      const refreshed = await this.refreshAccessToken(tokenState)
+      if (refreshed) {
+        return this.fetchWithAuth(url, tokenState, options, attempt + 1)
+      }
     }
-    
+
+    if (!response.ok) {
+      throw new Error(`Dropbox API error: ${response.status} ${response.statusText}`)
+    }
+
     return response
   }
 
-  private async listFiles(token: string, path: string = ''): Promise<DropboxFile[]> {
+  private async listFiles(tokenState: DropboxTokenState, path: string = ''): Promise<DropboxFile[]> {
     const files: DropboxFile[] = []
     let hasMore = true
     let cursor: string | undefined
     
     while (hasMore) {
-      const url = cursor 
+      const url = cursor
         ? 'https://api.dropboxapi.com/2/files/list_folder/continue'
         : 'https://api.dropboxapi.com/2/files/list_folder'
-      
-      const body = cursor 
+  
+      const body = cursor
         ? { cursor }
         : { path: path || '', recursive: true }
-      
-      const response = await this.fetchWithAuth(url, token, {
+  
+      const response = await this.fetchWithAuth(url, tokenState, {
         method: 'POST',
         body: JSON.stringify(body),
       })
@@ -105,11 +127,11 @@ export class DropboxService {
     return files
   }
 
-  private async downloadFile(token: string, path: string): Promise<string> {
+  private async downloadFile(tokenState: DropboxTokenState, path: string): Promise<string> {
     const response = await fetch('https://content.dropboxapi.com/2/files/download', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${token}`,
+        'Authorization': `Bearer ${tokenState.value}`,
         'Dropbox-API-Arg': JSON.stringify({ path }),
       },
     })
@@ -157,12 +179,13 @@ export class DropboxService {
     const { accessToken, path = '' } = config
     
     try {
-      const files = await this.listFiles(accessToken, path)
+      const tokenState: DropboxTokenState = { value: accessToken }
+      const files = await this.listFiles(tokenState, path)
       const documents: Document[] = []
       
       for (const file of files) {
         try {
-          const content = await this.downloadFile(accessToken, file.path_display)
+          const content = await this.downloadFile(tokenState, file.path_display)
           const documentId = `dropbox-${file.id.replace(/[^a-zA-Z0-9]/g, '')}`
           
           const { chunks } = await intelligentChunkDocument(content, documentId, file.name)
@@ -227,12 +250,48 @@ export class DropboxService {
 
   async validateConfig(config: DropboxConfig): Promise<{ valid: boolean; error?: string }> {
     try {
-      await this.listFiles(config.accessToken, config.path || '')
+      await this.listFiles({ value: config.accessToken }, config.path || '')
       return { valid: true }
     } catch (error) {
       return { 
         valid: false, 
         error: error instanceof Error ? error.message : 'Invalid token or unable to access files'
+      }
+    }
+  
+    private async refreshAccessToken(tokenState: DropboxTokenState): Promise<boolean> {
+      try {
+        const resp = await fetch('/api/oauth/dropbox/refresh', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        })
+  
+        if (!resp.ok) {
+          console.warn('[dropbox-service] Refresh request failed', resp.status)
+          return false
+        }
+  
+        const data = await resp.json().catch(() => null)
+        const accessToken = typeof data?.accessToken === 'string' ? data.accessToken : null
+        if (!accessToken) {
+          console.warn('[dropbox-service] Refresh response missing access token')
+          return false
+        }
+  
+        if (typeof window !== 'undefined') {
+          try {
+            const { secureTokenStorage } = await import('@/lib/services/secure-token-storage')
+            await secureTokenStorage.setToken('dropbox', accessToken)
+          } catch (error) {
+            console.warn('[dropbox-service] Unable to persist refreshed Dropbox token', error)
+          }
+        }
+  
+        tokenState.value = accessToken
+        return true
+      } catch (error) {
+        console.error('[dropbox-service] Refresh token request error', error)
+        return false
       }
     }
   }

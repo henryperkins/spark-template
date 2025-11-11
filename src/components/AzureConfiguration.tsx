@@ -15,6 +15,24 @@ import { AzureConfig, AzureConnectionStatus, SavedAzureConfig } from '@/types'
 import { azureServiceManager } from '@/lib/azure-service-manager'
 import { isCloudflareKVConfigured, testCloudflareKV } from '@/lib/cloudflare-kv'
 
+const DEFAULT_CUSTOM_SCORING = {
+  enabled: true,
+  recencyWeight: 2,
+  lengthWeight: 1.5,
+  metadataWeight: 0.3
+} as const
+
+function normalizeCustomScoring(
+  current?: AzureConfig['search']['customScoring']
+) {
+  return {
+    enabled: current?.enabled ?? DEFAULT_CUSTOM_SCORING.enabled,
+    recencyWeight: current?.recencyWeight ?? DEFAULT_CUSTOM_SCORING.recencyWeight,
+    lengthWeight: current?.lengthWeight ?? DEFAULT_CUSTOM_SCORING.lengthWeight,
+    metadataWeight: current?.metadataWeight ?? DEFAULT_CUSTOM_SCORING.metadataWeight
+  }
+}
+
 export function AzureConfiguration() {
   const idPrefix = useId()
   const [config, setConfig] = useStorage<AzureConfig | null>('azure-config', null)
@@ -118,13 +136,15 @@ export function AzureConfiguration() {
   const handleSaveConfig = () => {
     if (!configName.trim()) return
 
+    const description = configDescription.trim()
+
     const newConfig: SavedAzureConfig = {
       id: Date.now().toString(),
       name: configName.trim(),
-      description: configDescription.trim() || undefined,
       config: formData,
       createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      updatedAt: new Date().toISOString(),
+      ...(description ? { description } : {})
     }
 
     setSavedConfigs([...(savedConfigs || []), newConfig])
@@ -627,12 +647,21 @@ export function AzureConfiguration() {
                           id={`${idPrefix}-responses-model`}
                           placeholder={`Defaults to ${formData.openai.deploymentName || 'chat deployment'}`}
                           value={formData.openai.responsesModel ?? ''}
-                          onChange={(e) =>
-                            setFormData(prev => ({
-                              ...prev,
-                              openai: { ...prev.openai, responsesModel: e.target.value || undefined }
-                            }))
-                          }
+                          onChange={(e) => {
+                            const value = e.target.value.trim()
+                            setFormData(prev => {
+                              const nextOpenAi = { ...prev.openai }
+                              if (value) {
+                                nextOpenAi.responsesModel = value
+                              } else {
+                                delete nextOpenAi.responsesModel
+                              }
+                              return {
+                                ...prev,
+                                openai: nextOpenAi
+                              }
+                            })
+                          }}
                         />
                         <p className="text-xs text-muted-foreground">
                           Override the model used for Responses API calls
@@ -691,11 +720,20 @@ export function AzureConfiguration() {
                           placeholder="Default: no timeout"
                           value={formData.openai.responsesTimeoutMs ?? ''}
                           onChange={(e) => {
-                            const val = e.target.value ? parseInt(e.target.value, 10) : undefined
-                            setFormData(prev => ({
-                              ...prev,
-                              openai: { ...prev.openai, responsesTimeoutMs: val }
-                            }))
+                            const value = e.target.value
+                            const parsed = value ? Number.parseInt(value, 10) : undefined
+                            setFormData(prev => {
+                              const nextOpenAi = { ...prev.openai }
+                              if (typeof parsed === 'number' && !Number.isNaN(parsed)) {
+                                nextOpenAi.responsesTimeoutMs = parsed
+                              } else {
+                                delete nextOpenAi.responsesTimeoutMs
+                              }
+                              return {
+                                ...prev,
+                                openai: nextOpenAi
+                              }
+                            })
                           }}
                         />
                         <p className="text-xs text-muted-foreground">
@@ -979,17 +1017,20 @@ export function AzureConfiguration() {
                     </div>
                     <Switch
                       checked={formData.search.customScoring?.enabled ?? true}
-                      onCheckedChange={(enabled) => 
-                        setFormData(prev => ({
-                          ...prev,
-                          search: {
-                            ...prev.search,
-                            customScoring: {
-                              ...prev.search.customScoring!,
-                              enabled
+                      onCheckedChange={(enabled) =>
+                        setFormData(prev => {
+                          const current = normalizeCustomScoring(prev.search.customScoring)
+                          return {
+                            ...prev,
+                            search: {
+                              ...prev.search,
+                              customScoring: {
+                                ...current,
+                                enabled
+                              }
                             }
                           }
-                        }))
+                        })
                       }
                     />
                   </div>
@@ -1003,18 +1044,23 @@ export function AzureConfiguration() {
                           </span>
                         </div>
                         <Slider
-                          value={[formData.search.customScoring?.recencyWeight ?? 2.0]}
-                          onValueChange={([recencyWeight]) => 
-                            setFormData(prev => ({
-                              ...prev,
-                              search: {
-                                ...prev.search,
-                                customScoring: {
-                                  ...prev.search.customScoring!,
-                                  recencyWeight
+                          value={[formData.search.customScoring?.recencyWeight ?? DEFAULT_CUSTOM_SCORING.recencyWeight]}
+                          onValueChange={([recencyWeight]) =>
+                            setFormData(prev => {
+                              const current = normalizeCustomScoring(prev.search.customScoring)
+                              const nextValue =
+                                typeof recencyWeight === 'number' ? recencyWeight : current.recencyWeight
+                              return {
+                                ...prev,
+                                search: {
+                                  ...prev.search,
+                                  customScoring: {
+                                    ...current,
+                                    recencyWeight: nextValue
+                                  }
                                 }
                               }
-                            }))
+                            })
                           }
                           min={0}
                           max={5}
@@ -1034,18 +1080,23 @@ export function AzureConfiguration() {
                           </span>
                         </div>
                         <Slider
-                          value={[formData.search.customScoring?.lengthWeight ?? 1.5]}
-                          onValueChange={([lengthWeight]) => 
-                            setFormData(prev => ({
-                              ...prev,
-                              search: {
-                                ...prev.search,
-                                customScoring: {
-                                  ...prev.search.customScoring!,
-                                  lengthWeight
+                          value={[formData.search.customScoring?.lengthWeight ?? DEFAULT_CUSTOM_SCORING.lengthWeight]}
+                          onValueChange={([lengthWeight]) =>
+                            setFormData(prev => {
+                              const current = normalizeCustomScoring(prev.search.customScoring)
+                              const nextValue =
+                                typeof lengthWeight === 'number' ? lengthWeight : current.lengthWeight
+                              return {
+                                ...prev,
+                                search: {
+                                  ...prev.search,
+                                  customScoring: {
+                                    ...current,
+                                    lengthWeight: nextValue
+                                  }
                                 }
                               }
-                            }))
+                            })
                           }
                           min={0}
                           max={5}
@@ -1065,18 +1116,23 @@ export function AzureConfiguration() {
                           </span>
                         </div>
                         <Slider
-                          value={[formData.search.customScoring?.metadataWeight ?? 0.3]}
-                          onValueChange={([metadataWeight]) => 
-                            setFormData(prev => ({
-                              ...prev,
-                              search: {
-                                ...prev.search,
-                                customScoring: {
-                                  ...prev.search.customScoring!,
-                                  metadataWeight
+                          value={[formData.search.customScoring?.metadataWeight ?? DEFAULT_CUSTOM_SCORING.metadataWeight]}
+                          onValueChange={([metadataWeight]) =>
+                            setFormData(prev => {
+                              const current = normalizeCustomScoring(prev.search.customScoring)
+                              const nextValue =
+                                typeof metadataWeight === 'number' ? metadataWeight : current.metadataWeight
+                              return {
+                                ...prev,
+                                search: {
+                                  ...prev.search,
+                                  customScoring: {
+                                    ...current,
+                                    metadataWeight: nextValue
+                                  }
                                 }
                               }
-                            }))
+                            })
                           }
                           min={0}
                           max={2}

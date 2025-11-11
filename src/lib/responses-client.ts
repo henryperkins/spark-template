@@ -1,4 +1,4 @@
-import { errorTracking } from '@/lib/services/error-tracker'
+import { errorTracking, type ErrorType } from '@/lib/services/error-tracker'
 
 /**
  * Lightweight client for Azure OpenAI v1 Responses API.
@@ -621,10 +621,22 @@ export class ResponsesClient {
         ? setTimeout(() => controller.abort(), this.config.timeoutMs)
         : null
 
+    const buildRequestInit = (hdrs: Record<string, string>): RequestInit => {
+      const requestInit: RequestInit = {
+        ...init,
+        headers: hdrs
+      }
+      if (controller) {
+        requestInit.signal = controller.signal
+      }
+      return requestInit
+    }
+
     const doFetch = async (hdrs: Record<string, string>): Promise<Response> => {
+      const requestInit = buildRequestInit(hdrs)
       // Add lightweight retry/backoff for transient errors
-      return await (this as any).fetchWithRetry?.(url, { ...init, headers: hdrs, signal: controller?.signal })
-        ?? fetch(url, { ...init, headers: hdrs, signal: controller?.signal })
+      return await (this as any).fetchWithRetry?.(url, requestInit)
+        ?? fetch(url, requestInit)
     }
 
     try {
@@ -722,13 +734,24 @@ export class ResponsesClient {
     }
 
     try {
-      errorTracking.record(err, {
+      const errorContext: {
+        type: ErrorType
+        agent: string
+        status: number
+        code?: string
+        requestId?: string
+      } = {
         type: 'llm',
         agent: 'ResponsesClient',
-        code: err.code,
-        status: err.status,
-        requestId: err.requestId ?? undefined
-      })
+        status: err.status ?? res.status
+      }
+      if (typeof err.code === 'string') {
+        errorContext.code = err.code
+      }
+      if (err.requestId) {
+        errorContext.requestId = err.requestId
+      }
+      errorTracking.record(err, errorContext)
     } catch {
       // ignore telemetry failures
     }
@@ -824,18 +847,25 @@ export class ResponsesClient {
           }))
       : []
 
-    const usage: ResponsesUsage | undefined = json.usage
-      ? {
-          inputTokens: numberOrUndefined(json.usage.input_tokens),
-          outputTokens: numberOrUndefined(json.usage.output_tokens),
-          totalTokens: numberOrUndefined(json.usage.total_tokens),
-          reasoningTokens: json.usage.output_tokens_details
-            ? numberOrUndefined(
-                json.usage.output_tokens_details.reasoning_tokens
-              )
-            : undefined
-        }
-      : undefined
+    let usage: ResponsesUsage | undefined
+    if (json.usage) {
+      const usageValues: ResponsesUsage = {}
+      const inputTokens = numberOrUndefined(json.usage.input_tokens)
+      const outputTokens = numberOrUndefined(json.usage.output_tokens)
+      const totalTokens = numberOrUndefined(json.usage.total_tokens)
+      const reasoningTokens = json.usage.output_tokens_details
+        ? numberOrUndefined(json.usage.output_tokens_details.reasoning_tokens)
+        : undefined
+
+      if (inputTokens !== undefined) usageValues.inputTokens = inputTokens
+      if (outputTokens !== undefined) usageValues.outputTokens = outputTokens
+      if (totalTokens !== undefined) usageValues.totalTokens = totalTokens
+      if (reasoningTokens !== undefined) usageValues.reasoningTokens = reasoningTokens
+
+      if (Object.keys(usageValues).length > 0) {
+        usage = usageValues
+      }
+    }
 
     const reasoningPreview = this.extractReasoningPreview(json)
 
@@ -845,9 +875,9 @@ export class ResponsesClient {
       model: json.model,
       outputText,
       messages,
-      usage,
+      ...(usage ? { usage } : {}),
       raw: json,
-      reasoningPreview
+      ...(reasoningPreview ? { reasoningPreview } : {})
     }
 
     function numberOrUndefined(v: any): number | undefined {

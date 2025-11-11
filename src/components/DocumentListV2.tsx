@@ -8,7 +8,6 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { FileText, Trash, Clock, CloudArrowUp, XCircle, CircleNotch, GithubLogo, Globe, DropboxLogo, MicrosoftOutlookLogo, Upload, PencilSimple, MagnifyingGlass, Funnel, CaretLeft, CaretRight } from '@phosphor-icons/react'
 import { Document, DocumentChunk, DocumentIndex, DocumentMeta } from '@/types'
 import { formatFileSize, formatDate } from '@/lib/rag'
@@ -33,22 +32,25 @@ export function DocumentListV2({ onDeleteDocument, onEditDocument }: DocumentLis
   const [sourceFilter, setSourceFilter] = useState<string>('all')
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [currentPage, setCurrentPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
   const [expandedChunks, setExpandedChunks] = useState<Set<string>>(new Set())
 
   // Use new hooks for document management
+  const documentsQueryOptions = {
+    page: currentPage,
+    pageSize,
+    ...(searchQuery ? { q: searchQuery } : {}),
+    ...(sourceFilter === 'all' ? {} : { source: sourceFilter }),
+    ...(statusFilter === 'all' ? {} : { status: statusFilter })
+  } as const
+
   const {
     documents,
     loading,
     error,
     pagination,
     refetch
-  } = useDocumentsIndex({
-    page: currentPage,
-    pageSize: 20,
-    q: searchQuery,
-    source: sourceFilter === 'all' ? undefined : sourceFilter,
-    status: statusFilter === 'all' ? undefined : statusFilter
-  })
+  } = useDocumentsIndex(documentsQueryOptions)
 
   const {
     meta: editingMeta,
@@ -469,15 +471,12 @@ export function DocumentListV2({ onDeleteDocument, onEditDocument }: DocumentLis
                       <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
                         <span>Rows per page</span>
                         <Select
-                          value={String(pagination.pageSize)}
+                          value={String(pageSize)}
                           onValueChange={(value) => {
                             const nextSize = parseInt(value, 10)
                             // Reset to first page when page size changes to avoid empty pages
                             setCurrentPage(1)
-                            // useDocumentsIndex reads pageSize from options; trigger by updating search/status/source state dependencies if needed
-                            // Here we rely on internal hook behavior when page/pageSize props change.
-                            // @ts-expect-error pageSize is managed via pagination; hook consumes it.
-                            pagination.pageSize = nextSize
+                            setPageSize(nextSize)
                           }}
                         >
                           <SelectTrigger className="h-7 w-[70px] px-2 text-[10px]">

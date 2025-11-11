@@ -3,6 +3,7 @@ import { intelligentChunkDocument } from '@/lib/rag'
 import { azureServiceManager } from '@/lib/azure-service-manager'
 import { embeddingManager } from '@/lib/embedding-manager'
 import { cacheManager } from '@/lib/cache-manager'
+import { secureTokenStorage } from '@/lib/services/secure-token-storage'
 
 // KV auth + persist helpers (mirror DocumentUpload logic)
 function getKVAuthHeader(): Record<string, string> {
@@ -56,53 +57,76 @@ interface OneDriveListResponse {
   '@odata.nextLink'?: string
 }
 
+interface TokenState {
+  value: string
+}
+
 export class OneDriveService {
-  private async fetchWithAuth(url: string, token: string, options: RequestInit = {}): Promise<Response> {
+  private async fetchWithAuth(
+    url: string,
+    tokenState: TokenState,
+    options: RequestInit = {},
+    attempt = 0
+  ): Promise<Response> {
+    if (!tokenState.value) {
+      throw new Error('OneDrive access token is missing')
+    }
+
+    const headers = new Headers(options.headers)
+    headers.set('Authorization', `Bearer ${tokenState.value}`)
+
     const response = await fetch(url, {
       ...options,
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        ...options.headers,
-      },
+      headers
     })
-    
-    if (!response.ok) {
-      throw new Error(`OneDrive API error: ${response.statusText}`)
+
+    if (response.status === 401 && attempt === 0) {
+      const refreshed = await this.refreshAccessToken(tokenState)
+      if (refreshed) {
+        tokenState.value = refreshed
+        const retryHeaders = new Headers(options.headers)
+        retryHeaders.set('Authorization', `Bearer ${tokenState.value}`)
+        return this.fetchWithAuth(url, tokenState, { ...options, headers: retryHeaders }, attempt + 1)
+      }
     }
-    
+
+    if (!response.ok) {
+      throw new Error(`OneDrive API error: ${response.status} ${response.statusText}`)
+    }
+
     return response
   }
 
-  private async listFiles(token: string, path: string = ''): Promise<OneDriveItem[]> {
+  private async listFiles(tokenState: TokenState, path: string = ''): Promise<OneDriveItem[]> {
     const files: OneDriveItem[] = []
     let nextLink: string | undefined
-    
+
     const encodedPath = encodeURIComponent(path || '/')
-    const url = path 
+    const url = path
       ? `https://graph.microsoft.com/v1.0/me/drive/root:/${encodedPath}:/children`
       : 'https://graph.microsoft.com/v1.0/me/drive/root/children'
-    
+
     do {
-      const response = await this.fetchWithAuth(nextLink || url, token)
+      const response = await this.fetchWithAuth(nextLink || url, tokenState)
       const data: OneDriveListResponse = await response.json()
-      
+
       for (const item of data.value) {
         if (item.file && this.isTextFile(item.name)) {
           files.push(item)
         } else if (item.folder) {
           const childPath = path ? `${path}/${item.name}` : item.name
-          const childFiles = await this.listFiles(token, childPath)
+          const childFiles = await this.listFiles(tokenState, childPath)
           files.push(...childFiles)
         }
       }
-      
+
       nextLink = data['@odata.nextLink']
     } while (nextLink)
-    
+
     return files
   }
 
-  private async downloadFile(token: string, item: OneDriveItem): Promise<string> {
+  private async downloadFile(tokenState: TokenState, item: OneDriveItem): Promise<string> {
     if (item['@microsoft.graph.downloadUrl']) {
       const response = await fetch(item['@microsoft.graph.downloadUrl'])
       if (!response.ok) {
@@ -110,10 +134,10 @@ export class OneDriveService {
       }
       return response.text()
     }
-    
+
     const response = await this.fetchWithAuth(
       `https://graph.microsoft.com/v1.0/me/drive/items/${item.id}/content`,
-      token
+      tokenState
     )
     return response.text()
   }
@@ -152,14 +176,19 @@ export class OneDriveService {
 
   async ingestFiles(config: OneDriveConfig): Promise<Document[]> {
     const { accessToken, path = '' } = config
-    
+    if (!accessToken) {
+      throw new Error('OneDrive access token is required')
+    }
+
+    const tokenState: TokenState = { value: accessToken }
+
     try {
-      const files = await this.listFiles(accessToken, path)
+      const files = await this.listFiles(tokenState, path)
       const documents: Document[] = []
       
       for (const file of files) {
         try {
-          const content = await this.downloadFile(accessToken, file)
+          const content = await this.downloadFile(tokenState, file)
           const documentId = `onedrive-${file.id.replace(/[^a-zA-Z0-9]/g, '')}`
           
           const { chunks } = await intelligentChunkDocument(content, documentId, file.name)
@@ -223,14 +252,54 @@ export class OneDriveService {
   }
 
   async validateConfig(config: OneDriveConfig): Promise<{ valid: boolean; error?: string }> {
+    const token = config.accessToken
+    if (!token) {
+      return { valid: false, error: 'Access token is required' }
+    }
+
     try {
-      await this.listFiles(config.accessToken, config.path || '')
+      await this.listFiles({ value: token }, config.path || '')
       return { valid: true }
     } catch (error) {
-      return { 
-        valid: false, 
+      return {
+        valid: false,
         error: error instanceof Error ? error.message : 'Invalid token or unable to access files'
       }
+    }
+  }
+
+  private async refreshAccessToken(tokenState: TokenState): Promise<string | null> {
+    try {
+      const response = await fetch('/api/oauth/onedrive/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      })
+
+      if (!response.ok) {
+        console.warn('[onedrive-service] Refresh request failed', response.status)
+        return null
+      }
+
+      const data = await response.json().catch(() => null)
+      const accessToken = typeof data?.accessToken === 'string' ? data.accessToken : null
+      if (!accessToken) {
+        console.warn('[onedrive-service] Refresh response missing access token')
+        return null
+      }
+
+      if (typeof window !== 'undefined') {
+        try {
+          await secureTokenStorage.setToken('onedrive', accessToken)
+        } catch (error) {
+          console.warn('[onedrive-service] Unable to persist refreshed OneDrive token', error)
+        }
+      }
+
+      tokenState.value = accessToken
+      return accessToken
+    } catch (error) {
+      console.error('[onedrive-service] Refresh token request error', error)
+      return null
     }
   }
 }

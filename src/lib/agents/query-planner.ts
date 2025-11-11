@@ -226,7 +226,8 @@ Create a query plan as JSON:`
       return []
     }
 
-    const leadingVerb = this.extractLeadingVerb(parts[0]) || 'Explain'
+    const firstPart = parts[0] ?? ''
+    const leadingVerb = this.extractLeadingVerb(firstPart) || 'Explain'
 
     return parts.map((part, index) => {
       if (index === 0) {

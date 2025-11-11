@@ -1,4 +1,33 @@
 import { handleListDocuments, handleGetDocument, handleUpdateDocument, handleDeleteDocument, handleGetChunks } from './document-api'
+import {
+  handleStoreVerifier,
+  handleOAuthCallback,
+  handleOneDriveToken,
+  handleOneDriveRefresh,
+  handleDropboxToken,
+  handleDropboxRefresh
+} from './oauth-handler'
+
+const securityHeaders = {
+  'Content-Security-Policy':
+    "default-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; " +
+    "script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; " +
+    "connect-src 'self' https://api.github.com https://login.microsoftonline.com https://graph.microsoft.com https://api.dropboxapi.com https://content.dropboxapi.com;",
+  'X-Frame-Options': 'DENY',
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'strict-origin-when-cross-origin'
+} as const
+
+function applySecurityHeaders(
+  headers: Headers | Record<string, string>
+): Headers {
+  const h = headers instanceof Headers ? headers : new Headers(headers)
+  for (const [k, v] of Object.entries(securityHeaders)) {
+    if (!h.has(k)) h.set(k, v)
+  }
+  return h
+}
+import { wrapRequestHandler } from '@sentry/cloudflare'
 
 export interface Env {
   KV_API_KEY: string
@@ -11,59 +40,120 @@ export interface Env {
   AZURE_SEARCH_KEY?: string
   AZURE_SEARCH_ENDPOINT?: string
   AZURE_SEARCH_INDEX?: string
+  WORKER_URL?: string
+  GITHUB_CLIENT_ID?: string
+  GITHUB_CLIENT_SECRET?: string
+  DROPBOX_CLIENT_ID?: string
+  DROPBOX_CLIENT_SECRET?: string
+  ONEDRIVE_CLIENT_ID?: string
+  ONEDRIVE_CLIENT_SECRET?: string
+  VITE_APP_ENV?: string
+  SENTRY_DSN?: string
+  SENTRY_TRACES_SAMPLE_RATE?: string
+  SENTRY_ENVIRONMENT?: string
 }
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    const url = new URL(request.url)
-    const path = url.pathname
-    const method = request.method
-
-    // CORS headers
-    const corsHeaders = {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    if (!env.SENTRY_DSN) {
+      return handleRequest(request, env)
     }
 
-    // Handle CORS preflight
-    if (method === 'OPTIONS') {
-      return new Response(null, { headers: corsHeaders })
-    }
+    const tracesSampleRate = parseFloat(env.SENTRY_TRACES_SAMPLE_RATE ?? '0')
 
-    // Azure Search proxy routes (avoids browser CORS issues and keeps keys server-side)
-    if (path.startsWith('/api/azure-search')) {
-      return handleAzureSearchRequest(request, env, corsHeaders)
-    }
-
-    // KV API routes
-    if (path.startsWith('/api/kv')) {
-      return handleKVRequest(request, env)
-    }
-
-    // Telemetry endpoint: accept client events, return 204 on success
-    if (path === '/api/telemetry' && method === 'POST') {
-      try {
-        // Best-effort structured log; Cloudflare Workers logs will capture this
-        const body = await request.text()
-        console.log('[telemetry] client_event', body || '{}')
-      } catch (err) {
-        console.error('[telemetry] failed to read body', err)
-      }
-      return new Response(null, {
-        status: 204,
-        headers: corsHeaders
-      })
-    }
-
-    // Document API routes
-    if (path.startsWith('/api/documents')) {
-      return handleDocumentRequest(request, env)
-    }
-
-    // Default response
-    return new Response('Not Found', { status: 404, headers: corsHeaders })
+    return wrapRequestHandler(
+      {
+        request,
+        context: ctx,
+        options: {
+          dsn: env.SENTRY_DSN,
+          environment: env.SENTRY_ENVIRONMENT ?? env.VITE_APP_ENV ?? 'production',
+          tracesSampleRate: Number.isFinite(tracesSampleRate) ? tracesSampleRate : 0
+        }
+      },
+      () => handleRequest(request, env)
+    )
   }
+}
+
+async function handleRequest(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url)
+  const path = url.pathname
+  const method = request.method
+
+  // CORS headers
+  const corsHeaders = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  }
+
+  // Handle CORS preflight
+  if (method === 'OPTIONS') {
+    return new Response(null, { headers: applySecurityHeaders(corsHeaders) })
+  }
+
+  // Azure Search proxy routes (avoids browser CORS issues and keeps keys server-side)
+  if (path.startsWith('/api/azure-search')) {
+    return handleAzureSearchRequest(request, env, corsHeaders)
+  }
+
+  if (path === '/api/oauth/store-verifier') {
+    return handleStoreVerifier(request, env)
+  }
+
+  if (path === '/api/oauth/onedrive/token') {
+    return handleOneDriveToken(request, env)
+  }
+
+  if (path === '/api/oauth/onedrive/refresh') {
+    return handleOneDriveRefresh(request, env)
+  }
+
+  if (path === '/api/oauth/dropbox/token') {
+    return handleDropboxToken(request, env)
+  }
+
+  if (path === '/api/oauth/dropbox/refresh') {
+    return handleDropboxRefresh(request, env)
+  }
+
+  const oauthCallbackMatch = path.match(/^\/api\/oauth\/(github|dropbox|onedrive)\/callback$/)
+  if (oauthCallbackMatch) {
+    const provider = oauthCallbackMatch[1] as 'github' | 'dropbox' | 'onedrive'
+    return handleOAuthCallback(request, env, provider)
+  }
+
+  // KV API routes
+  if (path.startsWith('/api/kv')) {
+    return handleKVRequest(request, env)
+  }
+
+  // Telemetry endpoint: accept client events, return 204 on success
+  if (path === '/api/telemetry' && method === 'POST') {
+    try {
+      // Best-effort structured log; Cloudflare Workers logs will capture this
+      const body = await request.text()
+      console.log('[telemetry] client_event', body || '{}')
+    } catch (err) {
+      console.error('[telemetry] failed to read body', err)
+    }
+    return new Response(null, {
+      status: 204,
+      headers: applySecurityHeaders(corsHeaders)
+    })
+  }
+
+  // Document API routes
+  if (path.startsWith('/api/documents')) {
+    return handleDocumentRequest(request, env)
+  }
+
+  // Default response
+  return new Response('Not Found', {
+    status: 404,
+    headers: applySecurityHeaders(corsHeaders)
+  })
 }
 
 async function handleAzureSearchRequest(request: Request, env: Env, corsHeaders: Record<string, string>): Promise<Response> {
