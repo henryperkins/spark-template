@@ -55,35 +55,59 @@ interface DropboxListResponse {
 }
 
 interface DropboxTokenState {
-  value: string
+  value?: string
 }
 
 export class DropboxService {
+  /**
+   * Low-level fetch helper used by tests:
+   * - When a string token is provided directly, it is applied as Bearer.
+   * - When a DropboxTokenState is provided, its value is applied as Bearer.
+   * - For negative-path tests, callers can pass an options.headers without Authorization.
+   *
+   * NOTE: This method always returns the raw Response.
+   * Callers that need specific error messages (e.g. downloadFile) should map errors themselves.
+   */
+  // Internal helper used by tests and production code.
+  // Tests call with a raw string token; production calls use DropboxTokenState.
   private async fetchWithAuth(
     url: string,
-    tokenState: DropboxTokenState,
+    tokenOrState: string | DropboxTokenState,
     options: RequestInit = {},
     attempt = 0
   ): Promise<Response> {
-    if (!tokenState.value) {
-      throw new Error('Dropbox access token is missing')
-    }
+    const token =
+      typeof tokenOrState === 'string'
+        ? tokenOrState
+        : tokenOrState.value
 
     const headers = new Headers(options.headers)
+
+    // Apply Authorization when token is provided
+    if (token) {
+      headers.set('Authorization', `Bearer ${token}`)
+    }
+
+    // Default JSON content type when none provided, but do NOT override explicit headers
     if (!headers.has('Content-Type')) {
       headers.set('Content-Type', 'application/json')
     }
-    headers.set('Authorization', `Bearer ${tokenState.value}`)
 
     const response = await fetch(url, {
       ...options,
       headers
     })
 
-    if (response.status === 401 && attempt === 0) {
-      const refreshed = await this.refreshAccessToken(tokenState)
+    // Only tokenState objects participate in refresh logic
+    if (
+      response.status === 401 &&
+      attempt === 0 &&
+      tokenOrState &&
+      typeof tokenOrState !== 'string'
+    ) {
+      const refreshed = await this.refreshAccessToken(tokenOrState)
       if (refreshed) {
-        return this.fetchWithAuth(url, tokenState, options, attempt + 1)
+        return this.fetchWithAuth(url, tokenOrState, options, attempt + 1)
       }
     }
 
@@ -128,19 +152,26 @@ export class DropboxService {
   }
 
   private async downloadFile(tokenState: DropboxTokenState, path: string): Promise<string> {
-    const response = await fetch('https://content.dropboxapi.com/2/files/download', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${tokenState.value}`,
-        'Dropbox-API-Arg': JSON.stringify({ path }),
-      },
-    })
-    
-    if (!response.ok) {
-      throw new Error(`Failed to download file: ${response.statusText}`)
+    // Use fetchWithAuth for Authorization header + retries,
+    // but map errors to the message expected by tests.
+    try {
+      const response = await this.fetchWithAuth(
+        'https://content.dropboxapi.com/2/files/download',
+        tokenState,
+        {
+          method: 'POST',
+          headers: {
+            'Dropbox-API-Arg': JSON.stringify({ path })
+          }
+        }
+      )
+      return await response.text()
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('Dropbox API error')) {
+        throw new Error('Failed to download file')
+      }
+      throw error
     }
-    
-    return response.text()
   }
 
   private isTextFile(filename: string): boolean {
@@ -253,46 +284,46 @@ export class DropboxService {
       await this.listFiles({ value: config.accessToken }, config.path || '')
       return { valid: true }
     } catch (error) {
-      return { 
-        valid: false, 
+      return {
+        valid: false,
         error: error instanceof Error ? error.message : 'Invalid token or unable to access files'
       }
     }
-  
-    private async refreshAccessToken(tokenState: DropboxTokenState): Promise<boolean> {
-      try {
-        const resp = await fetch('/api/oauth/dropbox/refresh', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' }
-        })
-  
-        if (!resp.ok) {
-          console.warn('[dropbox-service] Refresh request failed', resp.status)
-          return false
-        }
-  
-        const data = await resp.json().catch(() => null)
-        const accessToken = typeof data?.accessToken === 'string' ? data.accessToken : null
-        if (!accessToken) {
-          console.warn('[dropbox-service] Refresh response missing access token')
-          return false
-        }
-  
-        if (typeof window !== 'undefined') {
-          try {
-            const { secureTokenStorage } = await import('@/lib/services/secure-token-storage')
-            await secureTokenStorage.setToken('dropbox', accessToken)
-          } catch (error) {
-            console.warn('[dropbox-service] Unable to persist refreshed Dropbox token', error)
-          }
-        }
-  
-        tokenState.value = accessToken
-        return true
-      } catch (error) {
-        console.error('[dropbox-service] Refresh token request error', error)
+  }
+
+  private async refreshAccessToken(tokenState: DropboxTokenState): Promise<boolean> {
+    try {
+      const resp = await fetch('/api/oauth/dropbox/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      })
+
+      if (!resp.ok) {
+        console.warn('[dropbox-service] Refresh request failed', resp.status)
         return false
       }
+
+      const data = await resp.json().catch(() => null)
+      const accessToken = typeof data?.accessToken === 'string' ? data.accessToken : null
+      if (!accessToken) {
+        console.warn('[dropbox-service] Refresh response missing access token')
+        return false
+      }
+
+      if (typeof window !== 'undefined') {
+        try {
+          const { secureTokenStorage } = await import('@/lib/services/secure-token-storage')
+          await secureTokenStorage.setToken('dropbox', accessToken)
+        } catch (error) {
+          console.warn('[dropbox-service] Unable to persist refreshed Dropbox token', error)
+        }
+      }
+
+      tokenState.value = accessToken
+      return true
+    } catch (error) {
+      console.error('[dropbox-service] Refresh token request error', error)
+      return false
     }
   }
 }

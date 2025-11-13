@@ -27,6 +27,20 @@ function applySecurityHeaders(
   }
   return h
 }
+
+function jsonResponse(
+  body: unknown,
+  status: number,
+  corsHeaders: Record<string, string>
+): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: applySecurityHeaders({
+      ...corsHeaders,
+      'Content-Type': 'application/json'
+    })
+  })
+}
 import { wrapRequestHandler } from '@sentry/cloudflare'
 
 export interface Env {
@@ -51,6 +65,7 @@ export interface Env {
   SENTRY_DSN?: string
   SENTRY_TRACES_SAMPLE_RATE?: string
   SENTRY_ENVIRONMENT?: string
+  ANTHROPIC_API_KEY?: string
 }
 
 export default {
@@ -144,6 +159,10 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     })
   }
 
+  if (path === '/api/tarot-reading') {
+    return handleTarotReadingRequest(request, env, corsHeaders)
+  }
+
   // Document API routes
   if (path.startsWith('/api/documents')) {
     return handleDocumentRequest(request, env)
@@ -154,6 +173,168 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     status: 404,
     headers: applySecurityHeaders(corsHeaders)
   })
+}
+
+interface TarotCardPayload {
+  position: string
+  card: string
+  orientation: string
+  meaning: string
+  number: number
+}
+
+function isTarotCardPayload(value: unknown): value is TarotCardPayload {
+  if (!value || typeof value !== 'object') return false
+  const card = value as Record<string, unknown>
+  return (
+    typeof card.position === 'string' &&
+    typeof card.card === 'string' &&
+    typeof card.orientation === 'string' &&
+    typeof card.meaning === 'string' &&
+    typeof card.number === 'number'
+  )
+}
+
+async function handleTarotReadingRequest(
+  request: Request,
+  env: Env,
+  corsHeaders: Record<string, string>
+): Promise<Response> {
+  if (request.method === 'OPTIONS') {
+    return new Response(null, { headers: applySecurityHeaders(corsHeaders) })
+  }
+
+  if (request.method !== 'POST') {
+    return jsonResponse({ error: 'Method not allowed' }, 405, corsHeaders)
+  }
+
+  const apiKey = env.ANTHROPIC_API_KEY
+  if (!apiKey) {
+    return jsonResponse({ error: 'Tarot reading service is not configured' }, 500, corsHeaders)
+  }
+
+  let payload: unknown
+  try {
+    payload = await request.json()
+  } catch {
+    return jsonResponse({ error: 'Invalid JSON body' }, 400, corsHeaders)
+  }
+
+  if (!payload || typeof payload !== 'object') {
+    return jsonResponse({ error: 'Invalid request payload' }, 400, corsHeaders)
+  }
+
+  const { spreadKey, spreadName, cards, reflections, userQuestion } = payload as Record<string, unknown>
+
+  if (typeof spreadKey !== 'string' || typeof spreadName !== 'string' || !Array.isArray(cards) || cards.length === 0) {
+    return jsonResponse({ error: 'Invalid request payload' }, 400, corsHeaders)
+  }
+
+  const normalizedCards = cards.filter(isTarotCardPayload)
+  if (normalizedCards.length !== cards.length) {
+    return jsonResponse({ error: 'Invalid card payload' }, 400, corsHeaders)
+  }
+
+  const reflectionsObject =
+    reflections && typeof reflections === 'object' && !Array.isArray(reflections)
+      ? (reflections as Record<string, unknown>)
+      : {}
+
+  const reversedCount = normalizedCards.filter(card => card.orientation === 'Reversed').length
+  const cardsList = normalizedCards
+    .map(
+      (card, index) =>
+        `${index + 1}. ${card.position}: ${card.card} (${card.orientation}) - ${card.meaning.replace(/"/g, "'")}`
+    )
+    .join('\n')
+
+  const questionText =
+    typeof userQuestion === 'string' && userQuestion.trim()
+      ? `The querent asks: "${userQuestion.trim().replace(/"/g, "'")}"`
+      : 'The querent seeks general guidance.'
+
+  const reflectionsText = Object.entries(reflectionsObject)
+    .sort((a, b) => Number(a[0]) - Number(b[0]))
+    .map(([key, value]) => {
+      if (typeof value !== 'string') return ''
+      const trimmed = value.trim()
+      if (!trimmed) return ''
+      const card = normalizedCards[Number(key)]
+      const position = card?.position ?? `Position ${Number(key) + 1}`
+      return `${position}: ${trimmed}`
+    })
+    .filter(Boolean)
+    .join('\n')
+
+  const prompt = `You are an experienced tarot reader providing a personalized interpretation using advanced techniques.
+
+${questionText}
+
+Spread: ${spreadName}
+
+Cards drawn:
+${cardsList}
+
+Querent reflections:
+${reflectionsText || 'None provided.'}
+
+IMPORTANT READING TECHNIQUES TO APPLY:
+
+1. PATTERN ANALYSIS: All ${normalizedCards.length} cards are Major Arcana, indicating significant life themes. ${reversedCount} card(s) reversed suggests areas needing attention or internal work.
+1. CARD COMBINATIONS: Analyze how adjacent cards interact and influence each other. Look for thematic connections between positions, how earlier cards set the stage for later ones, and contrasts or harmonies between card energies.
+1. EMOTIONAL ARC: Trace the emotional journey from the first card to the last. Is there tension and release? Growth and transformation? A clear beginning, middle, and end?
+1. POSITIONAL CONTEXT: Weight each card meaning based on its position in the spread. The same card means different things in different positions.
+1. NARRATIVE FLOW: Tell a cohesive story that connects all cards together, showing how they form a complete picture rather than isolated meanings.
+1. PRACTICAL GUIDANCE: Provide actionable insights and reflection points, not predictions. Focus on empowering choices and paths forward.
+
+Your reading should open with a powerful 1-2 sentence summary that directly answers the question, weave all cards into a unified narrative showing their relationships, acknowledge emotional tensions or conflicts in the spread, highlight opportunities and paths forward, and close with an empowering actionable insight.
+
+Length: 250-350 words. Tone: Warm, insightful, and empowering. Write in second person.
+
+CRITICAL: Write in plain text only. Do NOT use any markdown formatting (no asterisks, no bold, no headers, no bullet points). Use natural paragraph breaks only.`
+
+  try {
+    const anthropicResponse = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: 'claude-3-5-sonnet-20241022',
+        max_tokens: 1500,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    })
+
+    if (!anthropicResponse.ok) {
+      const errorBody = await anthropicResponse.text()
+      console.error('Anthropic error', anthropicResponse.status, errorBody)
+      return jsonResponse({ error: 'Failed to generate reading' }, anthropicResponse.status, corsHeaders)
+    }
+
+    const data = await anthropicResponse.json()
+    const content = Array.isArray((data as Record<string, unknown>).content)
+      ? ((data as Record<string, unknown>).content as Array<{ type?: string; text?: string }>)
+      : []
+
+    const readingText = content
+      .filter(block => block && block.type === 'text' && typeof block.text === 'string')
+      .map(block => block.text as string)
+      .join('\n')
+      .trim()
+
+    if (!readingText) {
+      console.error('Anthropic response missing text content', data)
+      return jsonResponse({ error: 'Failed to generate reading' }, 502, corsHeaders)
+    }
+
+    return jsonResponse({ reading: readingText }, 200, corsHeaders)
+  } catch (error) {
+    console.error('Anthropic request failed', error)
+    return jsonResponse({ error: 'Failed to generate reading' }, 500, corsHeaders)
+  }
 }
 
 async function handleAzureSearchRequest(request: Request, env: Env, corsHeaders: Record<string, string>): Promise<Response> {
@@ -367,9 +548,17 @@ async function handleKVRequest(request: Request, env: Env): Promise<Response> {
     }
 
     if (method === 'GET' && key) {
-      // Get value
-      const value = await env.RAG_KV.get(key, { type: 'json' })
-      
+      // Get value with robust JSON handling
+      let value: unknown = null
+
+      try {
+        value = await env.RAG_KV.get(key, { type: 'json' })
+      } catch (error) {
+        // Treat malformed JSON (empty string, partial JSON, etc.) as missing rather than 500
+        console.error(`[kv] Failed to parse JSON for key "${key}":`, error instanceof Error ? error.message : String(error))
+        value = null
+      }
+
       if (value === null) {
         return new Response(JSON.stringify({ configured: false }), {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }

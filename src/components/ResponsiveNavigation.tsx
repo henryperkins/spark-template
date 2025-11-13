@@ -24,17 +24,28 @@ export function ResponsiveNavigation({
 }: ResponsiveNavigationProps) {
   const [activeTab, setActiveTab] = useState(defaultValue)
   const [mountedTabs, setMountedTabs] = useState<Record<string, ReactNode>>(() => {
-    const initialTab = tabs.find(tab => tab.value === defaultValue)
+    const initialTab = tabs.find((tab) => tab.value === defaultValue)
     return initialTab ? { [defaultValue]: initialTab.render() } : {}
   })
 
+  // Keep activeTab in sync if defaultValue changes (e.g. on hot reload or config change)
   useEffect(() => {
-    const next = tabs.find(tab => tab.value === activeTab)
-    if (!next) {
-      return
-    }
+    setActiveTab((current) => {
+      // If the current active tab is no longer present, or was never initialized, fall back
+      const stillExists = tabs.some((tab) => tab.value === current)
+      if (!stillExists) {
+        return defaultValue
+      }
+      return current
+    })
+  }, [defaultValue, tabs])
 
-    setMountedTabs(prev => {
+  // Lazily mount tab content and cache it so switching tabs feels snappy
+  useEffect(() => {
+    const next = tabs.find((tab) => tab.value === activeTab)
+    if (!next) return
+
+    setMountedTabs((prev) => {
       if (prev[activeTab]) {
         return prev
       }
@@ -80,7 +91,6 @@ export function ResponsiveNavigation({
           key={tab.value}
           value={tab.value}
           className="animate-in fade-in-50 slide-in-from-bottom-2 duration-300"
-          forceMount
         >
           {getContent(tab.value)}
         </TabsContent>

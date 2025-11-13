@@ -486,8 +486,16 @@ async function exchangeOneDriveCodeForToken(env: Env, code: string, codeVerifier
   if (!json.access_token) {
     throw new Error(json.error || 'onedrive_oauth_no_access_token')
   }
-  
-  export async function handleDropboxToken(request: Request, env: Env): Promise<Response> {
+
+  await storeServiceToken(env, 'onedrive', json.access_token)
+  await storeOAuthCredentials(env, 'onedrive', {
+    accessToken: json.access_token,
+    refreshToken: json.refresh_token,
+    expiresIn: json.expires_in
+  })
+}
+
+export async function handleDropboxToken(request: Request, env: Env): Promise<Response> {
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: OAUTH_CORS_HEADERS })
     }
@@ -603,14 +611,6 @@ async function exchangeOneDriveCodeForToken(env: Env, code: string, codeVerifier
       headers: { ...OAUTH_CORS_HEADERS, 'Content-Type': 'application/json' }
     })
   }
-
-  await storeServiceToken(env, 'onedrive', json.access_token)
-  await storeOAuthCredentials(env, 'onedrive', {
-    accessToken: json.access_token,
-    refreshToken: json.refresh_token,
-    expiresIn: json.expires_in
-  })
-}
 
 /**
  * Store service token into KV under the same secure prefix used by SecureTokenStorage.

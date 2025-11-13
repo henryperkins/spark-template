@@ -99,6 +99,11 @@ export class AzureOpenAIService {
     if (!this.config.apiKey) {
       throw new Error('Azure OpenAI apiKey is required (RBAC not yet wired)')
     }
+
+    // Embedding helpers depend on embeddingDeploymentName; fail fast when configured without it
+    if (this.config.embeddingDeploymentName === undefined || this.config.embeddingDeploymentName === '') {
+      throw new Error('Azure OpenAI embeddingDeploymentName is required for embeddings')
+    }
   }
 
   /**
@@ -154,7 +159,7 @@ export class AzureOpenAIService {
     const name = this.config.deploymentName.toLowerCase()
 
     // Strict/default-only models: do not send temperature/top_p/etc.
-    const STRICT_DEPLOYMENTS = ['gpt-5-mini', 'o1', 'o1-mini', 'instruct-strict']
+    const STRICT_DEPLOYMENTS = ['gpt-5', 'gpt-5-mini', 'o1', 'o1-mini', 'instruct-strict']
     const strictDefaults = STRICT_DEPLOYMENTS.some(id => name.includes(id))
 
     return {
@@ -455,10 +460,11 @@ export class AzureOpenAIService {
             createOptions.topP = options.topP
           }
 
-          let result = await this.responsesClient.createResponse(createOptions)
-          if (result && result.id && result.status && result.status !== 'completed') {
-            result = await this.pollResponseUntilDone(result.id, result, this.config.responsesTimeoutMs)
-          }
+          const result = await this.responsesClient.createResponse(createOptions)
+          // ResponsesClient is responsible for throwing INCOMPLETE_NO_TEXT
+          // when it encounters reasoning-only or incomplete payloads.
+          // Do not mask that behavior here; propagate its errors so tests
+          // and callers can rely on the shared contract.
           return result.outputText
         } catch (error) {
           this.logResponsesClient400(error, options?.responseFormat === 'json_object')
@@ -753,6 +759,7 @@ export class AzureOpenAIService {
       let result = await this.responsesClient.createResponse({
         messages: this.toResponseMessages(userMessages),
         instructions: systemInstructions,
+        responseFormat: { type: 'text' },
         // Critical: RAG sync path should never queue in background
         background: false
       })
@@ -1126,7 +1133,8 @@ export class AzureOpenAIService {
       messages: this.toResponseMessages(userMessages),
       tools: options.tools,
       // Sync tool calls should not be backgrounded by default
-      background: false
+      background: false,
+      responseFormat: { type: 'text' }
     }
     assignIfDefined(createOptions, 'instructions', systemInstructions)
     assignIfDefined(createOptions, 'toolChoice', options.toolChoice)
@@ -1180,7 +1188,8 @@ export class AzureOpenAIService {
     const createOptions: CreateResponseOptions = {
       messages: this.toResponseMessages(userMessages),
       tools: [mcpTool],
-      background: false
+      background: false,
+      responseFormat: { type: 'text' }
     }
     assignIfDefined(createOptions, 'instructions', systemInstructions)
     assignIfDefined(createOptions, 'maxOutputTokens', options.maxTokens)
@@ -1219,7 +1228,8 @@ export class AzureOpenAIService {
     const createOptions: CreateResponseOptions = {
       messages: this.toResponseMessages(userMessages),
       tools: [codeInterpreterTool],
-      background: false
+      background: false,
+      responseFormat: { type: 'text' }
     }
     assignIfDefined(createOptions, 'instructions', finalInstructions)
     assignIfDefined(createOptions, 'maxOutputTokens', options.maxTokens)
@@ -1276,7 +1286,8 @@ export class AzureOpenAIService {
     const { systemInstructions, userMessages } = this.extractSystemInstructions(messages)
 
     const backgroundOptions: CreateResponseOptions = {
-      messages: this.toResponseMessages(userMessages)
+      messages: this.toResponseMessages(userMessages),
+      responseFormat: { type: 'text' }
     }
     assignIfDefined(backgroundOptions, 'instructions', systemInstructions)
     assignIfDefined(backgroundOptions, 'maxOutputTokens', options?.maxTokens)

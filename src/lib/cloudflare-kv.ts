@@ -119,7 +119,14 @@ export class CloudflareKV implements CloudflareKVAdapter {
         this.useWorkerAPI && (status === 401 || status === 503)
           ? '\n\nHint: The Worker KV API requires Authorization: Bearer KV_API_KEY.\n- Set Worker secret: npx wrangler secret put KV_API_KEY\n- Provide client token for dev: localStorage.setItem("KV_API_KEY", "<same-value>")\n- Optional (dev): expose VITE_KV_API_KEY in wrangler.toml [vars]'
           : ''
-      throw new Error(`${LOG_PREFIX} API error (${status}): ${error}${kvHint}`)
+      const errorMsg = `${LOG_PREFIX} API error (${status}): ${error}${kvHint}`
+
+      // Log server errors once for debugging
+      if (status >= 500) {
+        console.error(errorMsg)
+      }
+
+      throw new Error(errorMsg)
     }
 
     return response

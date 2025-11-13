@@ -36,7 +36,7 @@ export class AzureServiceManager {
       responsesBackground:
         config.openai.responsesBackground ??
         (process.env.VITE_AZURE_RESPONSES_BACKGROUND_DEFAULT === 'true'
-          ? false
+          ? true
           : undefined),
       responsesTimeoutMs:
         config.openai.responsesTimeoutMs ??
@@ -594,8 +594,8 @@ export class AzureServiceManager {
 
       // AzureOpenAIService may not surface a strong model field on these helpers; fall back to configured deployment/name.
       const model =
-        (this as any).config?.openai?.responsesModel ||
-        (this as any).config?.openai?.deployment ||
+        this.config?.openai?.responsesModel ||
+        this.config?.openai?.deploymentName ||
         'azure-rag'
 
       // Derive token numbers from Azure usage when available.

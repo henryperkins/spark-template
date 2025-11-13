@@ -31,6 +31,7 @@ type CompletionOptions = {
   temperature?: number
   topP?: number
   model?: string
+  responseFormat?: 'text' | 'json_object'
   provider?: 'azure' | 'worker' | 'auto'
 }
 
@@ -42,6 +43,7 @@ export class LLMService {
   private readonly rate: number
   private readonly burst: number
   private readonly strictModels = new Set([
+    'gpt-5',
     'gpt-5-mini',
     'gpt-5-mini-strict',
     'o1',
@@ -92,6 +94,10 @@ export class LLMService {
       }
     }
 
+    if (options.responseFormat) {
+      sanitized.responseFormat = options.responseFormat
+    }
+
     return sanitized
   }
 
@@ -106,6 +112,17 @@ export class LLMService {
 
   private sleep(ms: number): Promise<void> {
     return new Promise(res => setTimeout(res, ms))
+  }
+
+  private isTerminalResponseError(err: unknown): boolean {
+    if (!err || typeof err !== 'object') {
+      return false
+    }
+    const code = (err as { code?: unknown }).code
+    if (typeof code === 'string') {
+      return code === 'INCOMPLETE_NO_TEXT' || code === 'COMPLETED_NO_TEXT'
+    }
+    return false
   }
 
   // Centralized recording of LLM usage: context + telemetry.
@@ -265,6 +282,12 @@ export class LLMService {
       try {
         return await fn()
       } catch (err) {
+        if (this.isTerminalResponseError(err)) {
+          if (err instanceof LLMError) {
+            throw err
+          }
+          throw new LLMError('EREMOTE', 'LLM returned a terminal response without usable output', err)
+        }
         lastErr = err
         if (attempt === maxRetries) break
         const jitter = 0.8 + Math.random() * 0.4
@@ -291,7 +314,10 @@ export class LLMService {
       // Priority 1: Azure OpenAI (production)
       if (providerPref !== 'worker' && azureServiceManager.hasOpenAI()) {
         // Sanitize options for strict deployments
-        const azureOptions = this.sanitizeOptionsForDeployment(options)
+        const azureOptions = {
+          ...this.sanitizeOptionsForDeployment(options),
+          responseFormat: 'text' as const
+        }
 
         // Prefer path that returns usage metadata when available
         const p = azureServiceManager.generateCompletionWithUsage?.(prompt, azureOptions)
@@ -387,11 +413,11 @@ export class LLMService {
           timeoutMs
         )
 
-        const rawText = (response as any).text ?? ''
-        if (!rawText || typeof rawText !== 'string') {
-          // Treat structurally empty responses as EPARSE for callers like classifier/router.
+        const rawText = typeof (response as any).text === 'string' ? (response as any).text : ''
+        if (!rawText.trim()) {
+          // Treat structurally empty responses as remote failure so upstream can surface it clearly.
           throw new LLMError(
-            'EPARSE',
+            'EREMOTE',
             'Azure LLM returned empty JSON response',
             undefined,
             ''
@@ -670,6 +696,7 @@ export class LLMService {
       if (azureServiceManager.hasOpenAI()) {
         const start = Date.now()
         const streamOptions = {
+          responseFormat: 'text' as const,
           ...(options.maxTokens !== undefined ? { maxTokens: options.maxTokens } : {}),
           ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
           ...(options.topP !== undefined ? { topP: options.topP } : {})

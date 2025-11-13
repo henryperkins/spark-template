@@ -84,6 +84,11 @@ export interface CreateResponseOptions {
 
   // Sampling / behavior
   maxOutputTokens?: number
+  /**
+   * Note:
+   * - Some Azure Responses models (e.g. gpt-5) do NOT support temperature/top_p overrides.
+   * - Callers should only set these when the target model explicitly supports them.
+   */
   temperature?: number
   topP?: number
 
@@ -441,32 +446,21 @@ export class ResponsesClient {
       }
     }
 
-    // Some Azure-hosted models (e.g. gpt-5-mini / strict variants) reject unsupported params
-    // like `temperature`/`top_p`. Respect that by only sending these when non-strict.
+    // Some Azure-hosted models (e.g. gpt-5 / gpt-5-mini / strict variants) reject sampling params
+    // like `temperature`/`top_p`. Respect that by:
+    // - Treating gpt-5, gpt-5-mini, o1*, and instruct-strict as "strict" (no sampling overrides).
+    // - Only forwarding temperature/topP for non-strict models.
     const isStrictModel =
       typeof model === 'string' &&
-      /gpt-5-mini(-strict)?|^o1(\b|-)|instruct-strict/i.test(model)
+      /(gpt-5\b|gpt-5-mini(-strict)?\b)|^o1(\b|-)|instruct-strict/i.test(model)
 
-    const safeOptions = isStrictModel
-      ? {
-          // For strict models: let Azure defaults apply, do not send sampling params.
-        }
-      : {
-          temperature:
-            typeof options.temperature === 'number'
-              ? options.temperature
-              : undefined,
-          topP:
-            typeof options.topP === 'number'
-              ? options.topP
-              : undefined
-        }
-
-    if (safeOptions.temperature !== undefined) {
-      body.temperature = safeOptions.temperature
-    }
-    if (safeOptions.topP !== undefined) {
-      body.top_p = safeOptions.topP
+    if (!isStrictModel) {
+      if (typeof options.temperature === 'number') {
+        body.temperature = options.temperature
+      }
+      if (typeof options.topP === 'number') {
+        body.top_p = options.topP
+      }
     }
 
     const maxOut =
@@ -696,6 +690,45 @@ export class ResponsesClient {
     }
   }
 
+  private logIncompleteResponseDiagnostics(json: any): void {
+    try {
+      const outputLength = Array.isArray(json.output) ? json.output.length : 0
+      const first = Array.isArray(json.output) && json.output[0] ? json.output[0] : null
+
+      console.warn('[ResponsesClient] Incomplete Responses API payload detected', {
+        id: json.id,
+        status: json.status,
+        model: json.model,
+        hasText: typeof json.text === 'string' && !!json.text.trim(),
+        hasOutputText: typeof json.output_text === 'string' && !!json.output_text.trim(),
+        hasResponse: typeof json.response === 'object' && json.response !== null,
+        hasOutput: Array.isArray(json.output),
+        outputLength,
+        firstOutputType: first && typeof first.type === 'string' ? first.type : null,
+        firstOutputKeys: first ? Object.keys(first) : [],
+        hasMessage: typeof (json as any).message === 'string',
+        hasAText: !!(json as any)?.a && typeof (json as any).a.text === 'string'
+      })
+
+      try {
+        errorTracking.record(
+          new Error('[ResponsesClient] IncompleteResponsesWithoutText'),
+          {
+            type: 'llm',
+            agent: 'ResponsesClient',
+            status: 0,
+            code: 'INCOMPLETE_NO_TEXT',
+            requestId: json.id
+          }
+        )
+      } catch {
+        // ignore telemetry failures
+      }
+    } catch {
+      // best-effort only; never throw from diagnostics
+    }
+  }
+
   private async buildError(
     res: Response,
     body?: Record<string, unknown>
@@ -826,10 +859,103 @@ export class ResponsesClient {
   }
 
   private toResult(json: any, overrideText?: string): ResponsesResult {
-    const outputText =
-      overrideText ??
-      this.extractFirstOutputText(json) ??
-      ''
+    let extracted = overrideText ?? this.extractFirstOutputText(json)
+
+    let candidateText = ''
+    let trimmedCandidate = ''
+
+    // Only update candidate text if we actually extracted something
+    if (extracted !== undefined && extracted !== null) {
+      candidateText = String(extracted)
+      trimmedCandidate = candidateText.trim()
+    }
+
+    const throwNoTextError = (code: 'INCOMPLETE_NO_TEXT' | 'COMPLETED_NO_TEXT', message: string): never => {
+      const err = new Error(message) as Error & {
+        status?: number
+        code?: string
+        requestId?: string | null
+        responseBody?: any
+      }
+
+      err.status = 502
+      err.code = code
+      err.requestId =
+        (typeof json.id === 'string' && json.id) ||
+        null
+      err.responseBody = json
+
+      try {
+        errorTracking.record(err, {
+          type: 'llm',
+          agent: 'ResponsesClient',
+          status: err.status,
+          code: err.code,
+          ...(err.requestId ? { requestId: err.requestId } : {})
+        })
+      } catch {
+        // ignore telemetry failures
+      }
+
+      throw err
+    }
+
+    // If we have only reasoning (no standard text), treat it as usable text for
+    // internal, non-user-facing classifiers/routers instead of a hard error.
+    if (!trimmedCandidate) {
+      const reasoningOnly =
+        typeof json === 'object' &&
+        json !== null &&
+        Array.isArray(json.output) &&
+        json.output.length === 1 &&
+        json.output[0] &&
+        json.output[0].type === 'reasoning'
+
+      if (reasoningOnly) {
+        const summaryParts: string[] = []
+        const item = json.output[0]
+        if (Array.isArray(item.summary)) {
+          for (const part of item.summary) {
+            if (
+              part &&
+              typeof part.type === 'string' &&
+              part.type === 'summary_text' &&
+              typeof part.text === 'string' &&
+              part.text.trim()
+            ) {
+              summaryParts.push(part.text.trim())
+            }
+          }
+        }
+
+        const summaryText = summaryParts.join('\n').trim()
+
+        if (summaryText) {
+          candidateText = summaryText
+          trimmedCandidate = summaryText
+          extracted = summaryText
+        }
+      }
+    }
+
+    // Hard rule for truly empty results: if Azure reports incomplete/failed AND
+    // we still have no usable text (including reasoning-only), treat as error.
+    if ((json.status === 'incomplete' || json.status === 'failed') && !trimmedCandidate) {
+      throwNoTextError(
+        'INCOMPLETE_NO_TEXT',
+        '[ResponsesClient] Incomplete/failed Responses API result without output_text or reasoning; treating as hard error'
+      )
+    }
+
+    // Likewise for completed with no text or reasoning content at all.
+    if (json.status === 'completed' && !trimmedCandidate) {
+      throwNoTextError(
+        'COMPLETED_NO_TEXT',
+        '[ResponsesClient] Completed Responses API result without output_text or reasoning; treating as hard error'
+      )
+    }
+
+    const outputText = candidateText
 
     const messages: ResponseMessage[] = Array.isArray(json.output)
       ? json.output
@@ -888,16 +1014,10 @@ export class ResponsesClient {
   private extractFirstOutputText(json: any): string | undefined {
     if (!json) return undefined
 
-    // Be resilient on incomplete responses: still attempt extraction
+    // Be resilient on incomplete responses: still attempt extraction.
+    // Also emit targeted diagnostics so we can see exactly what Azure produced.
     if (json.status === 'incomplete') {
-      try {
-        console.warn('[ResponsesClient] Incomplete response; attempting to extract partial output', { id: json.id })
-        if (Array.isArray(json.output) && json.output.length > 0) {
-          console.debug('[ResponsesClient] Output array contents:', JSON.stringify(json.output, null, 2))
-        }
-      } catch {
-        // best-effort diagnostics only
-      }
+      this.logIncompleteResponseDiagnostics(json)
     }
 
     // 1) Simple top-level fields (happy path)
@@ -942,14 +1062,7 @@ export class ResponsesClient {
       if (joined.trim()) return joined
     }
 
-    // 4) Fallback: reasoning items only if no concrete output text was found
-    const reasoningChunks = this.extractReasoningChunks(json.output)
-    if (reasoningChunks.length) {
-      const joined = reasoningChunks.join('')
-      if (joined.trim()) return joined
-    }
-
-    // 5) Robust fallbacks for partially-structured responses:
+    // 4) Robust fallbacks for partially-structured responses:
     //    - Some providers/models surface plain text under `message` or `a.text`
     if (typeof (json as any).message === 'string' && (json as any).message.trim()) {
       return (json as any).message
@@ -963,7 +1076,7 @@ export class ResponsesClient {
       }
     }
 
-    // 6) Last-ditch: inspect first output item for obvious inline text/content fields
+    // 5) Last-ditch: inspect first output item for obvious inline text/content fields
     if (Array.isArray(json.output) && json.output.length > 0) {
       const first = json.output[0]
       if (first) {
@@ -977,6 +1090,34 @@ export class ResponsesClient {
           const nested = this.collectTextFromContentNode((first as any).content).join('')
           if (nested.trim()) return nested
         }
+      }
+    }
+
+    // 6) Reasoning-only fallback:
+    // Azure Responses may return one or more `reasoning` items with `summary`
+    // (e.g. { id, type: "reasoning", summary: [{ type: "summary_text", text }] })
+    // and status: "incomplete" when only a reasoning trace is available.
+    // That payload is structurally valid; upstream classifiers/routers can use it.
+    if (Array.isArray(json.output)) {
+      const summaryParts: string[] = []
+      for (const item of json.output) {
+        if (!item || item.type !== 'reasoning' || !Array.isArray(item.summary)) {
+          continue
+        }
+        for (const part of item.summary) {
+          if (
+            part &&
+            typeof part.type === 'string' &&
+            part.type === 'summary_text' &&
+            typeof part.text === 'string'
+          ) {
+            const t = part.text.trim()
+            if (t) summaryParts.push(t)
+          }
+        }
+      }
+      if (summaryParts.length) {
+        return summaryParts.join('\n')
       }
     }
 
@@ -995,36 +1136,6 @@ export class ResponsesClient {
     })
 
     return undefined
-  }
-
-  private extractReasoningChunks(output: any): string[] {
-    if (!Array.isArray(output)) {
-      return []
-    }
-    const reasoningChunks: string[] = []
-    for (const item of output) {
-      if (!item || item.type !== 'reasoning') continue
-      try {
-        console.debug('[ResponsesClient] Found reasoning item. Keys:', Object.keys(item), 'Full item:', item)
-        if (Array.isArray(item.summary)) {
-          console.debug('[ResponsesClient] Summary array length:', item.summary.length)
-          for (const part of item.summary) {
-            console.debug('[ResponsesClient] Summary part:', part)
-            if (part?.type === 'summary_text' && typeof part?.text === 'string') {
-              reasoningChunks.push(part.text)
-            }
-          }
-        } else {
-          console.warn('[ResponsesClient] Reasoning item missing summary array. Has:', Object.keys(item))
-        }
-      } catch {
-        // best-effort diagnostics only
-      }
-    }
-    if (reasoningChunks.length) {
-      console.debug('[ResponsesClient] Successfully extracted reasoning chunks:', reasoningChunks.length)
-    }
-    return reasoningChunks
   }
 
   private collectTextFromOutput(output: any): string[] {

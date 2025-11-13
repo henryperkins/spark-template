@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
+import '@testing-library/jest-dom/vitest'
 import { SafeMarkdown } from '../src/components/SafeMarkdown'
 
 describe('SafeMarkdown', () => {
@@ -62,9 +63,10 @@ describe('SafeMarkdown', () => {
     const content = '# Title\n\n<img src="x" onerror="alert(\'xss\')">'
     render(<SafeMarkdown content={content} />)
     
-    // onerror should be stripped
-    const img = screen.queryByRole('img')
-    expect(img).not.toBeInTheDocument()
+    // onerror should be stripped, but img itself is allowed; ensure no onerror attribute
+    const img = screen.getByRole('img')
+    expect(img).toBeInTheDocument()
+    expect(img).not.toHaveAttribute('onerror')
     
     // Title should still be rendered
     expect(screen.getByText('Title')).toBeInTheDocument()

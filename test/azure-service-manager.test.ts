@@ -160,6 +160,7 @@ describe('AzureServiceManager', () => {
       process.env.VITE_AZURE_USE_RESPONSES = 'true'
       process.env.VITE_AZURE_RESPONSES_MODEL = 'gpt-4'
       process.env.VITE_AZURE_RESPONSES_STORE = 'true'
+      process.env.VITE_AZURE_RESPONSES_BACKGROUND_DEFAULT = 'true'
 
       await manager.initialize(mockConfig)
 
@@ -168,6 +169,7 @@ describe('AzureServiceManager', () => {
       delete process.env.VITE_AZURE_USE_RESPONSES
       delete process.env.VITE_AZURE_RESPONSES_MODEL
       delete process.env.VITE_AZURE_RESPONSES_STORE
+      delete process.env.VITE_AZURE_RESPONSES_BACKGROUND_DEFAULT
     })
   })
 

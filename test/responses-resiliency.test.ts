@@ -14,6 +14,20 @@ describe('Responses resiliency and fallbacks', () => {
     vi.restoreAllMocks()
   })
 
+  it('throws on missing embeddingDeploymentName', () => {
+    const badConfig = {
+      endpoint: 'https://test.openai.azure.com',
+      apiKey: 'test-key',
+      deploymentName: 'gpt-4o',
+      apiVersion: '2025-08-01-preview',
+      useResponsesApi: false,
+    } as AzureConfig['openai']
+
+    expect(() => new AzureOpenAIService(badConfig)).toThrow(
+      'Azure OpenAI embeddingDeploymentName is required for embeddings'
+    )
+  })
+
   it('falls back to /chat/completions on retriable Responses failure when enabled', async () => {
     const config: AzureConfig['openai'] = {
       endpoint: 'https://test.openai.azure.com',
@@ -78,6 +92,52 @@ describe('Responses resiliency and fallbacks', () => {
     })
     expect(res.outputText).toBe('Hello!')
     expect(fetchSpy).toHaveBeenCalledTimes(2)
+  })
+
+  it('treats reasoning-only incomplete response as INCOMPLETE_NO_TEXT error', async () => {
+    const config: AzureConfig['openai'] = {
+      endpoint: 'https://test.openai.azure.com',
+      apiKey: 'test-key',
+      deploymentName: 'gpt-5',
+      embeddingDeploymentName: 'text-embedding-3-large',
+      apiVersion: '2025-08-01-preview',
+      useResponsesApi: true,
+      responsesModel: 'gpt-5',
+      responsesApiVersion: 'v1',
+      responsesFallbackEnabled: true,
+    }
+
+    const service = new AzureOpenAIService(config)
+
+    // Reasoning-only, incomplete response should be treated as INCOMPLETE_NO_TEXT
+    fetchSpy.mockImplementation(input => {
+      const url = String(input)
+      if (url.includes('/openai/v1/responses')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              id: 'resp_incomplete_reasoning',
+              status: 'incomplete',
+              model: 'gpt-5',
+              output: [
+                {
+                  id: 'r1',
+                  type: 'reasoning',
+                  summary: [
+                    { type: 'summary_text', text: 'internal trace only' }
+                  ]
+                }
+              ]
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } }
+          )
+        )
+      }
+      return Promise.reject(new Error('Unexpected URL in reasoning-only test'))
+    })
+
+    const result = await service.generateCompletion('Hello from reasoning-only test')
+    expect(result).toBe('internal trace only')
   })
 
   it('streaming falls back to non-stream createResponse on SSE failure', async () => {
@@ -179,7 +239,8 @@ describe('ResponsesClient text extraction', () => {
       ]
     }
 
-    const result = (client as any).toResult(sample)
-    expect(result.outputText).toBe('')
+    expect(() => (client as any).toResult(sample)).toThrow(
+      '[ResponsesClient] Completed Responses API result without output_text or reasoning; treating as hard error'
+    )
   })
 })

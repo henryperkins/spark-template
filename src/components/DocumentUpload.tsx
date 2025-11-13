@@ -15,6 +15,7 @@ import { isCloudflareKVConfigured } from '@/lib/cloudflare-kv'
 import { runtime } from '@/lib/config'
 import { useUploadQueue } from '@/hooks/use-upload-queue'
 import { errorTracking } from '@/lib/services/error-tracker'
+import { UploadManager } from '@/components/UploadManager'
 
 interface DocumentUploadProps {
   onDocumentUploaded: (document: Document) => void
@@ -467,6 +468,9 @@ export function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
           </CardContent>
         </Card>
       )}
+
+      {/* Background/resumable uploads driven by useUploadQueue */}
+      <UploadManager />
     </div>
   )
 }

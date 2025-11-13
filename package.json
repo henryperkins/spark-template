@@ -9,6 +9,7 @@
         "build": "tsc --noEmit && vite build",
         "lint": "eslint .",
         "test": "vitest run --exclude test/e2e/**",
+        "test:file": "vitest run --exclude test/e2e/**",
         "test:e2e": "playwright test",
         "optimize": "vite optimize",
         "preview": "vite preview",

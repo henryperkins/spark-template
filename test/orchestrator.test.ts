@@ -267,8 +267,8 @@ describe('AgenticOrchestrator', () => {
       const mockRouter = orchestrator['routingAgent']
       vi.spyOn(mockRouter, 'selectStrategy').mockRejectedValueOnce(new Error('Routing failed'))
 
-      // Should not throw, but may have degraded results
-      await expect(orchestrator.processQuery('test', documents)).rejects.toThrow()
+      // Orchestrator should surface a clear routing failure instead of a cryptic error.
+      await expect(orchestrator.processQuery('test', documents)).rejects.toThrow('Routing failed')
     })
 
     it('handles empty document list', async () => {

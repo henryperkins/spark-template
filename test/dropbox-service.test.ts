@@ -59,14 +59,10 @@ describe('DropboxService', () => {
 
       await (service as any).fetchWithAuth('https://api.dropboxapi.com/2/test', 'test-token')
 
-      expect(fetchSpy).toHaveBeenCalledWith(
-        'https://api.dropboxapi.com/2/test',
-        expect.objectContaining({
-          headers: expect.objectContaining({
-            'Authorization': 'Bearer test-token'
-          })
-        })
-      )
+      const callArgs = fetchSpy.mock.calls[0]
+      const headers = new Headers(callArgs[1]?.headers as HeadersInit)
+
+      expect(headers.get('Authorization')).toBe('Bearer test-token')
     })
 
     it('throws error on non-OK responses', async () => {
@@ -87,9 +83,9 @@ describe('DropboxService', () => {
       await (service as any).fetchWithAuth('https://api.dropboxapi.com/2/test', 'token')
 
       const callArgs = fetchSpy.mock.calls[0]
-      const headers = callArgs[1]?.headers as Record<string, string>
+      const headers = new Headers(callArgs[1]?.headers as HeadersInit)
 
-      expect(headers['Content-Type']).toBe('application/json')
+      expect(headers.get('Content-Type')).toBe('application/json')
     })
 
     it('merges custom headers with defaults', async () => {
@@ -102,10 +98,10 @@ describe('DropboxService', () => {
       })
 
       const callArgs = fetchSpy.mock.calls[0]
-      const headers = callArgs[1]?.headers as Record<string, string>
+      const headers = new Headers(callArgs[1]?.headers as HeadersInit)
 
-      expect(headers['Authorization']).toBe('Bearer token')
-      expect(headers['Custom-Header']).toBe('value')
+      expect(headers.get('Authorization')).toBe('Bearer token')
+      expect(headers.get('Custom-Header')).toBe('value')
     })
   })
 
@@ -121,7 +117,7 @@ describe('DropboxService', () => {
         }), { status: 200 })
       )
 
-      const files = await (service as any).listFiles('token')
+      const files = await (service as any).listFiles({ value: 'token' })
 
       expect(files).toHaveLength(1)
       expect(files[0].name).toBe('test.txt')
@@ -135,7 +131,7 @@ describe('DropboxService', () => {
         }), { status: 200 })
       )
 
-      await (service as any).listFiles('token', '/documents')
+      await (service as any).listFiles({ value: 'token' }, '/documents')
 
       const requestBody = JSON.parse(fetchSpy.mock.calls[0][1]?.body as string)
       expect(requestBody.path).toBe('/documents')
@@ -217,19 +213,17 @@ describe('DropboxService', () => {
         new Response('File content here', { status: 200 })
       )
 
-      const content = await (service as any).downloadFile('token', '/test.txt')
+      const content = await (service as any).downloadFile({ value: 'token' }, '/test.txt')
 
       expect(content).toBe('File content here')
-      expect(fetchSpy).toHaveBeenCalledWith(
-        'https://content.dropboxapi.com/2/files/download',
-        expect.objectContaining({
-          method: 'POST',
-          headers: expect.objectContaining({
-            'Authorization': 'Bearer token',
-            'Dropbox-API-Arg': JSON.stringify({ path: '/test.txt' })
-          })
-        })
-      )
+
+      const callArgs = fetchSpy.mock.calls[0]
+      const headers = new Headers(callArgs[1]?.headers as HeadersInit)
+
+      expect(callArgs[0]).toBe('https://content.dropboxapi.com/2/files/download')
+      expect(callArgs[1]?.method).toBe('POST')
+      expect(headers.get('Authorization')).toBe('Bearer token')
+      expect(headers.get('Dropbox-API-Arg')).toBe(JSON.stringify({ path: '/test.txt' }))
     })
 
     it('throws error on download failure', async () => {

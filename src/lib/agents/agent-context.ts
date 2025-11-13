@@ -504,6 +504,9 @@ export function getModelPricing(model: string): { prompt: number; completion: nu
     'gpt-4-turbo': { prompt: 10, completion: 30 },
     'gpt-4o': { prompt: 5, completion: 15 },
     'gpt-4o-mini': { prompt: 0.15, completion: 0.6 },
+    'gpt-5': { prompt: 5, completion: 15 },
+    'gpt-5-mini': { prompt: 0.15, completion: 0.6 },
+    'gpt-5-mini-strict': { prompt: 0.15, completion: 0.6 },
     // Common alternates and newer variants
     'gpt-4.1': { prompt: 5, completion: 15 },
     'gpt-4.1-mini': { prompt: 0.15, completion: 0.6 },
@@ -521,6 +524,9 @@ export function getModelPricing(model: string): { prompt: number; completion: nu
   // Heuristic fallback for common aliases/suffixes (Azure or vendor-specific names)
   const m = model.toLowerCase()
   const aliasMap: Array<{ match: (s: string) => boolean; key: keyof typeof pricing }> = [
+    { match: s => s.includes('gpt-5-mini-strict'), key: 'gpt-5-mini-strict' },
+    { match: s => s.includes('gpt-5-mini'), key: 'gpt-5-mini' },
+    { match: s => s.includes('gpt-5'), key: 'gpt-5' },
     { match: s => s.includes('gpt-4o-mini'), key: 'gpt-4o-mini' },
     { match: s => s.includes('gpt-4o'), key: 'gpt-4o' },
     { match: s => s.includes('gpt-4.1-mini'), key: 'gpt-4.1-mini' },
